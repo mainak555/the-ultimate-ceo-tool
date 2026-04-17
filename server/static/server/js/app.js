@@ -174,46 +174,107 @@ document.addEventListener("DOMContentLoaded", function () {
   var chatInput = document.getElementById("chat-input");
   var chatSendBtn = document.getElementById("chat-send-btn");
   var chatProjectBtn = document.getElementById("chat-project-btn");
+  var activeProjectIdInput = document.getElementById("active-project-id");
+  var newChatBtn = document.getElementById("new-chat-btn");
+  var newSessionModal = document.getElementById("new-session-modal");
+  var modalProjectId = document.getElementById("modal-project-id");
+  var sessionDescription = document.getElementById("session-description");
+  var descCharCount = document.getElementById("desc-char-count");
 
   // Only wire up when chat elements exist (home page only)
   if (!chatMessages || !chatInput) return;
 
   // -----------------------------------------------------------------------
-  // Helpers
+  // Auth state: show/hide chat controls based on secret key
   // -----------------------------------------------------------------------
+  function updateChatAuthState() {
+    var keyInput = getSecretKeyInput();
+    var hasSecret = !!(keyInput && keyInput.value.trim());
 
-  function scrollChatToBottom() {
-    chatMessages.scrollTop = chatMessages.scrollHeight;
-  }
+    if (newChatBtn) newChatBtn.hidden = !hasSecret;
 
-  function removeWelcome() {
-    var welcome = chatMessages.querySelector(".chat-welcome");
-    if (welcome) welcome.remove();
-  }
+    document.querySelectorAll(".chat-session-item__delete").forEach(function (btn) {
+      btn.hidden = !hasSecret;
+    });
 
-  function appendMessage(sender, text, type) {
-    // type: "human" | "agent" | "system"
-    var msg = document.createElement("div");
-    msg.className = "chat-message chat-message--" + type;
-
-    if (type !== "system") {
-      var senderEl = document.createElement("div");
-      senderEl.className = "chat-message__sender";
-      senderEl.textContent = sender;
-      msg.appendChild(senderEl);
+    if (chatSendBtn) {
+      chatSendBtn.disabled = !hasSecret;
+      chatSendBtn.title = hasSecret ? "Send" : "Enter the Secret Key to send messages.";
+    }
+    if (chatInput) {
+      chatInput.disabled = !hasSecret;
+      chatInput.placeholder = hasSecret ? "Send a message" : "Enter the Secret Key to send messages.";
     }
 
-    var bubble = document.createElement("div");
-    bubble.className = "chat-message__bubble";
-    bubble.textContent = text;
-    msg.appendChild(bubble);
-
-    chatMessages.appendChild(msg);
-    scrollChatToBottom();
+    // If key is removed while modal is open, close it to prevent submission
+    if (!hasSecret && newSessionModal && !newSessionModal.hidden) {
+      closeModal();
+    }
   }
 
   // -----------------------------------------------------------------------
-  // Auto-resize textarea
+  // Modal open / close
+  // -----------------------------------------------------------------------
+  function openModal() {
+    if (!newSessionModal) return;
+    if (modalProjectId) modalProjectId.value = activeProjectIdInput ? activeProjectIdInput.value : "";
+    if (sessionDescription) { sessionDescription.value = ""; sessionDescription.focus(); }
+    if (descCharCount) descCharCount.textContent = "0";
+    newSessionModal.hidden = false;
+  }
+
+  function closeModal() {
+    if (newSessionModal) newSessionModal.hidden = true;
+  }
+
+  if (newChatBtn) {
+    newChatBtn.addEventListener("click", function () {
+      var keyInput = getSecretKeyInput();
+      if (!keyInput || !keyInput.value.trim()) {
+        return; // button should be hidden; guard against CSS override
+      }
+      var projectId = activeProjectIdInput ? activeProjectIdInput.value.trim() : "";
+      if (!projectId) {
+        alert("Select a project first.");
+        return;
+      }
+      openModal();
+    });
+  }
+
+  var modalCloseBtn = document.getElementById("modal-close-btn");
+  var modalCancelBtn = document.getElementById("modal-cancel-btn");
+  var modalOverlay = document.getElementById("modal-overlay");
+
+  if (modalCloseBtn) modalCloseBtn.addEventListener("click", closeModal);
+  if (modalCancelBtn) modalCancelBtn.addEventListener("click", closeModal);
+  if (modalOverlay) modalOverlay.addEventListener("click", closeModal);
+
+  // Close modal when HTMX signals chatSessionCreated
+  document.body.addEventListener("chatSessionCreated", closeModal);
+
+  // Allow HTMX to swap 4xx error responses into #new-session-form-feedback
+  // (by default HTMX 1.x drops non-2xx responses without swapping)
+  document.body.addEventListener("htmx:beforeSwap", function (e) {
+    if (e.detail.target && e.detail.target.id === "new-session-form-feedback") {
+      if (e.detail.xhr.status === 400 || e.detail.xhr.status === 403) {
+        e.detail.shouldSwap = true;
+        e.detail.isError = false;
+      }
+    }
+  });
+
+  // -----------------------------------------------------------------------
+  // Description char counter
+  // -----------------------------------------------------------------------
+  if (sessionDescription && descCharCount) {
+    sessionDescription.addEventListener("input", function () {
+      descCharCount.textContent = sessionDescription.value.length;
+    });
+  }
+
+  // -----------------------------------------------------------------------
+  // Auto-resize chat textarea
   // -----------------------------------------------------------------------
   chatInput.addEventListener("input", function () {
     chatInput.style.height = "auto";
@@ -226,22 +287,20 @@ document.addEventListener("DOMContentLoaded", function () {
   chatInput.addEventListener("keydown", function (e) {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      if (chatSendBtn) chatSendBtn.click();
+      if (chatSendBtn && !chatSendBtn.disabled) chatSendBtn.click();
     }
   });
 
   // -----------------------------------------------------------------------
-  // Send button — append human bubble (UI only)
+  // Send button — append human bubble (UI only for now)
   // -----------------------------------------------------------------------
   if (chatSendBtn) {
     chatSendBtn.addEventListener("click", function () {
+      if (chatSendBtn.disabled) return;
       var text = chatInput.value.trim();
       if (!text) return;
 
-      removeWelcome();
-      appendMessage("You", text, "human");
-
-      // Clear + reset height
+      // TODO: wire to AutoGen execution endpoint
       chatInput.value = "";
       chatInput.style.height = "auto";
       chatInput.focus();
@@ -257,18 +316,32 @@ document.addEventListener("DOMContentLoaded", function () {
 
     e.preventDefault();
     var projectName = item.dataset.project;
+    var projectId = item.dataset.projectId;
     if (!projectName) return;
 
-    // Update button label
+    // Update dropdown button label
     if (chatProjectBtn) {
       chatProjectBtn.textContent = projectName + " \u25BE";
       chatProjectBtn.dataset.activeProject = projectName;
+      chatProjectBtn.dataset.activeProjectId = projectId;
     }
 
-    // Show system notice in chat
-    removeWelcome();
-    appendMessage(null, "Project \u201C" + projectName + "\u201D selected.", "system");
-    chatInput.focus();
+    // Track active project for modal
+    if (activeProjectIdInput) activeProjectIdInput.value = projectId || "";
   });
+
+  // Show/hide delete buttons after HTMX swaps new session list items
+  document.body.addEventListener("htmx:afterSwap", function () {
+    updateChatAuthState();
+  });
+
+  // Also update on secret key input
+  document.body.addEventListener("input", function (e) {
+    if (e.target.id === "global-secret-key") {
+      updateChatAuthState();
+    }
+  });
+
+  updateChatAuthState();
 
 });

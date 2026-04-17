@@ -12,6 +12,7 @@ from pymongo.errors import CollectionInvalid, ConnectionFailure
 # Module-level cache for the MongoClient instance
 _client = None
 PROJECT_SETTINGS_COLLECTION = "project_settings"
+CHAT_SESSIONS_COLLECTION = "chat_sessions"
 
 
 def get_client():
@@ -47,6 +48,15 @@ def ensure_indexes():
 
     col = db[PROJECT_SETTINGS_COLLECTION]
     col.create_index("project_name", unique=True)
+
+    if CHAT_SESSIONS_COLLECTION not in db.list_collection_names():
+        try:
+            db.create_collection(CHAT_SESSIONS_COLLECTION)
+        except CollectionInvalid:
+            pass
+
+    chat_col = db[CHAT_SESSIONS_COLLECTION]
+    chat_col.create_index("project_id")
 
 
 # Create indexes when the module is first imported

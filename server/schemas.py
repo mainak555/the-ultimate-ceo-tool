@@ -106,6 +106,28 @@ def validate_team(data, human_gate_enabled):
     }
 
 
+def validate_chat_session(data):
+    """Validate and clean a chat session creation payload."""
+    if not isinstance(data, dict):
+        raise ValueError("Session data must be a JSON object.")
+
+    project_id = (data.get("project_id") or "").strip()
+    if not project_id:
+        raise ValueError("'project_id' is required.")
+
+    description = (data.get("description") or "").strip()
+    if not description:
+        raise ValueError("'description' is required.")
+
+    if len(description) > 150:
+        description = description[:150]
+
+    return {
+        "project_id": project_id,
+        "description": description,
+    }
+
+
 def validate_project(data):
     """Validate and clean a full project settings dict."""
     if not isinstance(data, dict):

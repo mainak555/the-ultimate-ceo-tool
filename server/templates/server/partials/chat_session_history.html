@@ -1,0 +1,35 @@
+{% comment %}
+  Chat session history partial — renders the inner content of #chat-messages.
+  Targeted by: hx-target="#chat-messages" hx-swap="innerHTML"
+  Also used as OOB content: <div id="chat-messages" hx-swap-oob="innerHTML">...</div>
+{% endcomment %}
+<div class="chat-history-header">
+  <span class="chat-history-header__description">{{ session.description }}</span>
+  <span class="chat-history-header__date">{{ session.created_at }}</span>
+</div>
+
+{% if session.discussion %}
+  <div class="chat-history">
+    {% for msg in session.discussion %}
+      <div class="chat-history-msg">
+        <div class="chat-history-msg__meta">
+          <span class="chat-history-msg__agent">{{ msg.agent_name|default:"Unknown" }}</span>
+          <span class="chat-history-msg__sep">|</span>
+          <span class="chat-history-msg__role">{{ msg.role }}</span>
+          <span class="chat-history-msg__sep">|</span>
+          <span class="chat-history-msg__time">{{ msg.timestamp }}</span>
+        </div>
+        <div class="chat-history-msg__content">{{ msg.content }}</div>
+      </div>
+      {% if not forloop.last %}
+        <hr class="chat-history-msg__divider">
+      {% endif %}
+    {% endfor %}
+  </div>
+{% else %}
+  <div class="chat-welcome">
+    <div class="chat-welcome__icon">💬</div>
+    <h2 class="chat-welcome__title">No messages yet</h2>
+    <p class="chat-welcome__subtitle">This session has no messages yet.</p>
+  </div>
+{% endif %}

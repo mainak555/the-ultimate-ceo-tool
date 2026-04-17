@@ -25,4 +25,10 @@ urlpatterns = [
     # HTMX partials — single project (GET = detail, POST = update)
     path("projects/<str:project_id>/", views.project_detail, name="project_detail"),
 
+    # Chat sessions
+    path("chat/sessions/", views.chat_session_list, name="chat_session_list"),
+    path("chat/sessions/create/", views.chat_session_create, name="chat_session_create"),
+    path("chat/sessions/<str:session_id>/delete/", views.chat_session_delete, name="chat_session_delete"),
+    path("chat/sessions/<str:session_id>/", views.chat_session_detail, name="chat_session_detail"),
+
 ]

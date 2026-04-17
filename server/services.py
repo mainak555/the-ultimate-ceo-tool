@@ -7,14 +7,15 @@ and translate results into HTTP/HTMX responses.
 
 import hmac
 import os
+from datetime import datetime, timezone
 
 from bson import ObjectId
 from bson.errors import InvalidId
 from pymongo.errors import DuplicateKeyError
 
-from .db import get_collection, ensure_indexes
+from .db import get_collection, ensure_indexes, CHAT_SESSIONS_COLLECTION
 from .model_catalog import get_agent_model_names, get_default_system_prompt
-from .schemas import validate_project
+from .schemas import validate_project, validate_chat_session
 
 
 def _coerce_temperature(value):
@@ -198,6 +199,69 @@ def delete_project(project_id):
     result = col.delete_one({"_id": oid})
     if result.deleted_count == 0:
         raise ValueError("Project not found.")
+
+
+# ---------------------------------------------------------------------------
+# Chat Session CRUD
+# ---------------------------------------------------------------------------
+
+def normalize_chat_session(doc):
+    """Convert a MongoDB chat_sessions document for display."""
+    if not doc:
+        return None
+    created_at = doc.get("created_at", "")
+    if hasattr(created_at, "strftime"):
+        created_at = created_at.strftime("%Y-%m-%d %H:%M")
+    return {
+        "session_id": str(doc["_id"]),
+        "project_id": doc.get("project_id", ""),
+        "description": doc.get("description", ""),
+        "created_at": created_at,
+        "discussion": doc.get("discussion", []),
+    }
+
+
+def create_chat_session(project_id, description):
+    """Insert a new chat session. Returns the normalized document."""
+    cleaned = validate_chat_session({"project_id": project_id, "description": description})
+    col = get_collection(CHAT_SESSIONS_COLLECTION)
+    doc = {
+        "project_id": cleaned["project_id"],
+        "description": cleaned["description"],
+        "created_at": datetime.now(timezone.utc),
+        "discussion": [],
+    }
+    col.insert_one(doc)
+    return normalize_chat_session(doc)
+
+
+def list_chat_sessions(project_id):
+    """Return all sessions for a project, sorted newest first."""
+    col = get_collection(CHAT_SESSIONS_COLLECTION)
+    cursor = col.find({"project_id": project_id}).sort("created_at", -1)
+    return [normalize_chat_session(d) for d in cursor]
+
+
+def get_chat_session(session_id):
+    """Return a single chat session by _id hex string, or None."""
+    try:
+        oid = ObjectId(session_id)
+    except (InvalidId, TypeError):
+        return None
+    col = get_collection(CHAT_SESSIONS_COLLECTION)
+    return normalize_chat_session(col.find_one({"_id": oid}))
+
+
+def delete_chat_session(session_id):
+    """Delete a chat session by _id hex string. Raises ValueError if not found."""
+    try:
+        oid = ObjectId(session_id)
+    except (InvalidId, TypeError):
+        raise ValueError(f"Invalid session ID '{session_id}'.")
+    col = get_collection(CHAT_SESSIONS_COLLECTION)
+    result = col.delete_one({"_id": oid})
+    if result.deleted_count == 0:
+        raise ValueError("Chat session not found.")
 
 
 # ---------------------------------------------------------------------------

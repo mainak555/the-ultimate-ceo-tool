@@ -9,6 +9,7 @@ Each view:
 
 from django.http import HttpResponse
 from django.shortcuts import render
+from django.template.loader import render_to_string
 from django.views.decorators.http import require_GET, require_POST, require_http_methods
 
 from . import services
@@ -227,3 +228,97 @@ def project_detail(request, project_id):
     )
     response["HX-Trigger"] = "refreshSidebar"
     return response
+
+
+# ---------------------------------------------------------------------------
+# Chat Session Views
+# ---------------------------------------------------------------------------
+
+_SESSION_SELECT_WELCOME = (
+    '<div class="chat-welcome">'
+    '<div class="chat-welcome__icon">💬</div>'
+    '<h2 class="chat-welcome__title">Select a session</h2>'
+    '<p class="chat-welcome__subtitle">Choose an existing session from the list or start a new one with ＋.</p>'
+    '</div>'
+)
+
+
+@require_GET
+def chat_session_list(request):
+    """HTMX partial — list chat sessions for a given project."""
+    project_id = request.GET.get("project_id", "").strip()
+    sessions = services.list_chat_sessions(project_id) if project_id else []
+    list_html = render_to_string(
+        "server/partials/chat_session_list.html",
+        {"sessions": sessions, "project_id": project_id},
+        request=request,
+    )
+    oob_html = f'<div id="chat-messages" hx-swap-oob="innerHTML">{_SESSION_SELECT_WELCOME}</div>'
+    return HttpResponse(list_html + oob_html, content_type="text/html")
+
+
+@require_POST
+def chat_session_create(request):
+    """HTMX — create a new chat session (secret-key gated)."""
+    if not _has_valid_secret(request):
+        # Error goes into #new-session-form-feedback (inside the modal).
+        # Session list and messages panels are untouched.
+        return HttpResponse(
+            '<div class="alert alert-error">Unauthorized. Enter a valid Secret Key before creating a session.</div>',
+            status=403,
+        )
+
+    project_id = request.POST.get("project_id", "").strip()
+    description = request.POST.get("description", "").strip()
+    try:
+        session = services.create_chat_session(project_id, description)
+    except ValueError as e:
+        return HttpResponse(f'<div class="alert alert-error">{e}</div>', status=400)
+
+    # On success the primary target (#new-session-form-feedback) gets empty
+    # content (the modal closes via HX-Trigger). OOB swaps update the sidebar
+    # list and the main messages panel.
+    sessions = services.list_chat_sessions(project_id)
+    list_html = render_to_string(
+        "server/partials/chat_session_list.html",
+        {"sessions": sessions, "project_id": project_id, "active_session_id": session["session_id"]},
+        request=request,
+    )
+    history_html = render_to_string(
+        "server/partials/chat_session_history.html",
+        {"session": session},
+        request=request,
+    )
+    oob_list = f'<div id="chat-history-list" hx-swap-oob="innerHTML">{list_html}</div>'
+    oob_messages = f'<div id="chat-messages" hx-swap-oob="innerHTML">{history_html}</div>'
+    # Primary content: empty (feedback div cleared, modal closes via trigger)
+    response = HttpResponse(oob_list + oob_messages, content_type="text/html")
+    response["HX-Trigger"] = "chatSessionCreated"
+    return response
+
+
+@require_GET
+def chat_session_detail(request, session_id):
+    """HTMX partial — conversation history for a session (always readable)."""
+    session = services.get_chat_session(session_id)
+    if session is None:
+        return HttpResponse(
+            '<div class="alert alert-error">Session not found.</div>',
+            status=404,
+        )
+    return render(request, "server/partials/chat_session_history.html", {"session": session})
+
+
+@require_POST
+def chat_session_delete(request, session_id):
+    """HTMX — delete a chat session (secret-key gated)."""
+    if not _has_valid_secret(request):
+        return HttpResponse(
+            '<div class="alert alert-error">Unauthorized.</div>',
+            status=403,
+        )
+    try:
+        services.delete_chat_session(session_id)
+    except ValueError as e:
+        return HttpResponse(f'<div class="alert alert-error">{e}</div>', status=404)
+    return HttpResponse("")

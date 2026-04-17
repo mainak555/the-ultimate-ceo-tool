@@ -1,0 +1,30 @@
+{% comment %}
+  Chat session list partial — renders <li> items for #chat-history-list.
+  Targeted by: hx-target="#chat-history-list" hx-swap="innerHTML"
+{% endcomment %}
+{% if sessions %}
+  {% for session in sessions %}
+    <li class="chat-session-item{% if session.session_id == active_session_id %} chat-session-item--active{% endif %}"
+        data-session-id="{{ session.session_id }}">
+      <span class="chat-session-item__name"
+            hx-get="{% url 'server:chat_session_detail' session.session_id %}"
+            hx-target="#chat-messages"
+            hx-swap="innerHTML">
+        {{ session.description|truncatechars:55 }}
+      </span>
+      <span class="chat-session-item__date">{{ session.created_at }}</span>
+      <button class="chat-session-item__delete"
+              hidden
+              type="button"
+              title="Delete session"
+              hx-post="{% url 'server:chat_session_delete' session.session_id %}"
+              hx-confirm="Delete this chat session? This cannot be undone."
+              hx-target="closest li"
+              hx-swap="outerHTML">
+        &times;
+      </button>
+    </li>
+  {% endfor %}
+{% else %}
+  <li class="chat-sidebar__empty">No chats yet.</li>
+{% endif %}

@@ -23,11 +23,10 @@
     <aside class="chat-sidebar">
       <div class="chat-sidebar__header">
         <span>Chats</span>
-        <button class="btn btn--xs btn--secondary" id="new-chat-btn" title="New chat">＋</button>
+        <button class="btn btn--xs btn--secondary" id="new-chat-btn" hidden title="New chat">＋</button>
       </div>
       <ul class="chat-sidebar__list" id="chat-history-list">
-        <!-- Placeholder — chat persistence is a future phase -->
-        <li class="chat-sidebar__empty">No chats yet.</li>
+        <li class="chat-sidebar__empty">Select a project to load chats.</li>
       </ul>
     </aside>
 
@@ -54,7 +53,8 @@
             <button class="btn btn--secondary btn--sm dropdown__toggle"
                     id="chat-project-btn"
                     type="button"
-                    data-active-project="">
+                    data-active-project=""
+                    data-active-project-id="">
               Projects ▾
             </button>
             <div class="dropdown__menu dropdown__menu--up">
@@ -62,7 +62,10 @@
                 <a class="dropdown__item chat-project-item"
                    href="#"
                    data-project="{{ project.project_name }}"
-                   data-project-id="{{ project.project_id }}">
+                   data-project-id="{{ project.project_id }}"
+                   hx-get="{% url 'server:chat_session_list' %}?project_id={{ project.project_id }}"
+                   hx-target="#chat-history-list"
+                   hx-swap="innerHTML">
                   {{ project.project_name }}
                 </a>
               {% empty %}
@@ -88,6 +91,46 @@
     </div>
 
   </div>
+
+  <!-- ====== New Session Modal ====== -->
+  <div id="new-session-modal" class="chat-modal" hidden>
+    <div class="chat-modal__overlay" id="modal-overlay"></div>
+    <div class="chat-modal__card">
+      <div class="chat-modal__header">
+        <h3 class="chat-modal__title">New Chat Session</h3>
+        <button class="chat-modal__close" type="button" id="modal-close-btn">&times;</button>
+      </div>
+      <div class="chat-modal__body">
+        <form id="new-session-form"
+              hx-post="{% url 'server:chat_session_create' %}"
+              hx-target="#new-session-form-feedback"
+              hx-swap="innerHTML">
+          {% csrf_token %}
+          <input type="hidden" name="project_id" id="modal-project-id" value="">
+          <div id="new-session-form-feedback"></div>
+          <div class="form-group">
+            <label for="session-description">What would you like to discuss?</label>
+            <textarea id="session-description"
+                      name="description"
+                      class="input input--textarea"
+                      rows="3"
+                      maxlength="150"
+                      placeholder="Brief description of this chat session…"
+                      required></textarea>
+            <div class="chat-description-counter">
+              <span id="desc-char-count">0</span>/150
+            </div>
+          </div>
+          <div class="form-actions">
+            <button type="submit" class="btn btn--primary" id="modal-submit-btn">Start Session</button>
+            <button type="button" class="btn btn--secondary" id="modal-cancel-btn">Cancel</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <input type="hidden" id="active-project-id" value="">
 
   <script src="{% static 'server/js/app.js' %}"></script>
 </body>
