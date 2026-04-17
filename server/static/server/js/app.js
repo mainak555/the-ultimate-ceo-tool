@@ -170,6 +170,58 @@ document.addEventListener("DOMContentLoaded", function () {
   // Chat UI — home page interactions
   // =========================================================================
 
+  // -----------------------------------------------------------------------
+  // Agent system-prompt modal
+  // -----------------------------------------------------------------------
+  var agentPromptModal = document.getElementById("agent-prompt-modal");
+  var agentModalTitle  = document.getElementById("agent-modal-title");
+  var agentModalBody   = document.getElementById("agent-modal-body");
+  var agentModalClose  = document.getElementById("agent-modal-close-btn");
+  var agentModalOverlay = document.getElementById("agent-modal-overlay");
+
+  function openAgentModal(name, systemPrompt) {
+    if (!agentPromptModal) return;
+    if (agentModalTitle) agentModalTitle.textContent = name + " — System Prompt";
+    if (agentModalBody) {
+      agentModalBody.innerHTML =
+        (typeof marked !== "undefined")
+          ? marked.parse(systemPrompt)
+          : "<pre>" + systemPrompt.replace(/</g, "&lt;") + "</pre>";
+    }
+    agentPromptModal.hidden = false;
+  }
+
+  function closeAgentModal() {
+    if (agentPromptModal) agentPromptModal.hidden = true;
+  }
+
+  if (agentModalClose)  agentModalClose.addEventListener("click", closeAgentModal);
+  if (agentModalOverlay) agentModalOverlay.addEventListener("click", closeAgentModal);
+
+  document.body.addEventListener("keydown", function (e) {
+    if (e.key === "Escape" && agentPromptModal && !agentPromptModal.hidden) {
+      closeAgentModal();
+    }
+  });
+
+  document.body.addEventListener("click", function (e) {
+    var card = e.target.closest(".project-ctx__agent-card--clickable");
+    if (!card) return;
+    var name = card.dataset.agentName || "Agent";
+    var prompt = card.dataset.systemPrompt || "";
+    openAgentModal(name, prompt);
+  });
+
+  document.body.addEventListener("keydown", function (e) {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    var card = e.target.closest(".project-ctx__agent-card--clickable");
+    if (!card) return;
+    e.preventDefault();
+    var name = card.dataset.agentName || "Agent";
+    var prompt = card.dataset.systemPrompt || "";
+    openAgentModal(name, prompt);
+  });
+
   var chatMessages = document.getElementById("chat-messages");
   var chatInput = document.getElementById("chat-input");
   var chatSendBtn = document.getElementById("chat-send-btn");

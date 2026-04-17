@@ -1,8 +1,13 @@
 {% comment %}
-  Chat session history partial — renders the inner content of #chat-messages.
-  Targeted by: hx-target="#chat-messages" hx-swap="innerHTML"
-  Also used as OOB content: <div id="chat-messages" hx-swap-oob="innerHTML">...</div>
+  Main panel — three states:
+    session  → conversation history
+    project  → visual project context setter
+    neither  → generic welcome
 {% endcomment %}
+{% load md_extras %}
+
+{% if session %}
+
 <div class="chat-history-header">
   <span class="chat-history-header__description">{{ session.description }}</span>
   <span class="chat-history-header__date">{{ session.created_at }}</span>
@@ -21,9 +26,7 @@
         </div>
         <div class="chat-history-msg__content">{{ msg.content }}</div>
       </div>
-      {% if not forloop.last %}
-        <hr class="chat-history-msg__divider">
-      {% endif %}
+      {% if not forloop.last %}<hr class="chat-history-msg__divider">{% endif %}
     {% endfor %}
   </div>
 {% else %}
@@ -32,4 +35,77 @@
     <h2 class="chat-welcome__title">No messages yet</h2>
     <p class="chat-welcome__subtitle">This session has no messages yet.</p>
   </div>
+{% endif %}
+
+{% elif project %}
+
+<div class="project-ctx">
+
+  <div class="project-ctx__header">
+    <div class="project-ctx__icon">🎯</div>
+    <div>
+      <h2 class="project-ctx__name">{{ project.project_name }}</h2>
+      <span class="project-ctx__tag">
+        {{ project.team.type|title }}
+        &middot;
+        {{ project.team.max_iterations }} iteration{{ project.team.max_iterations|pluralize }}
+      </span>
+    </div>
+  </div>
+
+  <div class="project-ctx__section">
+    <div class="project-ctx__label">Objective</div>
+    <div class="project-ctx__objective">{{ project.objective|markdownify }}</div>
+  </div>
+
+  <div class="project-ctx__section">
+    <div class="project-ctx__label">Participants</div>
+    <div class="project-ctx__agents">
+
+      {% for agent in project.agents %}
+        <div class="project-ctx__agent-card project-ctx__agent-card--clickable"
+             role="button"
+             tabindex="0"
+             data-agent-name="{{ agent.name|escape }}"
+             data-system-prompt="{{ agent.system_prompt|escape }}"
+             title="View system prompt">
+          <div class="project-ctx__agent-avatar">{{ agent.name|slice:":1"|upper }}</div>
+          <div class="project-ctx__agent-info">
+            <span class="project-ctx__agent-name">{{ agent.name }}</span>
+            <span class="project-ctx__agent-model">{{ agent.model }}</span>
+          </div>
+        </div>
+      {% endfor %}
+
+      {% if project.human_gate.enabled %}
+        <div class="project-ctx__agent-card project-ctx__agent-card--human">
+          <div class="project-ctx__agent-avatar project-ctx__agent-avatar--human">
+            {{ project.human_gate.name|slice:":1"|upper }}
+          </div>
+          <div class="project-ctx__agent-info">
+            <span class="project-ctx__agent-name">{{ project.human_gate.name }}</span>
+            <span class="project-ctx__agent-model">
+              Human &middot; {{ project.human_gate.interaction_mode|title }}
+            </span>
+          </div>
+        </div>
+      {% endif %}
+
+    </div>
+  </div>
+
+  <p class="project-ctx__hint">
+    Select a session from the list or press <strong>＋</strong> to start a new one.
+  </p>
+
+</div>
+
+{% else %}
+
+<div class="chat-welcome">
+  <div class="chat-welcome__icon">🤖</div>
+  <h2 class="chat-welcome__title">Product Discovery</h2>
+  <p class="chat-welcome__subtitle">Select a project to get started.</p>
+</div>
+
 {% endif %}

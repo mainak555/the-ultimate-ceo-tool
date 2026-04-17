@@ -12,6 +12,7 @@
 
   <script src="https://unpkg.com/htmx.org@1.9.12/dist/htmx.min.js"></script>
   {% django_htmx_script %}
+  <script src="https://cdn.jsdelivr.net/npm/marked@15/marked.min.js"></script>
 </head>
 <body hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'>
 
@@ -90,6 +91,18 @@
       </div>
     </div>
 
+  </div>
+
+  <!-- ====== Agent System Prompt Modal ====== -->
+  <div id="agent-prompt-modal" class="chat-modal" hidden>
+    <div class="chat-modal__overlay" id="agent-modal-overlay"></div>
+    <div class="chat-modal__card chat-modal__card--wide">
+      <div class="chat-modal__header">
+        <h3 class="chat-modal__title" id="agent-modal-title">System Prompt</h3>
+        <button class="chat-modal__close" type="button" id="agent-modal-close-btn">&times;</button>
+      </div>
+      <div class="chat-modal__body agent-prompt-body" id="agent-modal-body"></div>
+    </div>
   </div>
 
   <!-- ====== New Session Modal ====== -->

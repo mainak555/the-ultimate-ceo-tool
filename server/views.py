@@ -234,26 +234,23 @@ def project_detail(request, project_id):
 # Chat Session Views
 # ---------------------------------------------------------------------------
 
-_SESSION_SELECT_WELCOME = (
-    '<div class="chat-welcome">'
-    '<div class="chat-welcome__icon">💬</div>'
-    '<h2 class="chat-welcome__title">Select a session</h2>'
-    '<p class="chat-welcome__subtitle">Choose an existing session from the list or start a new one with ＋.</p>'
-    '</div>'
-)
-
-
 @require_GET
 def chat_session_list(request):
     """HTMX partial — list chat sessions for a given project."""
     project_id = request.GET.get("project_id", "").strip()
     sessions = services.list_chat_sessions(project_id) if project_id else []
+    project = services.get_project(project_id) if project_id else None
     list_html = render_to_string(
         "server/partials/chat_session_list.html",
         {"sessions": sessions, "project_id": project_id},
         request=request,
     )
-    oob_html = f'<div id="chat-messages" hx-swap-oob="innerHTML">{_SESSION_SELECT_WELCOME}</div>'
+    context_html = render_to_string(
+        "server/partials/chat_session_history.html",
+        {"project": project},
+        request=request,
+    )
+    oob_html = f'<div id="chat-messages" hx-swap-oob="innerHTML">{context_html}</div>'
     return HttpResponse(list_html + oob_html, content_type="text/html")
 
 

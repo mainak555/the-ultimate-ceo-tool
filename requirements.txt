@@ -5,3 +5,4 @@ django-libsass>=0.9
 pymongo[srv]>=4.8
 gunicorn>=22.0
 whitenoise>=6.7
+markdown>=3.6
