@@ -24,7 +24,6 @@
     <aside class="chat-sidebar">
       <div class="chat-sidebar__header">
         <span>Chats</span>
-        <button class="btn btn--xs btn--secondary" id="new-chat-btn" hidden title="New chat">＋</button>
       </div>
       <ul class="chat-sidebar__list" id="chat-history-list">
         <li class="chat-sidebar__empty">Select a project to load chats.</li>
@@ -106,25 +105,25 @@
     </div>
   </div>
 
-  <!-- ====== New Session Modal ====== -->
-  <div id="new-session-modal" class="chat-modal" hidden>
-    <div class="chat-modal__overlay" id="modal-overlay"></div>
+  <!-- ====== Edit Session Modal ====== -->
+  <div id="edit-session-modal" class="chat-modal" hidden>
+    <div class="chat-modal__overlay" id="edit-modal-overlay"></div>
     <div class="chat-modal__card">
       <div class="chat-modal__header">
-        <h3 class="chat-modal__title">New Chat Session</h3>
-        <button class="chat-modal__close" type="button" id="modal-close-btn">&times;</button>
+        <h3 class="chat-modal__title">Edit Chat Session</h3>
+        <button class="chat-modal__close" type="button" id="edit-modal-close-btn">&times;</button>
       </div>
       <div class="chat-modal__body">
-        <form id="new-session-form"
-              hx-post="{% url 'server:chat_session_create' %}"
-              hx-target="#new-session-form-feedback"
+        <form id="edit-session-form"
+              hx-post=""
+              hx-target="#edit-session-form-feedback"
               hx-swap="innerHTML">
           {% csrf_token %}
-          <input type="hidden" name="project_id" id="modal-project-id" value="">
-          <div id="new-session-form-feedback"></div>
+          <input type="hidden" name="session_id" id="edit-modal-session-id" value="">
+          <div id="edit-session-form-feedback"></div>
           <div class="form-group">
-            <label for="session-description">What would you like to discuss?</label>
-            <textarea id="session-description"
+            <label for="edit-session-description">Session description</label>
+            <textarea id="edit-session-description"
                       name="description"
                       class="input input--textarea"
                       rows="3"
@@ -132,12 +131,12 @@
                       placeholder="Brief description of this chat session…"
                       required></textarea>
             <div class="chat-description-counter">
-              <span id="desc-char-count">0</span>/150
+              <span id="edit-desc-char-count">0</span>/150
             </div>
           </div>
           <div class="form-actions">
-            <button type="submit" class="btn btn--primary" id="modal-submit-btn">Start Session</button>
-            <button type="button" class="btn btn--secondary" id="modal-cancel-btn">Cancel</button>
+            <button type="submit" class="btn btn--primary" id="edit-modal-submit-btn">Save</button>
+            <button type="button" class="btn btn--secondary" id="edit-modal-cancel-btn">Cancel</button>
           </div>
         </form>
       </div>

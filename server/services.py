@@ -414,6 +414,24 @@ def delete_chat_session(session_id):
         raise ValueError("Chat session not found.")
 
 
+def update_chat_session(session_id, description):
+    """Update the description of a chat session. Returns the normalized doc."""
+    description = (description or "").strip()
+    if not description:
+        raise ValueError("'description' is required.")
+    if len(description) > 150:
+        description = description[:150]
+    try:
+        oid = ObjectId(session_id)
+    except (InvalidId, TypeError):
+        raise ValueError(f"Invalid session ID '{session_id}'.")
+    col = get_collection(CHAT_SESSIONS_COLLECTION)
+    result = col.update_one({"_id": oid}, {"$set": {"description": description}})
+    if result.matched_count == 0:
+        raise ValueError("Chat session not found.")
+    return normalize_chat_session(col.find_one({"_id": oid}))
+
+
 # ---------------------------------------------------------------------------
 # Authentication
 # ---------------------------------------------------------------------------

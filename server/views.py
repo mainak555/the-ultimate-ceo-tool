@@ -387,6 +387,42 @@ def chat_session_delete(request, session_id):
     return HttpResponse("")
 
 
+@require_POST
+def chat_session_update(request, session_id):
+    """HTMX — update a chat session's description (secret-key gated)."""
+    if not _has_valid_secret(request):
+        return HttpResponse(
+            '<div class="alert alert-error">Unauthorized.</div>',
+            status=403,
+        )
+
+    description = request.POST.get("description", "").strip()
+    try:
+        session = services.update_chat_session(session_id, description)
+    except ValueError as e:
+        return HttpResponse(f'<div class="alert alert-error">{e}</div>', status=400)
+
+    # Re-render the session list so the sidebar reflects the updated description.
+    project_id = session.get("project_id", "")
+    sessions = services.list_chat_sessions(project_id)
+    list_html = render_to_string(
+        "server/partials/chat_session_list.html",
+        {"sessions": sessions, "project_id": project_id, "active_session_id": session["session_id"]},
+        request=request,
+    )
+    oob_list = f'<div id="chat-history-list" hx-swap-oob="innerHTML">{list_html}</div>'
+
+    # Also update the history header description if user is viewing this session.
+    oob_header = (
+        f'<span class="chat-history-header__description" hx-swap-oob="innerHTML">'
+        f'{session["description"]}</span>'
+    )
+
+    response = HttpResponse(oob_list + oob_header, content_type="text/html")
+    response["HX-Trigger"] = "chatSessionUpdated"
+    return response
+
+
 # ---------------------------------------------------------------------------
 # SSE helpers
 # ---------------------------------------------------------------------------

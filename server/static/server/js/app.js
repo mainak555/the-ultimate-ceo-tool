@@ -273,7 +273,7 @@ document.addEventListener("DOMContentLoaded", function () {
   document.body.addEventListener("keydown", function (e) {
     if (e.key === "Escape") {
       if (agentPromptModal && !agentPromptModal.hidden) closeAgentModal();
-      if (newSessionModal && !newSessionModal.hidden) closeModal();
+      if (editSessionModal && !editSessionModal.hidden) closeEditModal();
     }
   });
 
@@ -303,11 +303,12 @@ document.addEventListener("DOMContentLoaded", function () {
   var activeProjectIdInput = document.getElementById("active-project-id");
   var activeSessionIdInput = document.getElementById("active-session-id");
   var csrfToken = (document.getElementById("csrf-token-value") || {}).value || "";
-  var newChatBtn = document.getElementById("new-chat-btn");
-  var newSessionModal = document.getElementById("new-session-modal");
-  var modalProjectId = document.getElementById("modal-project-id");
-  var sessionDescription = document.getElementById("session-description");
-  var descCharCount = document.getElementById("desc-char-count");
+
+  // Edit-session modal elements
+  var editSessionModal = document.getElementById("edit-session-modal");
+  var editModalSessionId = document.getElementById("edit-modal-session-id");
+  var editSessionDescription = document.getElementById("edit-session-description");
+  var editDescCharCount = document.getElementById("edit-desc-char-count");
 
   // Only wire up when chat elements exist (home page only)
   if (!chatMessages || !chatInput) return;
@@ -319,9 +320,11 @@ document.addEventListener("DOMContentLoaded", function () {
     var keyInput = getSecretKeyInput();
     var hasSecret = !!(keyInput && keyInput.value.trim());
 
-    if (newChatBtn) newChatBtn.hidden = !hasSecret;
-
     document.querySelectorAll(".chat-session-item__delete").forEach(function (btn) {
+      btn.hidden = !hasSecret;
+    });
+
+    document.querySelectorAll(".chat-session-item__edit").forEach(function (btn) {
       btn.hidden = !hasSecret;
     });
 
@@ -335,57 +338,54 @@ document.addEventListener("DOMContentLoaded", function () {
     }
 
     // If key is removed while modal is open, close it to prevent submission
-    if (!hasSecret && newSessionModal && !newSessionModal.hidden) {
-      closeModal();
+    if (!hasSecret && editSessionModal && !editSessionModal.hidden) {
+      closeEditModal();
     }
   }
 
   // -----------------------------------------------------------------------
-  // Modal open / close
+  // Edit session modal — open / close
   // -----------------------------------------------------------------------
-  function openModal() {
-    if (!newSessionModal) return;
-    if (modalProjectId) modalProjectId.value = activeProjectIdInput ? activeProjectIdInput.value : "";
-    if (sessionDescription) { sessionDescription.value = ""; sessionDescription.focus(); }
-    if (descCharCount) descCharCount.textContent = "0";
-    newSessionModal.hidden = false;
+  function openEditModal(sessionId, description) {
+    if (!editSessionModal) return;
+    if (editModalSessionId) editModalSessionId.value = sessionId;
+    if (editSessionDescription) {
+      editSessionDescription.value = description || "";
+      editSessionDescription.focus();
+    }
+    if (editDescCharCount) editDescCharCount.textContent = (description || "").length;
+    // Set HTMX post URL dynamically
+    var form = document.getElementById("edit-session-form");
+    if (form) form.setAttribute("hx-post", "/chat/sessions/" + sessionId + "/update/");
+    if (typeof htmx !== "undefined" && form) htmx.process(form);
+    editSessionModal.hidden = false;
   }
 
-  function closeModal() {
-    if (newSessionModal) newSessionModal.hidden = true;
-    _pendingTask = null;
+  function closeEditModal() {
+    if (editSessionModal) editSessionModal.hidden = true;
   }
 
-  if (newChatBtn) {
-    newChatBtn.addEventListener("click", function () {
-      var keyInput = getSecretKeyInput();
-      if (!keyInput || !keyInput.value.trim()) {
-        return; // button should be hidden; guard against CSS override
-      }
-      var projectId = activeProjectIdInput ? activeProjectIdInput.value.trim() : "";
-      if (!projectId) {
-        alert("Select a project first.");
-        return;
-      }
-      openModal();
-    });
-  }
+  // Edit button click — event delegation on session list
+  document.body.addEventListener("click", function (e) {
+    var editBtn = e.target.closest(".chat-session-item__edit");
+    if (!editBtn) return;
+    var sessionId = editBtn.dataset.sessionId || "";
+    var description = editBtn.dataset.description || "";
+    if (!sessionId) return;
+    openEditModal(sessionId, description);
+  });
 
-  var modalCloseBtn = document.getElementById("modal-close-btn");
-  var modalCancelBtn = document.getElementById("modal-cancel-btn");
-  var modalOverlay = document.getElementById("modal-overlay");
+  var editModalCloseBtn = document.getElementById("edit-modal-close-btn");
+  var editModalCancelBtn = document.getElementById("edit-modal-cancel-btn");
+  var editModalOverlay = document.getElementById("edit-modal-overlay");
 
-  if (modalCloseBtn) modalCloseBtn.addEventListener("click", closeModal);
-  if (modalCancelBtn) modalCancelBtn.addEventListener("click", closeModal);
-  if (modalOverlay) modalOverlay.addEventListener("click", closeModal);
+  if (editModalCloseBtn) editModalCloseBtn.addEventListener("click", closeEditModal);
+  if (editModalCancelBtn) editModalCancelBtn.addEventListener("click", closeEditModal);
+  if (editModalOverlay) editModalOverlay.addEventListener("click", closeEditModal);
 
-  // Close modal when HTMX signals chatSessionCreated — handled in the full
-  // chatSessionCreated listener below; this stub is intentionally removed.
-
-  // Allow HTMX to swap 4xx error responses into #new-session-form-feedback
-  // (by default HTMX 1.x drops non-2xx responses without swapping)
+  // Allow HTMX to swap 4xx error responses into #edit-session-form-feedback
   document.body.addEventListener("htmx:beforeSwap", function (e) {
-    if (e.detail.target && e.detail.target.id === "new-session-form-feedback") {
+    if (e.detail.target && e.detail.target.id === "edit-session-form-feedback") {
       if (e.detail.xhr.status === 400 || e.detail.xhr.status === 403) {
         e.detail.shouldSwap = true;
         e.detail.isError = false;
@@ -393,12 +393,17 @@ document.addEventListener("DOMContentLoaded", function () {
     }
   });
 
+  // Close edit modal when server signals success
+  document.body.addEventListener("chatSessionUpdated", function () {
+    closeEditModal();
+  });
+
   // -----------------------------------------------------------------------
-  // Description char counter
+  // Edit modal description char counter
   // -----------------------------------------------------------------------
-  if (sessionDescription && descCharCount) {
-    sessionDescription.addEventListener("input", function () {
-      descCharCount.textContent = sessionDescription.value.length;
+  if (editSessionDescription && editDescCharCount) {
+    editSessionDescription.addEventListener("input", function () {
+      editDescCharCount.textContent = editSessionDescription.value.length;
     });
   }
 
@@ -425,7 +430,6 @@ document.addEventListener("DOMContentLoaded", function () {
   // -----------------------------------------------------------------------
 
   var _activeReader = null; // ReadableStreamDefaultReader during a run
-  var _pendingTask   = null; // task text queued before a session existed
 
   function setRunningState(running) {
     if (chatInput)   { chatInput.disabled = running; }
@@ -622,7 +626,7 @@ document.addEventListener("DOMContentLoaded", function () {
   }
 
   // -----------------------------------------------------------------------
-  // Send button
+  // Send button — auto-creates session when none exists
   // -----------------------------------------------------------------------
   if (chatSendBtn) {
     chatSendBtn.addEventListener("click", function () {
@@ -630,13 +634,77 @@ document.addEventListener("DOMContentLoaded", function () {
       var text = chatInput.value.trim();
       if (!text) return;
 
-      // No active session — open modal and queue the typed text
       var sessionId = activeSessionIdInput ? activeSessionIdInput.value.trim() : "";
       if (!sessionId) {
+        // No active session — auto-create one using first 150 chars as description
         var projectId = activeProjectIdInput ? activeProjectIdInput.value.trim() : "";
         if (!projectId) { alert("Select a project first."); return; }
-        _pendingTask = text;
-        openModal();
+
+        var keyInput = getSecretKeyInput();
+        var secretKey = keyInput ? keyInput.value.trim() : "";
+        if (!secretKey) { alert("Enter the Secret Key first."); return; }
+
+        var description = text.substring(0, 150);
+
+        // Disable input while creating
+        chatSendBtn.disabled = true;
+        chatInput.disabled = true;
+
+        var body = new URLSearchParams();
+        body.append("project_id", projectId);
+        body.append("description", description);
+
+        fetch("/chat/sessions/create/", {
+          method: "POST",
+          headers: {
+            "X-App-Secret-Key": secretKey,
+            "X-CSRFToken": csrfToken,
+            "Content-Type": "application/x-www-form-urlencoded",
+          },
+          body: body.toString(),
+        }).then(function (response) {
+          if (!response.ok) {
+            throw new Error("Failed to create session.");
+          }
+          return response.text();
+        }).then(function (html) {
+          // Let HTMX process OOB swaps from the response
+          var tmp = document.createElement("div");
+          tmp.innerHTML = html;
+          // Process OOB swaps manually
+          tmp.querySelectorAll("[hx-swap-oob]").forEach(function (el) {
+            var targetId = el.id;
+            var target = document.getElementById(targetId);
+            if (target) {
+              if (el.tagName === "INPUT") {
+                // outerHTML swap for hidden inputs
+                target.outerHTML = el.outerHTML;
+                // Re-acquire the reference
+                if (targetId === "active-session-id") {
+                  activeSessionIdInput = document.getElementById("active-session-id");
+                }
+              } else {
+                target.innerHTML = el.innerHTML;
+              }
+            }
+          });
+          updateChatAuthState();
+
+          // Now we have a session — set up chat area and send the message
+          if (chatMessages) {
+            chatMessages.innerHTML = '<div class="chat-history" id="chat-history-msgs"></div>';
+          }
+          appendHumanBubble(text);
+          chatInput.value = "";
+          chatInput.style.height = "auto";
+          chatInput.focus();
+          startRun(text);
+        }).catch(function (err) {
+          appendBubble('<div class="chat-bubble chat-bubble--error">Error: ' + err.message + '</div>');
+        }).finally(function () {
+          chatSendBtn.disabled = false;
+          chatInput.disabled = false;
+        });
         return;
       }
 
@@ -758,25 +826,7 @@ document.addEventListener("DOMContentLoaded", function () {
     if (li && activeSessionIdInput) activeSessionIdInput.value = li.dataset.sessionId || "";
   });
 
-  // chatSessionCreated: close modal, then fire any queued pending task.
-  // Session ID is already in the DOM via OOB swap of #active-session-id.
-  document.body.addEventListener("chatSessionCreated", function () {
-    closeModal();
-    if (_pendingTask) {
-      var task = _pendingTask;
-      _pendingTask = null;
-      // Replace whatever the OOB swap left in #chat-messages with a clean
-      // history container so the first bubble lands in the right element.
-      if (chatMessages) {
-        chatMessages.innerHTML = '<div class="chat-history" id="chat-history-msgs"></div>';
-      }
-      appendHumanBubble(task);
-      if (chatInput) { chatInput.value = ""; chatInput.style.height = "auto"; }
-      startRun(task);
-    }
-  });
-
-  // Show/hide delete buttons after HTMX swaps new session list items
+  // Show/hide edit/delete buttons after HTMX swaps new session list items
   document.body.addEventListener("htmx:afterSwap", function () {
     updateChatAuthState();
   });

@@ -223,22 +223,52 @@
         var popup = window.open(d.url, "trello_auth", "width=600,height=700");
         if (!popup) { _setStatus("Popup blocked — please allow popups."); return; }
 
+        var handled = false;
+
+        // Listen for postMessage signal from callback page
         function onMessage(event) {
           if (event.origin !== window.location.origin) return;
-          var token = event.data;
-          if (typeof token !== "string" || !token) return;
-          window.removeEventListener("message", onMessage);
-          try { popup.close(); } catch (e) { /* ignore */ }
+          if (handled) return;
+          var data = event.data;
+          if (typeof data !== "string" || !data) return;
 
-          _api("POST", "/trello/" + _state.sessionId + "/store-token/", { token: token })
-            .then(function () {
-              _setStatus("");
-              _checkToken();
-            })
-            .catch(function (err) { _setStatus("Error storing token: " + err.message); });
+          if (data === "trello_token_stored") {
+            // Token already stored by callback page — just refresh status
+            handled = true;
+            window.removeEventListener("message", onMessage);
+            try { popup.close(); } catch (e) {}
+            _setStatus("");
+            _checkToken();
+          } else {
+            // Legacy: raw token from postMessage — store it ourselves
+            handled = true;
+            window.removeEventListener("message", onMessage);
+            try { popup.close(); } catch (e) {}
+            _api("POST", "/trello/" + _state.sessionId + "/store-token/", { token: data })
+              .then(function () {
+                _setStatus("");
+                _checkToken();
+              })
+              .catch(function (err) { _setStatus("Error storing token: " + err.message); });
+          }
         }
-
         window.addEventListener("message", onMessage);
+
+        // Poll for popup close — when it closes, re-check token status
+        var pollTimer = setInterval(function () {
+          if (handled) { clearInterval(pollTimer); return; }
+          try {
+            if (popup.closed) {
+              clearInterval(pollTimer);
+              if (!handled) {
+                handled = true;
+                window.removeEventListener("message", onMessage);
+                _setStatus("Verifying authorization…");
+                _checkToken();
+              }
+            }
+          } catch (e) { /* ignore */ }
+        }, 500);
       })
       .catch(function (err) { _setStatus("Error: " + err.message); });
   }

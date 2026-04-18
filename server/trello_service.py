@@ -4,6 +4,7 @@ and orchestration of trello_client calls.
 """
 
 from datetime import datetime, timedelta, timezone
+from urllib.parse import quote
 
 from bson import ObjectId
 from bson.errors import InvalidId
@@ -42,7 +43,7 @@ def build_auth_url(project, callback_url):
         f"&response_type=token"
         f"&key={api_key}"
         f"&callback_method=fragment"
-        f"&return_url={callback_url}"
+        f"&return_url={quote(callback_url, safe='')}"
     )
 
 
@@ -103,6 +104,8 @@ def is_token_valid(session_id):
     if not expiry:
         return False
     if hasattr(expiry, "timestamp"):
+        if expiry.tzinfo is None:
+            expiry = expiry.replace(tzinfo=timezone.utc)
         return expiry > datetime.now(timezone.utc)
     return False
 
@@ -132,6 +135,9 @@ def _resolve_credentials(session_id):
     expiry = session_doc.get("trello_token_expiry")
     if not token:
         raise ValueError("No Trello token. Please authorize first.")
+    if expiry and hasattr(expiry, "timestamp"):
+        if expiry.tzinfo is None:
+            expiry = expiry.replace(tzinfo=timezone.utc)
     if expiry and hasattr(expiry, "timestamp") and expiry <= datetime.now(timezone.utc):
         raise ValueError("Trello token expired. Please re-authorize.")
 

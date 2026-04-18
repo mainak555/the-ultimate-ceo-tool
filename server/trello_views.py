@@ -34,12 +34,23 @@ def _json_error(message, status=400):
 
 @require_GET
 def trello_callback(request):
-    """GET — Callback page for Trello fragment auth. Reads token from hash and relays to opener."""
+    """
+    GET \u2014 Callback page for Trello fragment auth.
+
+    Accepts query params ``sid`` (session ID) and ``skey`` (secret key) so the
+    page can store the token server-side directly via fetch POST, eliminating
+    the need for window.opener.postMessage (which breaks after cross-origin
+    navigation through trello.com).  Falls back to postMessage when the params
+    are absent.
+    """
+    session_id = request.GET.get("sid", "")
+    secret_key = request.GET.get("skey", "")
+
     html = (
         '<!DOCTYPE html>'
         '<html><head><title>Trello Authorization</title></head>'
         '<body>'
-        '<p>Authorization complete — you can close this window.</p>'
+        '<p id="msg">Authorization complete \u2014 closing\u2026</p>'
         '<script>'
         '(function(){'
         '  var hash = window.location.hash || "";'
@@ -49,10 +60,35 @@ def trello_callback(request):
         '    var m = hash.match(/token=([^&]+)/);'
         '    if (m) token = m[1];'
         '  }'
-        '  if (token && window.opener) {'
-        '    window.opener.postMessage(token, window.location.origin);'
+        '  if (!token) {'
+        '    document.getElementById("msg").textContent = "No token received. You can close this window.";'
+        '    return;'
         '  }'
-        '  setTimeout(function(){ window.close(); }, 500);'
+        '  var sessionId = "' + session_id.replace('"', '') + '";'
+        '  var secretKey = "' + secret_key.replace('"', '') + '";'
+        '  if (sessionId && secretKey) {'
+        '    fetch("/trello/" + sessionId + "/store-token/", {'
+        '      method: "POST",'
+        '      headers: {'
+        '        "Content-Type": "application/json",'
+        '        "X-App-Secret-Key": secretKey'
+        '      },'
+        '      body: JSON.stringify({token: token})'
+        '    }).then(function() {'
+        '      if (window.opener) {'
+        '        try { window.opener.postMessage("trello_token_stored", window.location.origin); } catch(e) {}'
+        '      }'
+        '      document.getElementById("msg").textContent = "Authorized! Closing\u2026";'
+        '      setTimeout(function(){ window.close(); }, 600);'
+        '    }).catch(function() {'
+        '      document.getElementById("msg").textContent = "Error storing token. Please close and retry.";'
+        '    });'
+        '  } else {'
+        '    if (window.opener) {'
+        '      try { window.opener.postMessage(token, window.location.origin); } catch(e) {}'
+        '    }'
+        '    setTimeout(function(){ window.close(); }, 3000);'
+        '  }'
         '})();'
         '</script>'
         '</body></html>'
@@ -74,7 +110,10 @@ def trello_auth_url(request, session_id):
     if project is None:
         return _json_error("Project not found", 404)
 
-    callback_url = request.build_absolute_uri("/trello/callback/")
+    secret_key = request.headers.get("X-App-Secret-Key", "").strip()
+    callback_url = request.build_absolute_uri(
+        f"/trello/callback/?sid={session_id}&skey={secret_key}"
+    )
 
     try:
         url = trello_service.build_auth_url(project, callback_url)

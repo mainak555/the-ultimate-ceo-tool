@@ -35,6 +35,7 @@ urlpatterns = [
     path("chat/sessions/<str:session_id>/respond/", views.chat_session_respond, name="chat_session_respond"),
     path("chat/sessions/<str:session_id>/stop/", views.chat_session_stop, name="chat_session_stop"),
     path("chat/sessions/<str:session_id>/delete/", views.chat_session_delete, name="chat_session_delete"),
+    path("chat/sessions/<str:session_id>/update/", views.chat_session_update, name="chat_session_update"),
     path("chat/sessions/<str:session_id>/", views.chat_session_detail, name="chat_session_detail"),
 
     # Trello integration
