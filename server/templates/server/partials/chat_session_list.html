@@ -13,6 +13,14 @@
         {{ session.description|truncatechars:55 }}
       </span>
       <span class="chat-session-item__date">{{ session.created_at }}</span>
+      <button class="chat-session-item__edit"
+              hidden
+              type="button"
+              title="Edit session"
+              data-session-id="{{ session.session_id }}"
+              data-description="{{ session.description }}">
+        &#9998;
+      </button>
       <button class="chat-session-item__delete"
               hidden
               type="button"

@@ -4,6 +4,8 @@ from django.urls import path
 from . import trello_views
 
 urlpatterns = [
+    # Auth callback (no session_id — Trello redirects here)
+    path("callback/", trello_views.trello_callback, name="trello_callback"),
     # Token management
     path("<str:session_id>/auth-url/", trello_views.trello_auth_url, name="trello_auth_url"),
     path("<str:session_id>/store-token/", trello_views.trello_store_token, name="trello_store_token"),

@@ -40,10 +40,11 @@ integrations:
 ## Auth Flow
 
 1. Frontend calls `GET /trello/<session_id>/auth-url/`
-2. Backend builds URL: `https://trello.com/1/authorize?expiration=1hour&name=<app_name>&scope=read,write,account&response_type=token&key=<api_key>&callback_method=postMessage&return_url=<origin>`
-3. Frontend opens popup → user authorizes → Trello posts token via `postMessage`
-4. Frontend sends `POST /trello/<session_id>/store-token/` with `{token: "..."}`
-5. Backend stores token + 1-hour expiry on the session document
+2. Backend builds URL: `https://trello.com/1/authorize?expiration=1hour&name=<app_name>&scope=read,write&response_type=token&key=<api_key>&callback_method=fragment&return_url=<callback_url>`
+3. Frontend opens popup → user authorizes → Trello redirects popup to `/trello/callback/#token=<token>`
+4. Callback page reads hash, relays token to opener via same-origin `postMessage`, then self-closes
+5. Frontend sends `POST /trello/<session_id>/store-token/` with `{token: "..."}`
+6. Backend stores token + 1-hour expiry on the session document
 
 ## API Endpoints
 

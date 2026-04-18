@@ -33,6 +33,34 @@ def _json_error(message, status=400):
 # ---------------------------------------------------------------------------
 
 @require_GET
+def trello_callback(request):
+    """GET — Callback page for Trello fragment auth. Reads token from hash and relays to opener."""
+    html = (
+        '<!DOCTYPE html>'
+        '<html><head><title>Trello Authorization</title></head>'
+        '<body>'
+        '<p>Authorization complete — you can close this window.</p>'
+        '<script>'
+        '(function(){'
+        '  var hash = window.location.hash || "";'
+        '  var token = "";'
+        '  if (hash.indexOf("#token=") === 0) { token = hash.substring(7); }'
+        '  else if (hash.indexOf("token=") !== -1) {'
+        '    var m = hash.match(/token=([^&]+)/);'
+        '    if (m) token = m[1];'
+        '  }'
+        '  if (token && window.opener) {'
+        '    window.opener.postMessage(token, window.location.origin);'
+        '  }'
+        '  setTimeout(function(){ window.close(); }, 500);'
+        '})();'
+        '</script>'
+        '</body></html>'
+    )
+    return HttpResponse(html, content_type='text/html')
+
+
+@require_GET
 def trello_auth_url(request, session_id):
     """GET — Return the Trello authorization URL for this session's project."""
     if not _has_valid_secret(request):
@@ -46,12 +74,10 @@ def trello_auth_url(request, session_id):
     if project is None:
         return _json_error("Project not found", 404)
 
-    origin = request.headers.get("Origin") or request.build_absolute_uri("/")
-    # Strip trailing path, keep just scheme + host
-    origin = origin.rstrip("/")
+    callback_url = request.build_absolute_uri("/trello/callback/")
 
     try:
-        url = trello_service.build_auth_url(project, origin)
+        url = trello_service.build_auth_url(project, callback_url)
     except ValueError as e:
         return _json_error(str(e))
 

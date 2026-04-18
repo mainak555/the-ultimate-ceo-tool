@@ -224,10 +224,11 @@
         if (!popup) { _setStatus("Popup blocked — please allow popups."); return; }
 
         function onMessage(event) {
-          if (event.origin !== "https://trello.com") return;
+          if (event.origin !== window.location.origin) return;
           var token = event.data;
           if (typeof token !== "string" || !token) return;
           window.removeEventListener("message", onMessage);
+          try { popup.close(); } catch (e) { /* ignore */ }
 
           _api("POST", "/trello/" + _state.sessionId + "/store-token/", { token: token })
             .then(function () {

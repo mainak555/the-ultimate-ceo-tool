@@ -16,9 +16,12 @@ from . import trello_client
 # Auth URL
 # ---------------------------------------------------------------------------
 
-def build_auth_url(project, origin):
+def build_auth_url(project, callback_url):
     """
     Build the Trello authorization URL from the project's raw config.
+
+    Uses fragment callback: Trello redirects to callback_url#token=<token>.
+    The callback page reads the hash and relays it to the opener via postMessage.
 
     Returns the full authorize URL string.
     Raises ValueError if api_key or app_name is missing.
@@ -35,11 +38,11 @@ def build_auth_url(project, origin):
         "https://trello.com/1/authorize"
         f"?expiration=1hour"
         f"&name={app_name}"
-        f"&scope=read,write,account"
+        f"&scope=read,write"
         f"&response_type=token"
         f"&key={api_key}"
-        f"&callback_method=postMessage"
-        f"&return_url={origin}"
+        f"&callback_method=fragment"
+        f"&return_url={callback_url}"
     )
 
 
