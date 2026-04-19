@@ -89,7 +89,7 @@
         </div>
         {% endif %}
 
-        {# Row 2: <Workspace> | <Board> | <List> (omitted when all blank) #}
+        {# Row 2: <Workspace> >> <Board> >> <List> (omitted when all blank) #}
         {% with ws=project.integrations.trello.default_workspace_name board=project.integrations.trello.default_board_name lst=project.integrations.trello.default_list_name %}
         {% if ws or board or lst %}
         <div class="agent-card__detail">

@@ -41,21 +41,27 @@ integrations:
 - Tokens are **per project**, stored in `project_settings.integrations.trello.token`
 - Fields: `token` (string, masked via `SECRET_MASK`), `token_generated_at` (ISO datetime string, UTC)
 - Expiry: **never** — tokens persist until regenerated
-- Token is generated on the **config page** (edit mode) via Trello's popup flow
+- Token section is **always visible** when Trello integration is enabled (both create and edit modes)
+- In **create mode**: token textbox shows "Not generated", Generate button is disabled, hint reads "Save the Configuration first to generate the token"
+- In **edit mode** (after project save): Generate button is enabled (gated by secret key), token textbox shows `••••••••` with generated datetime once a token exists
+- The callback flow stores the token directly in the DB — on completion, the textbox updates to `••••••••` and shows the generated datetime without a page reload
 - The `api_key` never leaves the server — the frontend only receives the auth URL
 - Legacy session-level token functions (`store_session_token`, etc.) are kept for backward compatibility
 - Session-scoped endpoints (`/trello/<sid>/...`) resolve credentials via the session's project token
 
 ## Auth Flow (Config Page)
 
-1. User clicks "Generate Token" on the config page (edit mode)
-2. Frontend calls `GET /trello/project/<project_id>/auth-url/`
-3. Backend builds URL: `https://trello.com/1/authorize?expiration=never&name=<app_name>&scope=read,write&response_type=token&key=<api_key>&callback_method=fragment&return_url=<callback_url>`
-4. Frontend opens popup → user authorizes → Trello redirects popup to `/trello/callback/?pid=<project_id>&skey=<secret_key>#token=<token>`
-5. Callback page reads hash, sends `POST /trello/project/<pid>/store-token/` with `{token: "..."}`, then sends `postMessage("trello_token_stored")` to opener
-6. Backend stores token + `token_generated_at` on the project document
-7. Frontend polls for popup close, then calls `GET /trello/project/<pid>/token-status/` to refresh UI
-8. Cascade dropdowns (workspace → board → list) become available once token is valid
+1. Token section is visible on the config page in both create and edit modes
+2. In create mode the Generate button is disabled with the hint "Save the Configuration first to generate the token"
+3. Once the configuration is saved (project gets a `project_id`), the Generate button becomes enabled
+4. User clicks "Generate Token" → frontend calls `GET /trello/project/<project_id>/auth-url/`
+5. Backend builds URL: `https://trello.com/1/authorize?expiration=never&name=<app_name>&scope=read,write&response_type=token&key=<api_key>&callback_method=fragment&return_url=<callback_url>`
+6. Frontend opens popup → user authorizes → Trello redirects popup to `/trello/callback/?pid=<project_id>&skey=<secret_key>#token=<token>`
+7. Callback page reads hash, sends `POST /trello/project/<pid>/store-token/` with `{token: "..."}`, then sends `postMessage("trello_token_stored")` to opener
+8. Backend stores token + `token_generated_at` on the project document
+9. Frontend receives `postMessage` (or detects popup close), calls `GET /trello/project/<pid>/token-status/` to refresh UI
+10. Token textbox updates to `••••••••`, hint shows "Generated: <datetime>", cascade dropdowns (workspace → board → list) become available
+11. When the configuration is reloaded in edit mode, a previously generated token displays as `••••••••` with its generated datetime
 
 ## API Endpoints
 

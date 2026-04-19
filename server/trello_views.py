@@ -5,6 +5,7 @@ All views require the X-App-Secret-Key header.
 """
 
 import json
+from urllib.parse import quote as _urlquote
 
 from django.http import HttpResponse
 from django.views.decorators.csrf import csrf_exempt
@@ -42,7 +43,6 @@ def trello_callback(request):
       - ``pid`` (project ID) + ``skey`` for project-scoped token storage
     Falls back to postMessage when params are absent.
     """
-    session_id = request.GET.get("sid", "")
     project_id = request.GET.get("pid", "")
     secret_key = request.GET.get("skey", "")
 
@@ -50,9 +50,6 @@ def trello_callback(request):
     if project_id and secret_key:
         store_url = f"/trello/project/{project_id}/store-token/"
         store_id = project_id
-    elif session_id and secret_key:
-        store_url = f"/trello/{session_id}/store-token/"
-        store_id = session_id
     else:
         store_url = ""
         store_id = ""
@@ -75,8 +72,8 @@ def trello_callback(request):
         '    document.getElementById("msg").textContent = "No token received. You can close this window.";'
         '    return;'
         '  }'
-        '  var storeUrl = "' + store_url.replace('"', '') + '";'
-        '  var secretKey = "' + secret_key.replace('"', '') + '";'
+        '  var storeUrl = ' + json.dumps(store_url) + ';'
+        '  var secretKey = ' + json.dumps(secret_key) + ';'
         '  if (storeUrl && secretKey) {'
         '    fetch(storeUrl, {'
         '      method: "POST",'
@@ -85,14 +82,21 @@ def trello_callback(request):
         '        "X-App-Secret-Key": secretKey'
         '      },'
         '      body: JSON.stringify({token: token})'
-        '    }).then(function() {'
+        '    }).then(function(r) {'
+        '      if (!r.ok) {'
+        '        return r.json().then(function(d) {'
+        '          document.getElementById("msg").textContent = "Error: " + (d.error || "HTTP " + r.status) + ". Please close and retry.";'
+        '        }).catch(function() {'
+        '          document.getElementById("msg").textContent = "Error storing token (HTTP " + r.status + "). Please close and retry.";'
+        '        });'
+        '      }'
         '      if (window.opener) {'
         '        try { window.opener.postMessage("trello_token_stored", window.location.origin); } catch(e) {}'
         '      }'
         '      document.getElementById("msg").textContent = "Authorized! Closing\u2026";'
         '      setTimeout(function(){ window.close(); }, 600);'
-        '    }).catch(function() {'
-        '      document.getElementById("msg").textContent = "Error storing token. Please close and retry.";'
+        '    }).catch(function(err) {'
+        '      document.getElementById("msg").textContent = "Network error: " + err.message + ". Please close and retry.";'
         '    });'
         '  } else {'
         '    if (window.opener) {'
@@ -105,57 +109,6 @@ def trello_callback(request):
         '</body></html>'
     )
     return HttpResponse(html, content_type='text/html')
-
-
-@require_GET
-def trello_auth_url(request, session_id):
-    """GET — Return the Trello authorization URL for this session's project."""
-    if not _has_valid_secret(request):
-        return _json_error("Unauthorized", 403)
-
-    session = services.get_chat_session(session_id)
-    if session is None:
-        return _json_error("Session not found", 404)
-
-    project = services.get_project_raw(session["project_id"])
-    if project is None:
-        return _json_error("Project not found", 404)
-
-    secret_key = request.headers.get("X-App-Secret-Key", "").strip()
-    callback_url = request.build_absolute_uri(
-        f"/trello/callback/?sid={session_id}&skey={secret_key}"
-    )
-
-    try:
-        url = trello_service.build_auth_url(project, callback_url)
-    except ValueError as e:
-        return _json_error(str(e))
-
-    return _json_response({"url": url})
-
-
-@csrf_exempt
-@require_POST
-def trello_store_token(request, session_id):
-    """POST — Store a Trello token on the chat session."""
-    if not _has_valid_secret(request):
-        return _json_error("Unauthorized", 403)
-
-    try:
-        body = json.loads(request.body)
-    except (json.JSONDecodeError, ValueError):
-        return _json_error("Invalid JSON body")
-
-    token = (body.get("token") or "").strip()
-    if not token:
-        return _json_error("'token' is required")
-
-    try:
-        result = trello_service.store_session_token(session_id, token)
-    except ValueError as e:
-        return _json_error(str(e))
-
-    return _json_response({"status": "ok", "expires_at": result["expires_at"]})
 
 
 @require_GET
@@ -354,7 +307,7 @@ def trello_project_auth_url(request, project_id):
 
     secret_key = request.headers.get("X-App-Secret-Key", "").strip()
     callback_url = request.build_absolute_uri(
-        f"/trello/callback/?pid={project_id}&skey={secret_key}"
+        f"/trello/callback/?pid={project_id}&skey={_urlquote(secret_key, safe='')}"
     )
 
     try:

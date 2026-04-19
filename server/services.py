@@ -294,7 +294,8 @@ def _restore_masked_secrets(data, existing):
     if isinstance(trello, dict):
         if trello.get("api_key") == SECRET_MASK:
             trello["api_key"] = existing_trello.get("api_key", "")
-        if trello.get("token") == SECRET_MASK:
+        token_value = trello.get("token", "")
+        if token_value == SECRET_MASK or (not token_value and existing_trello.get("token")):
             trello["token"] = existing_trello.get("token", "")
         # Preserve token_generated_at from DB when not explicitly set
         if not trello.get("token_generated_at"):

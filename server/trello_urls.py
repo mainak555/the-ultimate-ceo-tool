@@ -6,9 +6,7 @@ from . import trello_views
 urlpatterns = [
     # Auth callback (no session_id — Trello redirects here)
     path("callback/", trello_views.trello_callback, name="trello_callback"),
-    # Session-scoped token management
-    path("<str:session_id>/auth-url/", trello_views.trello_auth_url, name="trello_auth_url"),
-    path("<str:session_id>/store-token/", trello_views.trello_store_token, name="trello_store_token"),
+    # Session-scoped token status (resolves project token via session's project_id)
     path("<str:session_id>/token-status/", trello_views.trello_token_status, name="trello_token_status"),
     # Session-scoped API proxies
     path("<str:session_id>/workspaces/", trello_views.trello_workspaces, name="trello_workspaces"),

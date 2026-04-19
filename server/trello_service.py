@@ -48,69 +48,6 @@ def build_auth_url(project, callback_url):
 
 
 # ---------------------------------------------------------------------------
-# Session token CRUD
-# ---------------------------------------------------------------------------
-
-def store_session_token(session_id, token):
-    """
-    Store a Trello token on the chat session document.
-
-    Sets trello_token and trello_token_expiry (now + 1 hour).
-    """
-    try:
-        oid = ObjectId(session_id)
-    except (InvalidId, TypeError):
-        raise ValueError(f"Invalid session ID '{session_id}'.")
-
-    col = get_collection(CHAT_SESSIONS_COLLECTION)
-    expiry = datetime.now(timezone.utc) + timedelta(hours=1)
-    result = col.update_one(
-        {"_id": oid},
-        {"$set": {"trello_token": token, "trello_token_expiry": expiry}},
-    )
-    if result.matched_count == 0:
-        raise ValueError("Chat session not found.")
-    return {"expires_at": expiry.isoformat()}
-
-
-def get_session_token(session_id):
-    """
-    Return {token, expiry} from the raw session document, or None.
-    """
-    try:
-        oid = ObjectId(session_id)
-    except (InvalidId, TypeError):
-        return None
-
-    col = get_collection(CHAT_SESSIONS_COLLECTION)
-    doc = col.find_one({"_id": oid}, {"trello_token": 1, "trello_token_expiry": 1})
-    if not doc:
-        return None
-
-    token = doc.get("trello_token")
-    expiry = doc.get("trello_token_expiry")
-    if not token:
-        return None
-
-    return {"token": token, "expiry": expiry}
-
-
-def is_token_valid(session_id):
-    """Return True if the session has a non-expired Trello token."""
-    info = get_session_token(session_id)
-    if not info:
-        return False
-    expiry = info.get("expiry")
-    if not expiry:
-        return False
-    if hasattr(expiry, "timestamp"):
-        if expiry.tzinfo is None:
-            expiry = expiry.replace(tzinfo=timezone.utc)
-        return expiry > datetime.now(timezone.utc)
-    return False
-
-
-# ---------------------------------------------------------------------------
 # Project-level token CRUD
 # ---------------------------------------------------------------------------
 

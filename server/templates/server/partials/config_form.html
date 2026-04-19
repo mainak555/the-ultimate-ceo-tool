@@ -260,17 +260,17 @@
                    class="input input--sm"
                    value="{{ project.integrations.trello.api_key|default:'' }}"
                    placeholder="Paste your Trello API key">
-            <small class="form-hint">Get from <a href="https://trello.com/power-ups/admin" target="_blank" rel="noopener">Trello Power-Ups admin</a>. After entering, <strong>save the config first</strong>, then generate the token below.</small>
+            <small class="form-hint">Get from <a href="https://trello.com/power-ups/admin" target="_blank" rel="noopener">Trello Power-Ups admin</a>.
           </div>
 
-          <!-- Token row (edit mode only, visible when API key entered) -->
-          <div class="form-group" id="trello-token-section" {% if mode == 'create' %}hidden{% endif %}>
+          <!-- Token row (always visible when Trello enabled) -->
+          <div class="form-group" id="trello-token-section">
             <label>Token</label>
             <div class="trello-token-row">
               <input type="text"
                      id="trello-token-display"
                      class="input input--sm"
-                     value="{% if project.integrations.trello.token %}{{ project.integrations.trello.token }}{% else %}Not generated{% endif %}"
+                     value="{% if project.integrations.trello.token %}••••••••{% else %}Not generated{% endif %}"
                      disabled
                      readonly>
               <button type="button"
@@ -281,18 +281,11 @@
                 <span id="trello-generate-btn-spinner" hidden aria-hidden="true">&#x23F3; Authorizing&hellip;</span>
               </button>
             </div>
-            {% if project.integrations.trello.token_generated_at %}
-              <small class="form-hint trello-token-status" id="trello-token-generated-at">
-                Generated: {{ project.integrations.trello.token_generated_at }}
-              </small>
-            {% else %}
-              <small class="form-hint trello-token-status" id="trello-token-generated-at"></small>
-            {% endif %}
+            <small class="form-hint trello-token-status" id="trello-token-generated-at">
+              {% if mode == 'create' %}<strong>Save first</strong> to generate the token{% elif project.integrations.trello.token_generated_at %}Generated: {{ project.integrations.trello.token_generated_at }}{% endif %}
+            </small>
             <input type="hidden" name="integrations[trello][token]" value="{{ project.integrations.trello.token|default:'' }}">
             <input type="hidden" name="integrations[trello][token_generated_at]" value="{{ project.integrations.trello.token_generated_at|default:'' }}">
-            {% if mode == 'create' %}
-              <small class="form-hint form-hint--block">Save project first to generate a Trello token.</small>
-            {% endif %}
           </div>
 
           <!-- Cascade dropdowns (visible when token exists, edit mode only) -->
@@ -353,7 +346,6 @@
               <select id="trello-export-model"
                       name="integrations[trello][export_mapping][model]"
                       class="input input--sm">
-                <option value="">— same as first agent —</option>
                 {% for model_name in model_names %}
                   <option value="{{ model_name }}"
                           {% if project.integrations.trello.export_mapping.model == model_name %}selected{% endif %}>

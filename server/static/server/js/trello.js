@@ -5,10 +5,9 @@
  *
  * Flow:
  *   1. openModal(sessionId, secretKey, csrfToken)
- *   2. Check token status → if missing, show "Authorize" button
- *   3. On authorize → popup postMessage flow (1-hour token)
- *   4. Load cascade: Workspaces → Boards → Lists
- *   5. Extract → Preview → Confirm → Push
+ *   2. Check token status — if valid, show destination; if not, show config prompt
+ *   3. Load cascade: Workspaces → Boards → Lists
+ *   4. Extract → Preview → Confirm → Push
  */
 
 (function () {
