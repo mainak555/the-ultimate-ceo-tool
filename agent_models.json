@@ -1,8 +1,9 @@
 {
-  "claude-3-7-sonnet": {
+  "claude-3.7-sonnet": {
     "provider": "anthropic"
   },
-  "claude-sonnet-4-6": {
+  "claude-sonnet-4.6": {
+    "model": "claude-sonnet-4-6",
     "provider": "azure_anthropic",
     "endpoint": "https://ml-mkr7cej8-eastus2.services.ai.azure.com/anthropic/"
   },

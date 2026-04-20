@@ -57,6 +57,13 @@ def ensure_indexes():
 
     chat_col = db[CHAT_SESSIONS_COLLECTION]
     chat_col.create_index("project_id")
+    # Enforce uniqueness of discussion message IDs within a single session.
+    chat_col.create_index(
+        [("_id", 1), ("discussions.id", 1)],
+        unique=True,
+        partialFilterExpression={"discussions.id": {"$type": "string"}},
+        name="uniq_session_discussions_id",
+    )
 
 
 # Create indexes when the module is first imported

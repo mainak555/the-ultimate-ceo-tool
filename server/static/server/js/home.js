@@ -423,9 +423,9 @@ document.addEventListener("DOMContentLoaded", function () {
     });
   }
 
-  function buildExportDropdown(exportMeta, agentName, sessionId) {
+  function buildExportDropdown(exportMeta, agentName, sessionId, discussionId) {
     var providers = getVisibleExportProviders(exportMeta, agentName);
-    if (!providers.length || !sessionId) return "";
+    if (!providers.length || !sessionId || !discussionId) return "";
 
     var html = '<div class="chat-bubble__actions">'
       + '<div class="export-dropdown" data-export-dropdown>'
@@ -434,7 +434,7 @@ document.addEventListener("DOMContentLoaded", function () {
 
     providers.forEach(function (provider) {
       html += '<button type="button" class="export-dropdown__item" data-provider="' + provider.name + '" data-session-id="'
-        + sessionId + '">' + provider.label + '</button>';
+        + sessionId + '" data-discussion-id="' + discussionId + '">' + provider.label + '</button>';
     });
 
     html += '</div></div></div>';
@@ -450,7 +450,7 @@ document.addEventListener("DOMContentLoaded", function () {
     });
   }
 
-  function openProviderExportModal(provider, sessionId, secretKey) {
+  function openProviderExportModal(provider, sessionId, discussionId, secretKey) {
     var launchers = {
       trello: window.TrelloExport,
       jira: window.JiraExport,
@@ -460,7 +460,11 @@ document.addEventListener("DOMContentLoaded", function () {
 
     var launcher = launchers[provider];
     if (launcher && typeof launcher.openModal === "function") {
-      launcher.openModal(sessionId, secretKey, csrfToken);
+      if (provider === "trello") {
+        launcher.openModal(sessionId, discussionId, secretKey, csrfToken);
+      } else {
+        launcher.openModal(sessionId, secretKey, csrfToken);
+      }
       return true;
     }
     return false;
@@ -476,7 +480,8 @@ document.addEventListener("DOMContentLoaded", function () {
       var exportHtml = buildExportDropdown(
         data.export,
         data.agent_name,
-        activeSessionIdInput ? activeSessionIdInput.value.trim() : ""
+        activeSessionIdInput ? activeSessionIdInput.value.trim() : "",
+        data.id || ""
       );
       appendBubble(
         '<div class="chat-bubble chat-bubble--ai">'
@@ -740,11 +745,15 @@ document.addEventListener("DOMContentLoaded", function () {
     var item = e.target.closest(".export-dropdown__item");
     if (item) {
       var sessionId = item.dataset.sessionId || (activeSessionIdInput ? activeSessionIdInput.value.trim() : "");
+      var discussionId = (item.dataset.discussionId || "").trim();
       var secretKey = getSecretKey();
-      if (!sessionId || !secretKey) { alert("Enter the Secret Key first."); return; }
+      if (!sessionId || !discussionId || !secretKey) {
+        alert("Missing export context. Refresh the session and try again.");
+        return;
+      }
 
       var provider = item.dataset.provider;
-      if (!openProviderExportModal(provider, sessionId, secretKey)) {
+      if (!openProviderExportModal(provider, sessionId, discussionId, secretKey)) {
         alert(provider + " export is not yet implemented.");
       }
       closeExportDropdowns();

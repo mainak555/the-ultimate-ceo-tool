@@ -4,7 +4,7 @@
  * Namespace: window.TrelloExport
  *
  * Flow:
- *   1. openModal(sessionId, secretKey, csrfToken)
+ *   1. openModal(sessionId, discussionId, secretKey, csrfToken)
  *   2. Check token status — if valid, show destination; if not, show config prompt
  *   3. Load cascade: Workspaces → Boards → Lists
  *   4. Extract → Preview → Confirm → Push
@@ -303,9 +303,17 @@
   }
 
   function _extract() {
+    if (!_state.discussionId) {
+      _setStatus("Extraction error: Missing discussion context.");
+      return;
+    }
+
     _setStatus("Extracting items…");
     document.getElementById("trello-extract-btn").disabled = true;
-    _api("POST", "/trello/" + _state.sessionId + "/extract/")
+    _api(
+      "POST",
+      "/trello/" + _state.sessionId + "/extract/" + encodeURIComponent(_state.discussionId) + "/"
+    )
       .then(function (d) {
         _state.extractedItems = d.items || [];
         _renderPreview(_state.extractedItems);
@@ -392,8 +400,14 @@
   // Public API
   // ---------------------------------------------------------------------------
 
-  function openModal(sessionId, secretKey, csrfToken) {
-    _state = { sessionId: sessionId, secretKey: secretKey, csrfToken: csrfToken, extractedItems: null };
+  function openModal(sessionId, discussionId, secretKey, csrfToken) {
+    _state = {
+      sessionId: sessionId,
+      discussionId: discussionId,
+      secretKey: secretKey,
+      csrfToken: csrfToken,
+      extractedItems: null,
+    };
 
     var existing = document.getElementById("trello-export-overlay");
     if (existing) existing.remove();

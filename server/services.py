@@ -9,6 +9,7 @@ import hmac
 import json
 import os
 from datetime import datetime, timezone
+from uuid import uuid4
 
 from bson import ObjectId
 from bson.errors import InvalidId
@@ -430,12 +431,37 @@ def normalize_chat_session(doc):
         "project_id": doc.get("project_id", ""),
         "description": doc.get("description", ""),
         "created_at": created_at,
-        "discussion": doc.get("discussion", []),
+        "discussions": doc.get("discussions", []),
         "status": doc.get("status", "idle"),
         "current_round": doc.get("current_round", 0),
         "has_agent_state": isinstance(agent_state, dict) and isinstance(agent_state.get("state"), dict),
         "agent_state_meta": state_meta,
     }
+
+
+def _ensure_discussion_ids(doc, col=None):
+    """Ensure each discussions entry has a stable UUID id."""
+    if not isinstance(doc, dict):
+        return doc
+
+    discussions = doc.get("discussions")
+    if not isinstance(discussions, list):
+        return doc
+
+    changed = False
+    for item in discussions:
+        if not isinstance(item, dict):
+            continue
+        message_id = item.get("id")
+        if isinstance(message_id, str) and message_id.strip():
+            continue
+        item["id"] = str(uuid4())
+        changed = True
+
+    if changed and col is not None and doc.get("_id"):
+        col.update_one({"_id": doc["_id"]}, {"$set": {"discussions": discussions}})
+
+    return doc
 
 
 def create_chat_session(project_id, description):
@@ -446,7 +472,7 @@ def create_chat_session(project_id, description):
         "project_id": cleaned["project_id"],
         "description": cleaned["description"],
         "created_at": datetime.now(timezone.utc),
-        "discussion": [],
+        "discussions": [],
         "status": "idle",
         "current_round": 0,
     }
@@ -468,13 +494,26 @@ def set_session_status(session_id, status):
 
 
 def append_messages(session_id, messages):
-    """Append a list of message dicts to session discussion."""
+    """Append a list of message dicts to session discussions."""
     try:
         oid = ObjectId(session_id)
     except (InvalidId, TypeError):
         return
+    to_append = []
+    for msg in messages or []:
+        if not isinstance(msg, dict):
+            continue
+        row = dict(msg)
+        message_id = row.get("id")
+        if not isinstance(message_id, str) or not message_id.strip():
+            row["id"] = str(uuid4())
+        to_append.append(row)
+
+    if not to_append:
+        return
+
     col = get_collection(CHAT_SESSIONS_COLLECTION)
-    col.update_one({"_id": oid}, {"$push": {"discussion": {"$each": messages}}})
+    col.update_one({"_id": oid}, {"$push": {"discussions": {"$each": to_append}}})
 
 
 def save_agent_state(session_id, state):
@@ -535,7 +574,10 @@ def list_chat_sessions(project_id):
     """Return all sessions for a project, sorted newest first."""
     col = get_collection(CHAT_SESSIONS_COLLECTION)
     cursor = col.find({"project_id": project_id}).sort("created_at", -1)
-    return [normalize_chat_session(d) for d in cursor]
+    docs = []
+    for doc in cursor:
+        docs.append(_ensure_discussion_ids(doc, col=col))
+    return [normalize_chat_session(d) for d in docs]
 
 
 def get_chat_session(session_id):
@@ -545,7 +587,9 @@ def get_chat_session(session_id):
     except (InvalidId, TypeError):
         return None
     col = get_collection(CHAT_SESSIONS_COLLECTION)
-    return normalize_chat_session(col.find_one({"_id": oid}))
+    doc = col.find_one({"_id": oid})
+    doc = _ensure_discussion_ids(doc, col=col)
+    return normalize_chat_session(doc)
 
 
 def delete_chat_session(session_id):

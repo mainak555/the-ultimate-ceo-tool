@@ -80,7 +80,7 @@ All endpoints require `X-App-Secret-Key` header.
 | `GET` | `/trello/<sid>/lists/?board=` | List lists → `[{id, name}]` |
 | `POST` | `/trello/<sid>/create-board/` | Create board (`{name, workspace_id?}`) → `{id, name}` |
 | `POST` | `/trello/<sid>/create-list/` | Create list (`{name, board_id}`) → `{id, name}` |
-| `POST` | `/trello/<sid>/extract/` | Run extraction → `{items: [...]}` |
+| `POST` | `/trello/<sid>/extract/<discussion_id>/` | Run extraction on selected message → `{items: [...]}` |
 | `POST` | `/trello/<sid>/push/` | Push cards (`{list_id, items}`) → `{status, result}` |
 
 ### Project-scoped (config page — `/trello/project/<pid>/`)
@@ -102,7 +102,7 @@ All endpoints require `X-App-Secret-Key` header.
 2. Modal opens → checks token status via session endpoint (resolves to project token)
 3. If no token → message directs user to configure token in project settings
 4. Cascade dropdowns load with defaults pre-selected from project config
-5. "Extract Items" button runs the extraction agent
+5. "Extract Items" button runs the extraction agent using the selected chat message (`discussion_id`)
 6. Preview shows cards with badges: 📋 Card, 📝 Description, ☑️ Checklist
 7. "Export to Trello" pushes items → shows success with card links
 

@@ -30,7 +30,7 @@ All routes are under the `server` app namespace.
 | `GET` | `/trello/<session_id>/lists/` | `trello_lists` | List lists (`?board=` required) |
 | `POST` | `/trello/<session_id>/create-board/` | `trello_create_board` | Create a new board |
 | `POST` | `/trello/<session_id>/create-list/` | `trello_create_list` | Create a new list |
-| `POST` | `/trello/<session_id>/extract/` | `trello_extract` | Run extraction agent |
+| `POST` | `/trello/<session_id>/extract/<discussion_id>/` | `trello_extract` | Run extraction agent on selected discussion message |
 | `POST` | `/trello/<session_id>/push/` | `trello_push` | Push items to Trello |
 | `GET` | `/trello/project/<project_id>/auth-url/` | `trello_project_auth_url` | Get project Trello auth URL |
 | `POST` | `/trello/project/<project_id>/store-token/` | `trello_project_store_token` | Store project Trello token |
@@ -134,7 +134,7 @@ Model runtime notes:
 {
   "project_id": "<project_id>",
   "description": "...",
-  "discussion": [],
+  "discussions": [],
   "status": "idle | running | awaiting_input | completed | stopped",
   "current_round": 0,
   "agent_state": {

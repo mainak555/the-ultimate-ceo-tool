@@ -13,9 +13,9 @@
   <span class="chat-history-header__date">{{ session.created_at }}</span>
 </div>
 
-{% if session.discussion %}
+{% if session.discussions %}
   <div class="chat-history" id="chat-history-msgs">
-    {% for msg in history_messages|default:session.discussion %}
+    {% for msg in history_messages|default:session.discussions %}
       {% if msg.role == "user" %}
         <div class="chat-bubble chat-bubble--human">
           <div class="chat-bubble__meta">
@@ -46,6 +46,7 @@
                         class="export-dropdown__item"
                         data-provider="{{ provider.name }}"
                         data-session-id="{{ session.session_id }}"
+                        data-discussion-id="{{ msg.id|default:'' }}"
                       >
                         {{ provider.label }}
                       </button>

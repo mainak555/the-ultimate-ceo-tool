@@ -241,9 +241,9 @@ def create_list(session_id, name, board_id):
 # Export operations
 # ---------------------------------------------------------------------------
 
-def run_export_extract(session_id):
+def run_export_extract(session_id, discussion_id):
     """
-    Run extraction agent against the session discussion.
+    Run extraction agent against a selected discussion message.
 
     Returns a list of extracted items.
     """
@@ -251,6 +251,10 @@ def run_export_extract(session_id):
         oid = ObjectId(session_id)
     except (InvalidId, TypeError):
         raise ValueError(f"Invalid session ID '{session_id}'.")
+
+    discussion_id = (discussion_id or "").strip()
+    if not discussion_id:
+        raise ValueError("'discussion_id' is required.")
 
     col = get_collection(CHAT_SESSIONS_COLLECTION)
     session_doc = col.find_one({"_id": oid})
@@ -282,11 +286,18 @@ def run_export_extract(session_id):
     extraction_model = (mapping.get("model") or "").strip()
     extraction_temperature = float(mapping.get("temperature") or 0.0)
 
-    discussion = session_doc.get("discussion") or []
-    discussion_text = "\n\n".join(
-        f"**{m.get('agent_name', 'Unknown')}**: {m.get('content', '')}"
-        for m in discussion
+    discussions = session_doc.get("discussions") or []
+    discussion_item = next(
+        (
+            m for m in discussions
+            if isinstance(m, dict) and (m.get("id") or "").strip() == discussion_id
+        ),
+        None,
     )
+    if not discussion_item:
+        raise ValueError("Discussion item not found for this session.")
+
+    discussion_text = f"**{discussion_item.get('agent_name', 'Unknown')}**: {discussion_item.get('content', '')}"
     if not discussion_text.strip():
         raise ValueError("No discussion content to extract from.")
 

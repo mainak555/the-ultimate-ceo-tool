@@ -10,6 +10,7 @@ Each view:
 import asyncio
 import json
 from datetime import datetime, timezone
+from uuid import uuid4
 
 from django.http import HttpResponse, StreamingHttpResponse
 from django.shortcuts import render
@@ -194,13 +195,16 @@ def _filter_export_providers(export_meta, agent_name):
 def _build_history_messages(session, export_meta):
     """Attach visible export providers to assistant messages for history rendering."""
     history_messages = []
-    for msg in (session.get("discussion") if isinstance(session, dict) else []) or []:
+    for msg in (session.get("discussions") if isinstance(session, dict) else []) or []:
         row = dict(msg)
         if row.get("role") != "user":
-            row["visible_export_providers"] = _filter_export_providers(
-                export_meta,
-                row.get("agent_name", ""),
-            )
+            if row.get("id"):
+                row["visible_export_providers"] = _filter_export_providers(
+                    export_meta,
+                    row.get("agent_name", ""),
+                )
+            else:
+                row["visible_export_providers"] = []
         history_messages.append(row)
     return history_messages
 
@@ -580,7 +584,7 @@ async def chat_session_run(request, session_id):
     task = request.POST.get("task", "").strip()
 
     # First run must have a task; resume (approve) may send empty string
-    is_first_run = session["status"] == "idle" and not session.get("discussion")
+    is_first_run = session["status"] == "idle" and not session.get("discussions")
     if is_first_run and not task:
         return _json_error("'task' is required to start a conversation.", 400)
 
@@ -624,10 +628,11 @@ async def chat_session_run(request, session_id):
             state = await save_team_state(team)
             await asyncio.to_thread(services.save_agent_state, session_id, state)
 
-        # Persist the human's message (initial task or gate feedback) to the discussion.
+        # Persist the human's message (initial task or gate feedback) to discussions.
         if task:
             human_name = project.get("human_gate", {}).get("name") or "You"
             pending_messages.append({
+                "id": str(uuid4()),
                 "agent_name": human_name,
                 "role": "user",
                 "content": task,
@@ -673,6 +678,7 @@ async def chat_session_run(request, session_id):
                 elif isinstance(msg, TextMessage) and msg.source != "user":
                     ts = datetime.now(timezone.utc).strftime("%H:%M")
                     record = {
+                        "id": str(uuid4()),
                         "agent_name": msg.source,
                         "role": "assistant",
                         "content": msg.content,

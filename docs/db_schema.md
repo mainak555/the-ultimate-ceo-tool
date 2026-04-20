@@ -90,6 +90,41 @@ Cross-references: [docs/API.md](API.md) (form fields + HTTP schema), [AGENTS.md]
 
 ---
 
+## Collection: `chat_sessions`
+
+```jsonc
+{
+  "_id": "ObjectId",
+  "project_id": "string (project ObjectId hex)",
+  "description": "string",
+  "created_at": "datetime",
+  "discussions": [
+    {
+      "id": "uuid string (required for export context)",
+      "agent_name": "string",
+      "role": "user | assistant",
+      "content": "string",
+      "timestamp": "HH:MM"
+    }
+  ],
+  "status": "idle | running | awaiting_input | completed | stopped",
+  "current_round": 0,
+  "agent_state": {
+    "source": "string",
+    "version": "string",
+    "saved_at": "ISO datetime",
+    "state": {}
+  }
+}
+```
+
+Indexes:
+- `{ project_id: 1 }` (non-unique)
+- `{ _id: 1, "discussions.id": 1 }` unique (`uniq_session_discussions_id`) with partial filter on string `discussions.id`
+  This guarantees `discussions.id` uniqueness within a single session while allowing the same id in different sessions.
+
+---
+
 ## Field Notes
 
 ### `agents[].name`

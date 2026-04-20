@@ -181,8 +181,8 @@ idle ──► running ──► awaiting_input ──► running ──► ... 
 ```
 
 - **Approve / Resume**: POST `/chat/sessions/<id>/run/` with an empty `task`. The view passes `task=None` to `run_stream()` so AutoGen continues from its current state.
-- **Feedback**: POST with non-empty `task`. The message is persisted as a `user` role entry in the discussion and passed to `run_stream(task=...)` as a new instruction.
-- **First run**: `task` must be non-empty — a 400 is returned if the discussion is empty and no task was provided.
+- **Feedback**: POST with non-empty `task`. The message is persisted as a `user` role entry in `discussions` and passed to `run_stream(task=...)` as a new instruction.
+- **First run**: `task` must be non-empty — a 400 is returned if `discussions` is empty and no task was provided.
 
 ---
 

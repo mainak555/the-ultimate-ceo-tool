@@ -83,7 +83,16 @@ def run_extraction(
     except json.JSONDecodeError as exc:
         raise ValueError(f"Extractor returned invalid JSON: {exc}\n\nRaw output:\n{text}")
 
-    items = parsed.get("items") if isinstance(parsed, dict) else parsed
+    # Normalize common model output variants.
+    # Expected shape is {"items": [...]}, but some models may return
+    # {"items": null} (no extraction) or omit the key entirely.
+    if isinstance(parsed, dict):
+        items = parsed.get("items")
+        if items is None:
+            return []
+    else:
+        items = parsed
+
     if not isinstance(items, list):
         raise ValueError(f"Expected 'items' array in extractor output, got: {type(items).__name__}")
 

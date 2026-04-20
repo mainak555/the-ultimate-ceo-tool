@@ -250,13 +250,13 @@ def trello_create_list(request, session_id):
 
 @csrf_exempt
 @require_POST
-def trello_extract(request, session_id):
-    """POST — Run extraction agent against the session discussion."""
+def trello_extract(request, session_id, discussion_id):
+    """POST — Run extraction agent against a selected discussion message."""
     if not _has_valid_secret(request):
         return _json_error("Unauthorized", 403)
 
     try:
-        items = trello_service.run_export_extract(session_id)
+        items = trello_service.run_export_extract(session_id, discussion_id)
     except ValueError as e:
         return _json_error(str(e))
     except Exception as exc:
