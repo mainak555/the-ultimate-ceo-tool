@@ -9,7 +9,7 @@ from urllib.parse import quote as _urlquote
 
 from django.http import HttpResponse
 from django.views.decorators.csrf import csrf_exempt
-from django.views.decorators.http import require_GET, require_POST
+from django.views.decorators.http import require_GET, require_POST, require_http_methods
 
 from . import services
 from . import trello_service
@@ -266,6 +266,38 @@ def trello_extract(request, session_id, discussion_id):
 
 
 @csrf_exempt
+@require_http_methods(["GET", "POST"])
+def trello_export_data(request, session_id, discussion_id):
+    """GET/POST — Load or save persisted Trello export JSON for a discussion."""
+    if not _has_valid_secret(request):
+        return _json_error("Unauthorized", 403)
+
+    if request.method == "GET":
+        try:
+            payload = trello_service.get_saved_export(session_id, discussion_id)
+        except ValueError as e:
+            return _json_error(str(e))
+        return _json_response({"saved": bool(payload), "export": payload or {"cards": []}})
+
+    try:
+        body = json.loads(request.body)
+    except (json.JSONDecodeError, ValueError):
+        return _json_error("Invalid JSON body")
+
+    items = body.get("items")
+    source = (body.get("source") or "manual").strip() or "manual"
+    if not isinstance(items, list):
+        return _json_error("'items' array is required")
+
+    try:
+        payload = trello_service.save_export(session_id, discussion_id, items, source=source)
+    except ValueError as e:
+        return _json_error(str(e))
+
+    return _json_response({"status": "ok", "export": payload})
+
+
+@csrf_exempt
 @require_POST
 def trello_push(request, session_id):
     """POST — Push extracted items to Trello."""
@@ -278,6 +310,7 @@ def trello_push(request, session_id):
         return _json_error("Invalid JSON body")
 
     list_id = (body.get("list_id") or "").strip()
+    discussion_id = (body.get("discussion_id") or "").strip()
     items = body.get("items")
 
     if not list_id:
@@ -287,6 +320,8 @@ def trello_push(request, session_id):
 
     try:
         result = trello_service.run_export_push(session_id, list_id, items)
+        if discussion_id:
+            trello_service.save_push_result(session_id, discussion_id, list_id, result)
     except ValueError as e:
         return _json_error(str(e))
     except Exception as exc:

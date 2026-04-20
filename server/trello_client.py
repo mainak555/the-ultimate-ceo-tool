@@ -8,6 +8,7 @@ All responses are simplified dicts; errors raise ValueError.
 import requests
 
 TRELLO_API = "https://api.trello.com/1"
+LABEL_COLORS = ["green", "yellow", "orange", "red", "purple", "blue", "sky", "lime", "pink", "black"]
 
 
 def _auth_params(api_key, token):
@@ -91,30 +92,139 @@ def create_list(api_key, token, name, board_id):
     return {"id": data["id"], "name": data.get("name", name)}
 
 
+def _get_list_board(api_key, token, list_id):
+    """Return board id for a Trello list."""
+    resp = requests.get(
+        f"{TRELLO_API}/lists/{list_id}",
+        params={**_auth_params(api_key, token), "fields": "id,idBoard,name"},
+        timeout=15,
+    )
+    _check(resp, "get_list")
+    data = resp.json()
+    board_id = data.get("idBoard")
+    if not board_id:
+        raise ValueError("Unable to resolve board for selected Trello list.")
+    return board_id
+
+
+def _get_board_labels(api_key, token, board_id):
+    """Return labels for a board."""
+    resp = requests.get(
+        f"{TRELLO_API}/boards/{board_id}/labels",
+        params={**_auth_params(api_key, token), "fields": "id,name,color", "limit": 1000},
+        timeout=15,
+    )
+    _check(resp, "get_board_labels")
+    return resp.json()
+
+
+def _create_label(api_key, token, board_id, name, color):
+    """Create a board label."""
+    resp = requests.post(
+        f"{TRELLO_API}/labels",
+        params={**_auth_params(api_key, token), "idBoard": board_id, "name": name, "color": color},
+        timeout=15,
+    )
+    _check(resp, "create_label")
+    return resp.json()
+
+
+def _attach_label(api_key, token, card_id, label_id):
+    """Attach label to card."""
+    resp = requests.post(
+        f"{TRELLO_API}/cards/{card_id}/idLabels",
+        params={**_auth_params(api_key, token), "value": label_id},
+        timeout=15,
+    )
+    _check(resp, "attach_label")
+
+
+def _get_board_custom_fields(api_key, token, board_id):
+    """Return custom field definitions for a board."""
+    resp = requests.get(
+        f"{TRELLO_API}/boards/{board_id}/customFields",
+        params={**_auth_params(api_key, token)},
+        timeout=15,
+    )
+    _check(resp, "get_board_custom_fields")
+    return resp.json()
+
+
+def _create_text_custom_field(api_key, token, board_id, field_name):
+    """Create a text custom field on a board."""
+    resp = requests.post(
+        f"{TRELLO_API}/customFields",
+        params={
+            **_auth_params(api_key, token),
+            "idModel": board_id,
+            "modelType": "board",
+            "name": field_name,
+            "type": "text",
+        },
+        timeout=15,
+    )
+    _check(resp, "create_custom_field")
+    return resp.json()
+
+
+def _set_card_custom_field_text(api_key, token, card_id, custom_field_id, value):
+    """Set card custom field text value."""
+    resp = requests.put(
+        f"{TRELLO_API}/cards/{card_id}/customField/{custom_field_id}/item",
+        params={**_auth_params(api_key, token)},
+        json={"value": {"text": value}},
+        timeout=15,
+    )
+    _check(resp, "set_custom_field")
+
+
 # ---------------------------------------------------------------------------
 # Export — push cards with checklists
 # ---------------------------------------------------------------------------
 
 def push_cards(api_key, token, list_id, items):
     """
-    Create cards on the given list with optional checklists.
+    Create cards on the given list with checklists, labels, and custom fields.
 
-    items — [{title, description?, children?: [{title, description?}]}]
+    items — [{card_title, card_description, checklists, custom_fields, labels, priority, confidence_score}]
 
-    Returns [{card_id, title, url, checklist_items?}].
+    Returns [{card_id, title, url, checklist_items?, labels?, warnings?}].
     """
     results = []
     auth = _auth_params(api_key, token)
+    board_id = _get_list_board(api_key, token, list_id)
 
-    for item in items:
+    labels_by_name = {}
+    for row in _get_board_labels(api_key, token, board_id):
+        label_name = (row.get("name") or "").strip().lower()
+        if label_name and row.get("id"):
+            labels_by_name[label_name] = row["id"]
+
+    custom_fields_by_name = {}
+    try:
+        for field in _get_board_custom_fields(api_key, token, board_id):
+            if not isinstance(field, dict):
+                continue
+            field_name = (field.get("name") or "").strip().lower()
+            if field_name and field.get("id"):
+                custom_fields_by_name[field_name] = field["id"]
+    except ValueError:
+        # Board may not support custom fields on current plan/permissions.
+        custom_fields_by_name = {}
+
+    for index, item in enumerate(items):
+        warnings = []
+        card_title = item.get("card_title") or item.get("title") or "Untitled"
+        card_description = item.get("card_description") or item.get("description") or ""
+
         # Create card
         card_resp = requests.post(
             f"{TRELLO_API}/cards",
             params={
                 **auth,
                 "idList": list_id,
-                "name": item.get("title", "Untitled"),
-                "desc": item.get("description", ""),
+                "name": card_title,
+                "desc": card_description,
             },
             timeout=15,
         )
@@ -127,27 +237,115 @@ def push_cards(api_key, token, list_id, items):
             "url": card.get("shortUrl", ""),
         }
 
-        # Create checklist if children exist
-        children = item.get("children") or []
-        if children:
+        # Create checklists if present.
+        checklists = item.get("checklists") or []
+        checklist_items = []
+        for checklist in checklists:
+            if not isinstance(checklist, dict):
+                continue
+            checklist_name = str(checklist.get("name") or "Tasks").strip() or "Tasks"
             cl_resp = requests.post(
                 f"{TRELLO_API}/checklists",
-                params={**auth, "idCard": card["id"], "name": "Tasks"},
+                params={**auth, "idCard": card["id"], "name": checklist_name},
                 timeout=15,
             )
             _check(cl_resp, "create_checklist")
             checklist_id = cl_resp.json()["id"]
-
-            checklist_items = []
-            for child in children:
+            for child in checklist.get("items") or []:
+                if not isinstance(child, dict):
+                    continue
+                child_title = str(child.get("title") or "").strip()
+                if not child_title:
+                    continue
                 ci_resp = requests.post(
                     f"{TRELLO_API}/checklists/{checklist_id}/checkItems",
-                    params={**auth, "name": child.get("title", "")},
+                    params={**auth, "name": child_title},
                     timeout=15,
                 )
                 _check(ci_resp, "create_checkItem")
                 checklist_items.append(ci_resp.json().get("name", ""))
+        if checklist_items:
             result["checklist_items"] = checklist_items
+
+        # Apply labels (schema labels + derived priority label).
+        all_labels = []
+        for label_name in item.get("labels") or []:
+            if isinstance(label_name, str) and label_name.strip():
+                all_labels.append(label_name.strip())
+        priority = str(item.get("priority") or "").strip()
+        if priority:
+            all_labels.append(f"Priority: {priority}")
+
+        applied_labels = []
+        for label_name in all_labels:
+            key = label_name.lower()
+            label_id = labels_by_name.get(key)
+            if not label_id:
+                color = LABEL_COLORS[(len(labels_by_name) + index) % len(LABEL_COLORS)]
+                try:
+                    created = _create_label(api_key, token, board_id, label_name, color)
+                    label_id = created.get("id")
+                    if label_id:
+                        labels_by_name[key] = label_id
+                except ValueError as exc:
+                    warnings.append(f"Label '{label_name}' skipped: {exc}")
+                    continue
+            try:
+                _attach_label(api_key, token, card["id"], label_id)
+                applied_labels.append(label_name)
+            except ValueError as exc:
+                warnings.append(f"Label '{label_name}' not attached: {exc}")
+        if applied_labels:
+            result["labels"] = applied_labels
+
+        # Apply custom fields (provided fields + normalized priority/confidence values).
+        custom_fields = []
+        for field in item.get("custom_fields") or []:
+            if isinstance(field, dict):
+                custom_fields.append(field)
+        if priority:
+            custom_fields.append({"field_name": "Priority", "field_type": "text", "value": priority})
+        confidence = item.get("confidence_score")
+        if confidence is not None:
+            custom_fields.append(
+                {
+                    "field_name": "Confidence Score",
+                    "field_type": "text",
+                    "value": str(confidence),
+                }
+            )
+
+        seen_custom_fields = set()
+        for field in custom_fields:
+            field_name = str(field.get("field_name") or "").strip()
+            if not field_name:
+                continue
+            key = field_name.lower()
+            if key in seen_custom_fields:
+                continue
+            seen_custom_fields.add(key)
+            value = str(field.get("value") or "").strip()
+            if value == "":
+                continue
+
+            custom_field_id = custom_fields_by_name.get(key)
+            if not custom_field_id:
+                try:
+                    created = _create_text_custom_field(api_key, token, board_id, field_name)
+                    custom_field_id = created.get("id")
+                    if custom_field_id:
+                        custom_fields_by_name[key] = custom_field_id
+                except ValueError as exc:
+                    warnings.append(f"Custom field '{field_name}' skipped: {exc}")
+                    continue
+
+            try:
+                _set_card_custom_field_text(api_key, token, card["id"], custom_field_id, value)
+            except ValueError as exc:
+                warnings.append(f"Custom field '{field_name}' not set: {exc}")
+
+        if warnings:
+            result["warnings"] = warnings
 
         results.append(result)
 

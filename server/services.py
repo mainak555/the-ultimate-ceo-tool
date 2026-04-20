@@ -516,6 +516,88 @@ def append_messages(session_id, messages):
     col.update_one({"_id": oid}, {"$push": {"discussions": {"$each": to_append}}})
 
 
+def get_discussion_export_payload(session_id, discussion_id, provider):
+    """Return saved export payload for a discussion/provider, or None."""
+    try:
+        oid = ObjectId(session_id)
+    except (InvalidId, TypeError):
+        raise ValueError(f"Invalid session ID '{session_id}'.")
+
+    target_discussion_id = (discussion_id or "").strip()
+    if not target_discussion_id:
+        raise ValueError("'discussion_id' is required.")
+
+    provider_name = (provider or "").strip().lower()
+    if not provider_name:
+        raise ValueError("'provider' is required.")
+
+    col = get_collection(CHAT_SESSIONS_COLLECTION)
+    session_doc = col.find_one({"_id": oid}, {"discussions": 1})
+    if not session_doc:
+        raise ValueError("Chat session not found.")
+
+    for row in session_doc.get("discussions") or []:
+        if not isinstance(row, dict):
+            continue
+        if (row.get("id") or "").strip() != target_discussion_id:
+            continue
+        exports = row.get("exports")
+        if not isinstance(exports, dict):
+            return None
+        payload = exports.get(provider_name)
+        return payload if isinstance(payload, dict) else None
+
+    raise ValueError("Discussion item not found for this session.")
+
+
+def set_discussion_export_payload(session_id, discussion_id, provider, payload):
+    """Persist export payload for a discussion/provider and return saved payload."""
+    if not isinstance(payload, dict):
+        raise ValueError("'payload' must be a JSON object.")
+
+    try:
+        oid = ObjectId(session_id)
+    except (InvalidId, TypeError):
+        raise ValueError(f"Invalid session ID '{session_id}'.")
+
+    target_discussion_id = (discussion_id or "").strip()
+    if not target_discussion_id:
+        raise ValueError("'discussion_id' is required.")
+
+    provider_name = (provider or "").strip().lower()
+    if not provider_name:
+        raise ValueError("'provider' is required.")
+
+    col = get_collection(CHAT_SESSIONS_COLLECTION)
+    session_doc = col.find_one({"_id": oid})
+    if not session_doc:
+        raise ValueError("Chat session not found.")
+
+    discussions = session_doc.get("discussions")
+    if not isinstance(discussions, list):
+        raise ValueError("Discussion list is missing on session.")
+
+    found = False
+    for row in discussions:
+        if not isinstance(row, dict):
+            continue
+        if (row.get("id") or "").strip() != target_discussion_id:
+            continue
+        exports = row.get("exports")
+        if not isinstance(exports, dict):
+            exports = {}
+        exports[provider_name] = payload
+        row["exports"] = exports
+        found = True
+        break
+
+    if not found:
+        raise ValueError("Discussion item not found for this session.")
+
+    col.update_one({"_id": oid}, {"$set": {"discussions": discussions}})
+    return payload
+
+
 def save_agent_state(session_id, state):
     """Persist serialized AutoGen TeamState for a chat session."""
     if not isinstance(state, dict):

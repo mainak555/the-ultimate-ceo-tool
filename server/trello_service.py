@@ -10,6 +10,7 @@ from bson import ObjectId
 from bson.errors import InvalidId
 
 from .db import get_collection, CHAT_SESSIONS_COLLECTION
+from . import services
 from . import trello_client
 
 
@@ -241,6 +242,173 @@ def create_list(session_id, name, board_id):
 # Export operations
 # ---------------------------------------------------------------------------
 
+PRIORITY_VALUES = {"low": "Low", "medium": "Medium", "high": "High", "critical": "Critical"}
+
+
+def _utc_iso_now():
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _coerce_confidence(value):
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return max(0.0, min(1.0, out))
+
+
+def _normalize_labels(labels):
+    if not isinstance(labels, list):
+        return []
+    seen = set()
+    cleaned = []
+    for label in labels:
+        text = str(label or "").strip()
+        if not text:
+            continue
+        key = text.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        cleaned.append(text)
+    return cleaned
+
+
+def _normalize_custom_fields(custom_fields):
+    if not isinstance(custom_fields, list):
+        return []
+
+    normalized = []
+    for row in custom_fields:
+        if not isinstance(row, dict):
+            continue
+        field_name = str(row.get("field_name") or "").strip()
+        if not field_name:
+            continue
+        field_type = (str(row.get("field_type") or "text").strip() or "text").lower()
+        if field_type != "text":
+            field_type = "text"
+        normalized.append({
+            "field_name": field_name,
+            "field_type": field_type,
+            "value": str(row.get("value") or "").strip(),
+        })
+    return normalized
+
+
+def _normalize_checklists(item):
+    checklists = item.get("checklists")
+    if isinstance(checklists, list):
+        normalized = []
+        for row in checklists:
+            if not isinstance(row, dict):
+                continue
+            name = str(row.get("name") or "Tasks").strip() or "Tasks"
+            raw_items = row.get("items")
+            list_items = []
+            if isinstance(raw_items, list):
+                for child in raw_items:
+                    if not isinstance(child, dict):
+                        continue
+                    title = str(child.get("title") or "").strip()
+                    if not title:
+                        continue
+                    list_items.append({
+                        "title": title,
+                        "checked": bool(child.get("checked", False)),
+                    })
+            if list_items:
+                normalized.append({"name": name, "items": list_items})
+        return normalized
+
+    # Backward compatibility for the legacy extraction schema.
+    children = item.get("children")
+    if isinstance(children, list) and children:
+        list_items = []
+        for child in children:
+            if not isinstance(child, dict):
+                continue
+            title = str(child.get("title") or "").strip()
+            if not title:
+                continue
+            list_items.append({"title": title, "checked": False})
+        if list_items:
+            return [{"name": "Tasks", "items": list_items}]
+
+    return []
+
+
+def normalize_export_items(items):
+    """Normalize extractor/manual payloads into canonical Trello card schema."""
+    if not isinstance(items, list):
+        raise ValueError("'items' array is required")
+
+    normalized = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+
+        card_title = str(item.get("card_title") or item.get("title") or "").strip() or "Untitled"
+        card_description = str(
+            item.get("card_description")
+            if item.get("card_description") is not None
+            else item.get("description")
+            or ""
+        ).strip()
+
+        priority_raw = str(item.get("priority") or "").strip().lower()
+        priority = PRIORITY_VALUES.get(priority_raw, "")
+
+        normalized.append({
+            "card_title": card_title,
+            "card_description": card_description,
+            "checklists": _normalize_checklists(item),
+            "custom_fields": _normalize_custom_fields(item.get("custom_fields")),
+            "labels": _normalize_labels(item.get("labels")),
+            "priority": priority,
+            "confidence_score": _coerce_confidence(item.get("confidence_score", 0.0)),
+        })
+
+    return normalized
+
+
+def _build_export_payload(items, source):
+    return {
+        "schema_version": "2026-04-21",
+        "updated_at": _utc_iso_now(),
+        "source": (source or "manual").strip() or "manual",
+        "cards": normalize_export_items(items),
+    }
+
+
+def get_saved_export(session_id, discussion_id):
+    """Return persisted trello export payload for a discussion, if any."""
+    return services.get_discussion_export_payload(session_id, discussion_id, "trello")
+
+
+def save_export(session_id, discussion_id, items, source="manual"):
+    """Persist trello export payload for a discussion and return saved payload."""
+    payload = _build_export_payload(items, source)
+    return services.set_discussion_export_payload(session_id, discussion_id, "trello", payload)
+
+
+def save_push_result(session_id, discussion_id, list_id, push_result):
+    """Persist push outcome into existing trello export payload."""
+    payload = get_saved_export(session_id, discussion_id) or {
+        "schema_version": "2026-04-21",
+        "updated_at": _utc_iso_now(),
+        "source": "manual",
+        "cards": [],
+    }
+    payload["last_push"] = {
+        "pushed_at": _utc_iso_now(),
+        "list_id": list_id,
+        "result": push_result,
+    }
+    payload["updated_at"] = _utc_iso_now()
+    return services.set_discussion_export_payload(session_id, discussion_id, "trello", payload)
+
+
 def run_export_extract(session_id, discussion_id):
     """
     Run extraction agent against a selected discussion message.
@@ -302,13 +470,15 @@ def run_export_extract(session_id, discussion_id):
         raise ValueError("No discussion content to extract from.")
 
     from agents.integrations.extractor import run_extraction
-    return run_extraction(
+    extracted = run_extraction(
         system_prompt,
         discussion_text,
         project,
         model=extraction_model,
         temperature=extraction_temperature,
     )
+    saved = save_export(session_id, discussion_id, extracted, source="extract")
+    return saved.get("cards") or []
 
 
 def run_export_push(session_id, list_id, items):
@@ -317,7 +487,8 @@ def run_export_push(session_id, list_id, items):
 
     Returns result list from trello_client.push_cards.
     """
-    if not items:
+    normalized = normalize_export_items(items)
+    if not normalized:
         raise ValueError("No items to export.")
     api_key, token = _resolve_credentials(session_id)
-    return trello_client.push_cards(api_key, token, list_id, items)
+    return trello_client.push_cards(api_key, token, list_id, normalized)

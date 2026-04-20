@@ -1560,11 +1560,15 @@ select.input {
   background: $color-bg;
   border-radius: $radius;
   width: 100%;
-  max-width: 720px;
+  max-width: 1100px;
   max-height: 90vh;
   display: flex;
   flex-direction: column;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.25);
+
+  &--wide {
+    max-width: 1220px;
+  }
 
   &__header {
     display: flex;
@@ -1611,6 +1615,123 @@ select.input {
   &__token-status {
     &--valid { color: $color-success; font-weight: 600; }
     &--expired { color: $color-error; }
+  }
+}
+
+.trello-editor {
+  &__header-row {
+    display: grid;
+    grid-template-columns: 1fr 140px;
+    align-items: center;
+    border-bottom: 1px solid $color-border;
+    padding-bottom: $space-xs;
+    margin-bottom: $space-sm;
+    font-size: $font-size-sm;
+    color: $color-text-muted;
+  }
+
+  &__cards {
+    max-height: 52vh;
+    overflow-y: auto;
+    padding-right: $space-xs;
+    margin-bottom: $space-sm;
+  }
+
+  &__card {
+    display: grid;
+    grid-template-columns: 80px 1fr;
+    border: 1px solid $color-border;
+    border-radius: $radius;
+    margin-bottom: $space-sm;
+    background: $color-surface;
+  }
+
+  &__card-index {
+    border-right: 1px solid $color-border;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    font-weight: 700;
+    padding: $space-sm;
+  }
+
+  &__card-body {
+    padding: $space-sm;
+    display: flex;
+    flex-direction: column;
+    gap: $space-xs;
+
+    label {
+      font-size: $font-size-sm;
+      font-weight: 600;
+      color: $color-text-muted;
+    }
+  }
+
+  &__card-toolbar {
+    display: flex;
+    gap: $space-xs;
+    justify-content: flex-start;
+    margin-bottom: $space-xs;
+  }
+
+  &__row {
+    display: grid;
+    grid-template-columns: 1fr 180px 140px;
+    gap: $space-sm;
+  }
+
+  &__subsection {
+    border: 1px solid $color-border;
+    border-radius: $radius;
+    padding: $space-sm;
+    margin-top: $space-xs;
+  }
+
+  &__subsection-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: $space-xs;
+  }
+
+  &__checklist,
+  &__custom-field {
+    display: grid;
+    grid-template-columns: 1fr 2fr;
+    gap: $space-xs;
+    margin-bottom: $space-xs;
+  }
+}
+
+.export-modal__footer--wrap {
+  flex-wrap: wrap;
+}
+
+@media (max-width: 900px) {
+  .export-modal {
+    max-width: 96vw;
+  }
+
+  .trello-editor {
+    &__card {
+      grid-template-columns: 1fr;
+    }
+
+    &__card-index {
+      border-right: 0;
+      border-bottom: 1px solid $color-border;
+      justify-content: flex-start;
+    }
+
+    &__row {
+      grid-template-columns: 1fr;
+    }
+
+    &__checklist,
+    &__custom-field {
+      grid-template-columns: 1fr;
+    }
   }
 }
 
