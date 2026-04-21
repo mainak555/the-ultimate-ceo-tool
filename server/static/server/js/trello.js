@@ -367,6 +367,10 @@
     });
 
     overlay.querySelector("#trello-add-card-btn").addEventListener("click", function () {
+      if (_state.exported) {
+        _setStatus("Export is locked. Click Extract Items to unlock editing.");
+        return;
+      }
       _state.cards.push(_emptyCard());
       _renderEditorCards();
       _syncFooter();
@@ -377,6 +381,10 @@
     overlay.querySelector("#trello-push-btn").addEventListener("click", _push);
 
     overlay.querySelector("#trello-editor-cards").addEventListener("click", function (e) {
+      if (_state.exported) {
+        _setStatus("Export is locked. Click Extract Items to unlock editing.");
+        return;
+      }
       var btn = e.target.closest("button");
       if (!btn) return;
       var cardIndex = parseInt(btn.getAttribute("data-card-index") || "-1", 10);
@@ -533,13 +541,22 @@
 
   function _syncFooter() {
     var listId = _getSelectedListId();
+    var hasCards = !!(_state.cards && _state.cards.length);
+    var isExported = !!_state.exported;
+    var addCardBtn = document.getElementById("trello-add-card-btn");
     var extractBtn = document.getElementById("trello-extract-btn");
     var pushBtn = document.getElementById("trello-push-btn");
     var saveBtn = document.getElementById("trello-save-btn");
 
+    if (!extractBtn || !pushBtn || !saveBtn || !addCardBtn) return;
+
     extractBtn.hidden = !_state.discussionId;
-    saveBtn.disabled = false;
-    pushBtn.hidden = !(_state.cards && _state.cards.length && listId);
+    addCardBtn.disabled = isExported;
+    saveBtn.disabled = isExported;
+
+    // Keep push button visible once cards exist or export is locked, then gate by disabled state.
+    pushBtn.hidden = !hasCards && !isExported;
+    pushBtn.disabled = isExported || !hasCards || !listId;
   }
 
   function _getSelectedListId() {
@@ -552,13 +569,24 @@
     _setStatus("Loading saved export...");
     _api("GET", "/trello/" + _state.sessionId + "/export/" + encodeURIComponent(_state.discussionId) + "/")
       .then(function (data) {
-        var cards = (data.export && data.export.cards) || [];
+        var payload = data.export || {};
+        var cards = payload.cards || [];
         _state.cards = cards.length ? cards : [_emptyCard()];
-        _renderEditorCards();
-        _setStatus(data.saved ? "Loaded saved export JSON." : "No saved JSON found. You can extract or edit manually.");
+        _state.lastPushResult = ((payload.last_push || {}).result) || [];
+        _state.exported = !!payload.exported;
+
+        if (_state.exported) {
+          _renderExportSummary(_state.lastPushResult, _state.cards);
+          _setStatus("Already exported to Trello. Click Extract Items to unlock editing.");
+        } else {
+          _renderEditorCards();
+          _setStatus(data.saved ? "Loaded saved export JSON." : "No saved JSON found. You can extract or edit manually.");
+        }
         _syncFooter();
       })
       .catch(function (err) {
+        _state.exported = false;
+        _state.lastPushResult = [];
         _state.cards = [_emptyCard()];
         _renderEditorCards();
         _setStatus("Load error: " + err.message);
@@ -576,9 +604,11 @@
     _api("POST", "/trello/" + _state.sessionId + "/extract/" + encodeURIComponent(_state.discussionId) + "/")
       .then(function (d) {
         var extractedCards = d.items || [];
+        _state.exported = false;
+        _state.lastPushResult = [];
         _state.cards = extractedCards.length ? extractedCards : [_emptyCard()];
         _renderEditorCards();
-        _setStatus("Extracted " + ((d.items || []).length) + " card(s).");
+        _setStatus("Extracted " + ((d.items || []).length) + " card(s). Editing unlocked.");
         document.getElementById("trello-extract-btn").disabled = false;
         _syncFooter();
       })
@@ -589,6 +619,10 @@
   }
 
   function _saveExport() {
+    if (_state.exported) {
+      _setStatus("Export is locked. Click Extract Items to unlock editing.");
+      return;
+    }
     _state.cards = _collectCardsFromEditor();
     _setStatus("Saving export JSON...");
     _api("POST", "/trello/" + _state.sessionId + "/export/" + encodeURIComponent(_state.discussionId) + "/", {
@@ -597,6 +631,8 @@
     })
       .then(function (d) {
         _state.cards = (d.export && d.export.cards) || _state.cards;
+        _state.exported = !!(d.export && d.export.exported);
+        _state.lastPushResult = [];
         _renderEditorCards();
         _setStatus("Saved export JSON to discussion.");
         _syncFooter();
@@ -607,6 +643,10 @@
   }
 
   function _push() {
+    if (_state.exported) {
+      _setStatus("Already exported. Click Extract Items to prepare a new export.");
+      return;
+    }
     var listId = _getSelectedListId();
     _state.cards = _collectCardsFromEditor();
     if (!listId || !_state.cards.length) return;
@@ -622,25 +662,58 @@
       .then(function (d) {
         var count = (d.result || []).length;
         _setStatus("Exported " + count + " card(s) to Trello.");
-        document.getElementById("trello-push-btn").disabled = false;
-
-        var container = document.getElementById("trello-editor-cards");
-        var html = '<div class="export-preview__success"><strong>Exported cards:</strong><ul>';
-        (d.result || []).forEach(function (r) {
-          var title = _esc(r.title);
-          var warning = "";
-          if (r.warnings && r.warnings.length) {
-            warning = " <small>(warnings: " + _esc(r.warnings.join(" | ")) + ")</small>";
-          }
-          html += '<li><a href="' + _esc(r.url) + '" target="_blank" rel="noopener">' + title + '</a>' + warning + '</li>';
-        });
-        html += '</ul></div>';
-        container.innerHTML = html;
+        _state.exported = true;
+        _state.lastPushResult = d.result || [];
+        _renderExportSummary(_state.lastPushResult, _state.cards);
+        _syncFooter();
       })
       .catch(function (err) {
         _setStatus("Export error: " + err.message);
         document.getElementById("trello-push-btn").disabled = false;
       });
+  }
+
+  function _renderExportSummary(pushResult, cards) {
+    var container = document.getElementById("trello-editor-cards");
+    if (!container) return;
+
+    var list = [];
+    if (Array.isArray(pushResult) && pushResult.length) {
+      list = pushResult.map(function (row) {
+        return {
+          title: row && row.title ? row.title : "Untitled",
+          url: row && row.url ? row.url : "",
+          warnings: Array.isArray(row && row.warnings) ? row.warnings : [],
+        };
+      });
+    } else if (Array.isArray(cards) && cards.length) {
+      list = cards.map(function (card) {
+        return {
+          title: card && card.card_title ? card.card_title : "Untitled",
+          url: "",
+          warnings: [],
+        };
+      });
+    }
+
+    var html = '<div class="export-preview__success"><strong>Exported cards:</strong><ul>';
+    if (!list.length) {
+      html += '<li>(no exported cards)</li>';
+    }
+    list.forEach(function (item) {
+      var title = _esc(item.title);
+      var warning = "";
+      if (item.warnings.length) {
+        warning = " <small>(warnings: " + _esc(item.warnings.join(" | ")) + ")</small>";
+      }
+      if (item.url) {
+        html += '<li><a href="' + _esc(item.url) + '" target="_blank" rel="noopener">' + title + '</a>' + warning + '</li>';
+      } else {
+        html += '<li>' + title + warning + '</li>';
+      }
+    });
+    html += '</ul></div>';
+    container.innerHTML = html;
   }
 
   function _parseChecklistLines(text) {
@@ -794,6 +867,8 @@
       secretKey: secretKey,
       csrfToken: csrfToken,
       cards: [],
+      exported: false,
+      lastPushResult: [],
       referenceMarkdown: _defaultReferenceMarkdown(),
     };
 

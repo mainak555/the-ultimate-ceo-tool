@@ -94,6 +94,7 @@ See [docs/agent_factory.md](agent_factory.md) for the full `agent_models.json` s
 - **Secret key auth**: GET/POST HTMX requests can carry `X-App-Secret-Key`; invalid or missing keys get read-only views or rejected saves.
 - **Model catalog**: `agent_models.json` is keyed by model name; Azure deployments use the optional `deployment_name` field (defaults to model key). See [docs/agent_factory.md](agent_factory.md) for schema details.
 - **SCSS**: Compiled at request time in dev, offline in production.
+- **SCSS style contract**: Follow [docs/scss_style_guide.md](scss_style_guide.md) for token usage, component semantics, and responsive guardrails.
 - **Template naming**: Partials in `partials/` subdirectory, prefixed with `_` for includes.
 
 ## Frontend JS Boundaries
@@ -124,3 +125,4 @@ Repo-local extension skills live under `.agents/skills/`.
 - `.agents/skills/export_popup_base/SKILL.md` — baseline modal structure and lifecycle.
 - `.agents/skills/export_provider_adapter/SKILL.md` — adapter contract for provider endpoints.
 - `.agents/skills/ui_consistency_guardrails/SKILL.md` — cross-page visual consistency requirements.
+- `.agents/skills/scss_style_consistency/SKILL.md` — token-only SCSS and shared component style consistency requirements.

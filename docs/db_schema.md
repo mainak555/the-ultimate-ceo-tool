@@ -109,6 +109,7 @@ Cross-references: [docs/API.md](API.md) (form fields + HTTP schema), [AGENTS.md]
         "trello": {
           "schema_version": "string",
           "updated_at": "ISO datetime",
+          "exported": true,
           "source": "extract | manual",
           "cards": [],
           "last_push": {
@@ -131,6 +132,10 @@ Cross-references: [docs/API.md](API.md) (form fields + HTTP schema), [AGENTS.md]
   }
 }
 ```
+
+`exports.trello.exported` lifecycle:
+- `false` after Extract Items or Save (editable mode).
+- `true` after successful Export to Trello push (summary-only locked mode).
 
 ### Discussion Export Persistence Rule
 

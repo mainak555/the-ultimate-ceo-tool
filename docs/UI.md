@@ -75,6 +75,8 @@ Cross-page UI controls must maintain shared visual language:
 3. Spacing/typography: preserve current card/modal rhythm from `main.scss`.
 4. Provider skins: may add subtle accents, but cannot override baseline destructive/control semantics.
 
+Canonical styling rules for new SCSS work live in [docs/scss_style_guide.md](scss_style_guide.md). Follow that guide for token usage, component semantics, and responsive guardrails.
+
 ## Dynamic Agent Cards (JS)
 
 `app.js` handles shared behavior only:

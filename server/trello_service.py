@@ -376,6 +376,7 @@ def _build_export_payload(items, source):
     return {
         "schema_version": "2026-04-21",
         "updated_at": _utc_iso_now(),
+        "exported": False,
         "source": (source or "manual").strip() or "manual",
         "cards": normalize_export_items(items),
     }
@@ -397,6 +398,7 @@ def save_push_result(session_id, discussion_id, list_id, push_result):
     payload = get_saved_export(session_id, discussion_id) or {
         "schema_version": "2026-04-21",
         "updated_at": _utc_iso_now(),
+        "exported": False,
         "source": "manual",
         "cards": [],
     }
@@ -405,6 +407,7 @@ def save_push_result(session_id, discussion_id, list_id, push_result):
         "list_id": list_id,
         "result": push_result,
     }
+    payload["exported"] = True
     payload["updated_at"] = _utc_iso_now()
     return services.set_discussion_export_payload(session_id, discussion_id, "trello", payload)
 

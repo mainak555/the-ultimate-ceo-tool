@@ -27,6 +27,11 @@ See [docs/UI.md](docs/UI.md) for:
 - Template hierarchy (base → partials)
 - CSS class naming conventions
 
+See [docs/scss_style_guide.md](docs/scss_style_guide.md) for:
+- Token-only SCSS rules and allowed derivations
+- Shared button/form/card/modal styling contracts
+- Responsive and export-modal aesthetic guardrails
+
 ## Trello Integration
 
 See [docs/trello_integration.md](docs/trello_integration.md) for:
@@ -64,4 +69,5 @@ See [docs/agent_teams.md](docs/agent_teams.md) for:
 15. **Provider registry is required for exports**: shared modules must use `server/static/server/js/provider_registry.js` (`window.ProviderRegistry`) instead of hardcoding provider names or provider-specific window globals.
 16. **Reusable export modal pattern is mandatory**: all export providers (Trello, Jira, PDF, n8n, future) must keep the same baseline layout and lifecycle: left editor workspace, right raw markdown pane from `discussion.content`, and footer actions for Extract, Save, and Export.
 17. **Visual consistency is mandatory across pages**: destructive controls (delete buttons/icons), color-token usage, spacing rhythm, and modal typography must match shared patterns defined in SCSS and docs; provider-specific theming is additive, not divergent.
-18. **Extension skills are required for new providers**: follow `.agents/skills/export_popup_base/SKILL.md`, `.agents/skills/export_provider_adapter/SKILL.md`, and `.agents/skills/ui_consistency_guardrails/SKILL.md` before implementing a new export provider.
+18. **Extension skills are required for new providers**: follow `.agents/skills/export_popup_base/SKILL.md`, `.agents/skills/export_provider_adapter/SKILL.md`, `.agents/skills/ui_consistency_guardrails/SKILL.md`, and `.agents/skills/scss_style_consistency/SKILL.md` before implementing a new export provider.
+19. **SCSS consistency is mandatory**: all styling changes must follow `docs/scss_style_guide.md` and must not introduce hardcoded color values when shared tokens exist.
