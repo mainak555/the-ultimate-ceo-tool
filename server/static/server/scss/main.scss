@@ -1658,10 +1658,11 @@ select.input {
 
   &__card {
     display: block;
-    border: 1px solid $color-border;
+    border: 1px solid darken($color-border, 3%);
     border-radius: $radius;
     margin-bottom: $space-sm;
-    background: $color-surface;
+    background: #fffdf7;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.65);
   }
 
   &__card-index {
@@ -1722,7 +1723,7 @@ select.input {
     border-radius: $radius;
     padding: $space-xs;
     margin-bottom: $space-xs;
-    background: #fffdf7;
+    background: #fffaf0;
     box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6);
   }
 
