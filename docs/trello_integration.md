@@ -10,8 +10,11 @@ The Trello integration uses a three-file backend split plus a dedicated JS modul
 | `server/trello_service.py` | Business logic — token CRUD, credential resolution, orchestration |
 | `server/trello_views.py` | Django views (thin controllers) — JSON API endpoints |
 | `server/trello_urls.py` | URL routing — included under `/trello/` prefix |
+| `server/static/server/js/provider_registry.js` | Provider capability registry used by shared modules |
 | `server/static/server/js/trello_config.js` | Config page Trello settings UX — token auth flow, cascade defaults, create board/list |
 | `server/static/server/js/trello.js` | Chat export modal — destination picker, extract preview, push to Trello |
+
+Trello modules register provider capabilities via `window.ProviderRegistry` to avoid hardcoded provider switches in shared modules.
 
 ## Project Config Schema
 
@@ -81,6 +84,9 @@ All endpoints require `X-App-Secret-Key` header.
 | `POST` | `/trello/<sid>/create-board/` | Create board (`{name, workspace_id?}`) → `{id, name}` |
 | `POST` | `/trello/<sid>/create-list/` | Create list (`{name, board_id}`) → `{id, name}` |
 | `POST` | `/trello/<sid>/extract/<discussion_id>/` | Run extraction on selected message → `{items: [...]}` |
+| `GET` | `/trello/<sid>/export/<discussion_id>/` | Load saved export payload for discussion |
+| `POST` | `/trello/<sid>/export/<discussion_id>/` | Save edited export payload for discussion |
+| `GET` | `/trello/<sid>/reference/<discussion_id>/` | Load raw markdown reference from `discussion.content` |
 | `POST` | `/trello/<sid>/push/` | Push cards (`{list_id, items}`) → `{status, result}` |
 
 ### Project-scoped (config page — `/trello/project/<pid>/`)
@@ -102,9 +108,19 @@ All endpoints require `X-App-Secret-Key` header.
 2. Modal opens → checks token status via session endpoint (resolves to project token)
 3. If no token → message directs user to configure token in project settings
 4. Cascade dropdowns load with defaults pre-selected from project config
-5. "Extract Items" button runs the extraction agent using the selected chat message (`discussion_id`)
-6. Preview shows cards with badges: 📋 Card, 📝 Description, ☑️ Checklist
-7. "Export to Trello" pushes items → shows success with card links
+5. Right reference pane loads raw markdown from `discussion.content` (not from saved export payload)
+6. "Extract Items" runs extraction explicitly and updates only the editable export workspace
+7. "Save" persists edited Trello payload under `discussions[].exports.trello`
+8. "Export to Trello" pushes current edited payload and returns card links/warnings
+
+## Reusable Export Popup Alignment
+
+Trello is the baseline implementation for the shared export popup pattern used by future providers:
+
+1. Left pane = provider export workspace.
+2. Right pane = raw markdown reference from `discussion.content`.
+3. Footer = Extract, Save, Export, Cancel.
+4. Extract and Save are independent actions.
 
 ## Mapping Structure
 

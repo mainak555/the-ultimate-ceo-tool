@@ -31,6 +31,9 @@ All routes are under the `server` app namespace.
 | `POST` | `/trello/<session_id>/create-board/` | `trello_create_board` | Create a new board |
 | `POST` | `/trello/<session_id>/create-list/` | `trello_create_list` | Create a new list |
 | `POST` | `/trello/<session_id>/extract/<discussion_id>/` | `trello_extract` | Run extraction agent on selected discussion message |
+| `GET` | `/trello/<session_id>/export/<discussion_id>/` | `trello_export_data` | Load saved Trello export payload for a discussion |
+| `POST` | `/trello/<session_id>/export/<discussion_id>/` | `trello_export_data` | Save edited Trello export payload for a discussion |
+| `GET` | `/trello/<session_id>/reference/<discussion_id>/` | `trello_discussion_reference` | Load raw discussion markdown reference (`discussion.content`) |
 | `POST` | `/trello/<session_id>/push/` | `trello_push` | Push items to Trello |
 | `GET` | `/trello/project/<project_id>/auth-url/` | `trello_project_auth_url` | Get project Trello auth URL |
 | `POST` | `/trello/project/<project_id>/store-token/` | `trello_project_store_token` | Store project Trello token |
@@ -42,6 +45,18 @@ All routes are under the `server` app namespace.
 | `POST` | `/trello/project/<project_id>/create-list/` | `trello_project_create_list` | Create list (project creds) |
 
 See [docs/trello_integration.md](trello_integration.md) for full Trello integration details.
+
+## Generic Export Popup Endpoint Pattern
+
+For each provider `<provider>`, follow this endpoint contract under provider namespace:
+
+1. `POST /<provider>/<session_id>/extract/<discussion_id>/` — explicit extraction.
+2. `GET /<provider>/<session_id>/export/<discussion_id>/` — load saved payload.
+3. `POST /<provider>/<session_id>/export/<discussion_id>/` — save edited payload.
+4. `GET /<provider>/<session_id>/reference/<discussion_id>/` — raw markdown reference from `discussion.content`.
+5. `POST /<provider>/<session_id>/push/` — provider push/export execution.
+
+This keeps provider behavior consistent while allowing provider-specific payload shape and push response data.
 
 ## Request/Response Details
 

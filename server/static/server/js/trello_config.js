@@ -608,5 +608,11 @@
       syncGenerateTokenState: syncGenerateTokenState,
       maybeLoadCascadeForCurrentProject: maybeLoadCascadeForCurrentProject
     };
+
+    if (window.ProviderRegistry && typeof window.ProviderRegistry.register === "function") {
+      window.ProviderRegistry.register("trello", {
+        syncConfigState: syncFromForm,
+      });
+    }
   });
 })();

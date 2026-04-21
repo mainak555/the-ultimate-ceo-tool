@@ -103,6 +103,24 @@ See [docs/agent_factory.md](agent_factory.md) for the full `agent_models.json` s
 - `server/static/server/js/home.js`: home chat feature behavior only (chat runtime UI, SSE rendering, human gate interactions).
 - `server/static/server/js/trello_config.js`: Trello project-configuration behavior only (token generation, workspace/board/list cascade, create board/list modal).
 - `server/static/server/js/trello.js`: Trello export modal for chat sessions only.
+- `server/static/server/js/provider_registry.js`: provider capability registry used by shared modules to open export modals and sync provider config without hardcoded provider switches.
 
 When adding new UI behavior, create a dedicated module for a distinct feature surface instead of extending `app.js`.
 See [docs/frontend_js_architecture.md](frontend_js_architecture.md) for the module ownership and event contract.
+
+## Export Provider Architecture
+
+- Shared modules (`home.js`, `project_config.js`) must never hardcode provider names.
+- Provider modules self-register capabilities through `window.ProviderRegistry.register("<provider>", capabilities)`.
+- Current required capabilities:
+	- `openExportModal(context)` for chat export launch.
+	- `syncConfigState(context)` for config-page state sync.
+- New providers should require only provider-specific module + backend endpoints + docs updates.
+
+## Agent Skills Location
+
+Repo-local extension skills live under `.agents/skills/`.
+
+- `.agents/skills/export_popup_base/SKILL.md` — baseline modal structure and lifecycle.
+- `.agents/skills/export_provider_adapter/SKILL.md` — adapter contract for provider endpoints.
+- `.agents/skills/ui_consistency_guardrails/SKILL.md` — cross-page visual consistency requirements.

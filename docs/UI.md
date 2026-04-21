@@ -48,6 +48,33 @@ config.html                        ← Full HTML document, loaded once
 - **Modifiers**: `.block--modifier` (e.g., `.btn--primary`, `.agent-card--readonly`)
 - **Utilities**: `.badge`, `.alert`, `.form-group`, `.form-row`
 
+## Reusable Export Popup Pattern
+
+All export providers must follow the same structural pattern so users get a consistent workflow:
+
+1. Vertical split workbench inside modal body.
+2. Left pane: provider export workspace (destination + editable export payload).
+3. Right pane: raw markdown reference rendered from `discussion.content`.
+4. Footer actions: Extract, Save, Export, Cancel.
+
+Behavior contract:
+
+1. On open: load saved provider payload for `discussion_id` and load raw markdown reference independently.
+2. Extract is explicit (never auto-runs on modal open).
+3. Save persists edited payload to discussion-level exports.
+4. Export uses current edited payload state.
+
+Provider-specific changes should be limited to labels, endpoints, and payload mapping; layout/lifecycle stays the same.
+
+## Aesthetic Consistency Contract
+
+Cross-page UI controls must maintain shared visual language:
+
+1. Delete buttons: same icon style, hover semantics, and danger-color behavior.
+2. Color scheme: use shared SCSS tokens (`$color-*`) and existing button modifiers.
+3. Spacing/typography: preserve current card/modal rhythm from `main.scss`.
+4. Provider skins: may add subtle accents, but cannot override baseline destructive/control semantics.
+
 ## Dynamic Agent Cards (JS)
 
 `app.js` handles shared behavior only:

@@ -817,4 +817,12 @@
     openModal: openModal,
     closeModal: closeModal,
   };
+
+  if (window.ProviderRegistry && typeof window.ProviderRegistry.register === "function") {
+    window.ProviderRegistry.register("trello", {
+      openExportModal: function (ctx) {
+        openModal(ctx.sessionId, ctx.discussionId, ctx.secretKey, ctx.csrfToken);
+      },
+    });
+  }
 })();

@@ -104,7 +104,21 @@ Cross-references: [docs/API.md](API.md) (form fields + HTTP schema), [AGENTS.md]
       "agent_name": "string",
       "role": "user | assistant",
       "content": "string",
-      "timestamp": "HH:MM"
+      "timestamp": "HH:MM",
+      "exports": {
+        "trello": {
+          "schema_version": "string",
+          "updated_at": "ISO datetime",
+          "source": "extract | manual",
+          "cards": [],
+          "last_push": {
+            "pushed_at": "ISO datetime",
+            "list_id": "string",
+            "result": []
+          }
+        }
+        // future providers: jira, pdf, n8n (same top-level shape with provider-specific payload details)
+      }
     }
   ],
   "status": "idle | running | awaiting_input | completed | stopped",
@@ -117,6 +131,12 @@ Cross-references: [docs/API.md](API.md) (form fields + HTTP schema), [AGENTS.md]
   }
 }
 ```
+
+### Discussion Export Persistence Rule
+
+- Raw reference content for export modals is always `discussions[].content`.
+- Export payload persistence is provider-scoped under `discussions[].exports.<provider>`.
+- This separation allows re-extract/save/push workflows without mutating source discussion text.
 
 Indexes:
 - `{ project_id: 1 }` (non-unique)

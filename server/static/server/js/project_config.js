@@ -28,8 +28,13 @@ document.addEventListener("DOMContentLoaded", function () {
     return !!document.querySelector("form.config-form");
   }
 
-  function syncTrelloConfigState() {
-    if (window.TrelloConfig && typeof window.TrelloConfig.syncFromForm === "function") {
+  function syncProviderConfigState(providerName) {
+    if (window.ProviderRegistry && typeof window.ProviderRegistry.syncConfigState === "function") {
+      if (window.ProviderRegistry.syncConfigState(providerName)) return;
+    }
+
+    // Backward-compatible fallback for older provider modules.
+    if (providerName === "trello" && window.TrelloConfig && typeof window.TrelloConfig.syncFromForm === "function") {
       window.TrelloConfig.syncFromForm();
     }
   }
@@ -58,7 +63,7 @@ document.addEventListener("DOMContentLoaded", function () {
       }
     });
 
-    syncTrelloConfigState();
+    syncProviderConfigState("trello");
   }
 
   function syncHumanGateFields() {
@@ -158,7 +163,7 @@ document.addEventListener("DOMContentLoaded", function () {
     syncIntegrationsFields();
     syncExportAgentCheckboxes();
     updateSubmitState();
-    syncTrelloConfigState();
+    syncProviderConfigState("trello");
   }
 
   function reindexAgents() {
@@ -262,7 +267,7 @@ document.addEventListener("DOMContentLoaded", function () {
     if (e.target.id === "integrations-enabled" ||
         e.target.id === "integrations-trello-enabled") {
       syncIntegrationsFields();
-      syncTrelloConfigState();
+      syncProviderConfigState("trello");
     }
   });
 

@@ -451,21 +451,14 @@ document.addEventListener("DOMContentLoaded", function () {
   }
 
   function openProviderExportModal(provider, sessionId, discussionId, secretKey) {
-    var launchers = {
-      trello: window.TrelloExport,
-      jira: window.JiraExport,
-      pdf: window.PdfExport,
-      n8n: window.N8NExport,
-    };
-
-    var launcher = launchers[provider];
-    if (launcher && typeof launcher.openModal === "function") {
-      if (provider === "trello") {
-        launcher.openModal(sessionId, discussionId, secretKey, csrfToken);
-      } else {
-        launcher.openModal(sessionId, secretKey, csrfToken);
-      }
-      return true;
+    if (window.ProviderRegistry && typeof window.ProviderRegistry.openExportModal === "function") {
+      return window.ProviderRegistry.openExportModal(provider, {
+        provider: provider,
+        sessionId: sessionId,
+        discussionId: discussionId,
+        secretKey: secretKey,
+        csrfToken: csrfToken,
+      });
     }
     return false;
   }
