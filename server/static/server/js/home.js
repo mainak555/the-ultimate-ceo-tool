@@ -456,12 +456,14 @@ document.addEventListener("DOMContentLoaded", function () {
 
   function openProviderExportModal(provider, sessionId, discussionId, secretKey) {
     if (window.ProviderRegistry && typeof window.ProviderRegistry.openExportModal === "function") {
+      var projectId = activeProjectIdInput ? activeProjectIdInput.value.trim() : "";
       return window.ProviderRegistry.openExportModal(provider, {
-        provider: provider,
-        sessionId: sessionId,
+        provider:     provider,
+        sessionId:    sessionId,
         discussionId: discussionId,
-        secretKey: secretKey,
-        csrfToken: csrfToken,
+        secretKey:    secretKey,
+        csrfToken:    csrfToken,
+        projectId:    projectId,
       });
     }
     return false;
