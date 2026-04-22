@@ -40,6 +40,17 @@ See [docs/trello_integration.md](docs/trello_integration.md) for:
 - Auth flow, cascade dropdowns, and export pipeline
 - API endpoint reference
 
+## Jira Integration
+
+See [docs/jira_integration.md](docs/jira_integration.md) for:
+- Architecture (jira_client → jira_service → jira_views + jira.js + jira_config.js)
+- Three independent project types: `software`, `service_desk`, `business`
+- Per-type credentials, per-type export_agents, and per-type export schema
+- Atlassian Document Format (ADF) requirement and how it is handled
+- Config page credential verification and project cascade flow
+- Export modal flow and push response shape
+- API endpoint reference (project-scoped and session-scoped)
+
 ## Agent Teams & Runtime
 
 See [docs/agent_teams.md](docs/agent_teams.md) for:
@@ -65,10 +76,11 @@ See [docs/agent_teams.md](docs/agent_teams.md) for:
 11. **No test suite yet** — planned for a future phase
 12. **Project deletion safety**: never cascade delete chats when deleting a project. If any chat sessions exist for a project, deletion must be blocked with a clear error message.
 13. **Common layer remains common**: global/shared modules (for example `server/static/server/js/app.js`) may contain only cross-feature utilities and hooks.
-14. **Feature ownership is mandatory**: Home, Project Config, and Trello implementations must stay separated in HTMX templates, JS modules, views, and services. Avoid adding feature-specific logic to shared files.
+14. **Feature ownership is mandatory**: Home, Project Config, Trello, and Jira implementations must stay separated in HTMX templates, JS modules, views, and services. Avoid adding feature-specific logic to shared files.
 15. **Provider registry is required for exports**: shared modules must use `server/static/server/js/provider_registry.js` (`window.ProviderRegistry`) instead of hardcoding provider names or provider-specific window globals.
 16. **Reusable export modal pattern is mandatory**: all export providers (Trello, Jira, PDF, n8n, future) must keep the same baseline layout and lifecycle: left editor workspace, right raw markdown pane from `discussion.content`, and footer actions for Extract, Save, and Export.
 17. **Visual consistency is mandatory across pages**: destructive controls (delete buttons/icons), color-token usage, spacing rhythm, and modal typography must match shared patterns defined in SCSS and docs; provider-specific theming is additive, not divergent.
 18. **Extension skills are required for new providers**: follow `.agents/skills/export_popup_base/SKILL.md`, `.agents/skills/export_provider_adapter/SKILL.md`, `.agents/skills/ui_consistency_guardrails/SKILL.md`, `.agents/skills/scss_style_consistency/SKILL.md`, and `.agents/skills/markdown_viewer_reuse/SKILL.md` before implementing a new export provider.
 19. **SCSS consistency is mandatory**: all styling changes must follow `docs/scss_style_guide.md` and must not introduce hardcoded color values when shared tokens exist.
-20. **Markdown rendering must be reusable**: shared markdown rendering belongs in `server/static/server/js/markdown_viewer.js`; Home, Trello popup, and future providers must consume this common module instead of duplicating parsers.
+20. **Markdown rendering must be reusable**: shared markdown rendering belongs in `server/static/server/js/markdown_viewer.js`; Home, Trello popup, Jira popup, and future providers must consume this common module instead of duplicating parsers.
+21. **Jira export_agents are per-type**: for Jira, `export_agents` is scoped to each project type (`integrations.jira.software.export_agents`, etc.). There is no global `integrations.jira.export_agents` field. Validation, normalization, and template rendering must all read from the per-type config.

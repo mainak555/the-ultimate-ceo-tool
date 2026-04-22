@@ -46,6 +46,31 @@ All routes are under the `server` app namespace.
 
 See [docs/trello_integration.md](trello_integration.md) for full Trello integration details.
 
+## Jira Endpoints
+
+`<type>` must be one of `software`, `service_desk`, `business`.
+
+### Session-scoped (export modal — `/jira/<sid>/`)
+
+| Method | Path | View | Description |
+|--------|------|------|-------------|
+| `GET` | `/jira/<sid>/token-status/<type>/` | `jira_session_status` | Check Jira type configuration → `{configured, default_project_key, default_project_name}` |
+| `GET` | `/jira/<sid>/spaces/<type>/` | `jira_session_spaces` | List Jira projects/service desks → `[{key, name}]` |
+| `POST` | `/jira/<sid>/extract/<did>/<type>/` | `jira_extract` | Run extraction agent on discussion → `{issues: [...]}` |
+| `GET` | `/jira/<sid>/export/<did>/<type>/` | `jira_export_data` | Load saved export payload for discussion |
+| `POST` | `/jira/<sid>/export/<did>/<type>/` | `jira_export_data` | Save edited export payload for discussion |
+| `GET` | `/jira/<sid>/reference/<did>/` | `jira_reference` | Raw markdown from `discussion.content` (shared across types) |
+| `POST` | `/jira/<sid>/push/<type>/` | `jira_push` | Push issues to Jira → `{status, result: [{issue_key, summary, url, warnings}]}` |
+
+### Project-scoped (config page — `/jira/project/<pid>/`)
+
+| Method | Path | View | Description |
+|--------|------|------|-------------|
+| `GET` | `/jira/project/<pid>/verify/<type>/` | `jira_project_verify` | Verify Jira credentials → `{display_name, email}` |
+| `GET` | `/jira/project/<pid>/spaces/<type>/` | `jira_project_spaces` | List Jira projects/service desks → `[{key, name}]` |
+
+See [docs/jira_integration.md](jira_integration.md) for full Jira integration details.
+
 ## Generic Export Popup Endpoint Pattern
 
 For each provider `<provider>`, follow this endpoint contract under provider namespace:
