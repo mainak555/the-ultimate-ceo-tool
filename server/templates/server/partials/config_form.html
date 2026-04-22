@@ -50,7 +50,7 @@
   <p class="form-hint form-hint--block">Enter the Secret Key in the header before saving. The key is sent as a request header and validated on the server.</p>
 
   <!-- ====== AGENTS ====== -->
-  <fieldset class="form-group agents-fieldset">
+  <fieldset class="form-group section-fieldset">
     <legend>Assistant Agents</legend>
 
     <div id="agents-container">
@@ -70,7 +70,7 @@
   </fieldset>
 
   <!-- ====== HUMAN GATE ====== -->
-  <fieldset class="form-group">
+  <fieldset class="form-group section-fieldset">
     <legend>Human Gate</legend>
 
     <div class="form-group form-group--inline">
@@ -110,7 +110,7 @@
   </fieldset>
 
   <!-- ====== TEAM ====== -->
-  <fieldset class="form-group">
+  <fieldset class="form-group section-fieldset">
     <legend>Team</legend>
 
     <div class="form-row">
@@ -190,9 +190,12 @@
   </fieldset>
 
   <!-- ====== INTEGRATIONS ====== -->
-  <fieldset class="form-group">
+  <fieldset class="form-group section-fieldset">
     <legend>Integrations (Export)</legend>
 
+    {% if mode == 'create' %}
+      <p class="form-hint form-hint--info">Save the project first to configure export integrations (Trello, Jira).</p>
+    {% else %}
     <div class="form-group form-group--inline">
       <label>
         <input type="checkbox"
@@ -765,6 +768,7 @@
       </fieldset>
 
     </div>
+    {% endif %}
   </fieldset>
 
   <!-- Submit / Clear / Clone -->

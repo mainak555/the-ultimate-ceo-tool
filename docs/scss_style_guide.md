@@ -44,6 +44,15 @@ This guide defines the mandatory styling contract for Product Discovery so new U
 2. Keep border, radius, and typography aligned with existing patterns.
 3. Provider-specific accents are additive only; baseline control semantics are unchanged.
 
+### Section Fieldsets (Config Form)
+
+1. All top-level config form sections (Assistant Agents, Human Gate, Team, Integrations) must use the shared `.section-fieldset` class.
+2. `.section-fieldset` provides: `border: 1px solid $color-border`, `border-radius: $radius-lg`, `padding: $space-md` (inside `.config-form`).
+3. Nested sub-sections within Integrations use `.form-group--nested` (left-border indent, L1) and `.form-group--nested-l2` (L2) — do not apply `.section-fieldset` to nested elements.
+4. **Nested sections must always have symmetric horizontal padding**: `padding-left` and `padding-right` must both be set. Omitting `padding-right` causes controls (especially textarea scrollbars) to clip at the parent section's right inner edge.
+   - `.form-group--nested`: `padding-left: $space-md`, `padding-right: $space-sm`
+   - `.form-group--nested-l2`: `padding-left: $space-md`, `padding-right: $space-sm`
+
 ## Feature Scoping Rules
 
 1. Feature-specific SCSS must be scoped to feature blocks (for example Trello-specific selectors stay inside Trello sections).
@@ -70,3 +79,4 @@ This guide defines the mandatory styling contract for Product Discovery so new U
 4. Buttons/forms/cards reuse shared classes and modifiers.
 5. Feature scope is isolated; shared files stay provider-agnostic.
 6. Desktop and mobile visual checks completed.
+7. Nested sections (`.form-group--nested`, `.form-group--nested-l2`) have both `padding-left` AND `padding-right` set — missing right padding causes controls to clip at the section edge.

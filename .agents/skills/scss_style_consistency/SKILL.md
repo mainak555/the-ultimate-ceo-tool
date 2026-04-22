@@ -20,6 +20,7 @@ Preserve a single visual language across Config, Home, and provider export modal
 2. Form controls must use shared `.input` and form helper classes.
 3. Card and modal spacing/border rhythm must match existing `main.scss` patterns.
 4. Delete controls must match shared icon/button danger behavior.
+5. Nested integration sub-sections (`.form-group--nested`, `.form-group--nested-l2`) must always declare both `padding-left` AND `padding-right`. Missing `padding-right` causes textarea scrollbars and inputs to overflow into the parent section's right border.
 
 ## Export Modal Guardrails
 1. Keep split layout and footer action order consistent with baseline export modal pattern.
@@ -32,3 +33,4 @@ Preserve a single visual language across Config, Home, and provider export modal
 3. Compare delete controls with existing chat list and agent card patterns.
 4. Confirm desktop/mobile usability remains intact.
 5. Confirm feature-specific styles are scoped and do not pollute shared layers.
+6. Confirm nested sections have symmetric `padding-left` + `padding-right` (both required — right side prevents scrollbar/control clipping).

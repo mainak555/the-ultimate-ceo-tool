@@ -298,6 +298,12 @@ select.input {
   margin-bottom: $space-lg;
 }
 
+.form-hint--info {
+  color: $color-info;
+  font-size: $font-size-sm;
+  margin-top: $space-xs;
+}
+
 .form-actions {
   margin-top: $space-lg;
   display: flex;
@@ -327,7 +333,7 @@ select.input {
     gap: $space-sm;
   }
 
-  .agents-fieldset {
+  .section-fieldset {
     padding: $space-md;
   }
 
@@ -360,7 +366,10 @@ select.input {
 // ---------------------------------------------------------------------------
 // Agent Cards
 // ---------------------------------------------------------------------------
-.agents-fieldset {
+// ---------------------------------------------------------------------------
+// Section Fieldsets — shared container style for all top-level form sections
+// ---------------------------------------------------------------------------
+.section-fieldset {
   border: 1px solid $color-border;
   border-radius: $radius-lg;
   padding: $space-lg;
@@ -2185,6 +2194,7 @@ select.input {
 .form-group--nested {
   margin-left: $space-md;
   padding-left: $space-md;
+  padding-right: $space-sm;
   border-left: 3px solid $color-border;
 }
 
@@ -2300,6 +2310,7 @@ select.input {
 .form-group--nested-l2 {
   margin-left: $space-lg;
   padding-left: $space-md;
+  padding-right: $space-sm;
   border-left: 2px solid $color-border;
   margin-top: $space-md;
 }
