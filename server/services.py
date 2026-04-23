@@ -558,8 +558,8 @@ def append_messages(session_id, messages):
     col.update_one({"_id": oid}, {"$push": {"discussions": {"$each": to_append}}})
 
 
-def get_discussion_export_payload(session_id, discussion_id, provider):
-    """Return saved export payload for a discussion/provider, or None."""
+def get_discussion_export_payload(session_id, discussion_id, provider, subkey=None):
+    """Return saved export payload for a discussion/provider (optional subkey), or None."""
     try:
         oid = ObjectId(session_id)
     except (InvalidId, TypeError):
@@ -572,6 +572,12 @@ def get_discussion_export_payload(session_id, discussion_id, provider):
     provider_name = (provider or "").strip().lower()
     if not provider_name:
         raise ValueError("'provider' is required.")
+
+    provider_subkey = None
+    if subkey is not None:
+        provider_subkey = (subkey or "").strip().lower()
+        if not provider_subkey:
+            raise ValueError("'subkey' must be non-empty when provided.")
 
     col = get_collection(CHAT_SESSIONS_COLLECTION)
     session_doc = col.find_one({"_id": oid}, {"discussions": 1})
@@ -587,13 +593,17 @@ def get_discussion_export_payload(session_id, discussion_id, provider):
         if not isinstance(exports, dict):
             return None
         payload = exports.get(provider_name)
+        if provider_subkey is not None:
+            if not isinstance(payload, dict):
+                return None
+            payload = payload.get(provider_subkey)
         return payload if isinstance(payload, dict) else None
 
     raise ValueError("Discussion item not found for this session.")
 
 
-def set_discussion_export_payload(session_id, discussion_id, provider, payload):
-    """Persist export payload for a discussion/provider and return saved payload."""
+def set_discussion_export_payload(session_id, discussion_id, provider, payload, subkey=None):
+    """Persist export payload for a discussion/provider (optional subkey) and return saved payload."""
     if not isinstance(payload, dict):
         raise ValueError("'payload' must be a JSON object.")
 
@@ -609,6 +619,12 @@ def set_discussion_export_payload(session_id, discussion_id, provider, payload):
     provider_name = (provider or "").strip().lower()
     if not provider_name:
         raise ValueError("'provider' is required.")
+
+    provider_subkey = None
+    if subkey is not None:
+        provider_subkey = (subkey or "").strip().lower()
+        if not provider_subkey:
+            raise ValueError("'subkey' must be non-empty when provided.")
 
     col = get_collection(CHAT_SESSIONS_COLLECTION)
     session_doc = col.find_one({"_id": oid})
@@ -628,7 +644,14 @@ def set_discussion_export_payload(session_id, discussion_id, provider, payload):
         exports = row.get("exports")
         if not isinstance(exports, dict):
             exports = {}
-        exports[provider_name] = payload
+        if provider_subkey is None:
+            exports[provider_name] = payload
+        else:
+            provider_obj = exports.get(provider_name)
+            if not isinstance(provider_obj, dict):
+                provider_obj = {}
+            provider_obj[provider_subkey] = payload
+            exports[provider_name] = provider_obj
         row["exports"] = exports
         found = True
         break

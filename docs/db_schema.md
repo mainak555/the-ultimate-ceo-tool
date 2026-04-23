@@ -81,9 +81,32 @@ Cross-references: [docs/API.md](API.md) (form fields + HTTP schema), [AGENTS.md]
         "temperature": 0.0,   // float 0.0–2.0; 0.0 = deterministic extraction (default)
         "system_prompt": "string"  // extraction prompt given to the LLM
       }
+    },
+
+    // ── Jira (three independent types) ───────────────────────────────────
+    "jira": {
+      "enabled": false,         // bool — master toggle
+      "software": {
+        "enabled": false,
+        "site_url": "",            // required when enabled
+        "email": "",               // required when enabled
+        "api_key": "",             // required when enabled
+        "default_project_key": "",
+        "default_project_name": "",
+        "export_agents": [],        // empty = show on all agents
+        "export_mapping": {
+          "model": "",
+          "temperature": 0.0,
+          "system_prompt": ""
+        }
+      },
+      "service_desk": {
+        // same structure as software
+      },
+      "business": {
+        // same structure as software
+      }
     }
-    // Future integrations (e.g. Jira) follow the same pattern:
-    // "jira": { "enabled": false, "export_agents": [], ... }
   }
 }
 ```
@@ -117,8 +140,28 @@ Cross-references: [docs/API.md](API.md) (form fields + HTTP schema), [AGENTS.md]
             "list_id": "string",
             "result": []
           }
+        },
+        "jira": {
+          "software": {
+            "schema_version": "string",
+            "updated_at": "ISO datetime",
+            "exported": true,
+            "source": "extract | manual",
+            "issues": [],
+            "last_push": {
+              "pushed_at": "ISO datetime",
+              "project_key": "string",
+              "result": []
+            }
+          },
+          "service_desk": {
+            // same top-level shape as jira.software; issues follow service desk schema
+          },
+          "business": {
+            // same top-level shape as jira.software; issues follow business schema
+          }
         }
-        // future providers: jira, pdf, n8n (same top-level shape with provider-specific payload details)
+        // future providers: pdf, n8n
       }
     }
   ],
@@ -176,9 +219,11 @@ the Trello Export button. Legacy documents may have `integrations.export_agent` 
 string) instead — `_normalize_export_agents()` in `services.py` migrates that on read
 without requiring a DB migration script.
 
-Each future integration (e.g. `jira`) stores its own `export_agents` list at the same
-depth: `integrations.jira.export_agents`. The `integrations` root never holds an
-`export_agent` field in new documents.
+Each future integration stores its own allowlist. For Jira, allowlists are **per type**:
+`integrations.jira.software.export_agents`,
+`integrations.jira.service_desk.export_agents`,
+`integrations.jira.business.export_agents`.
+The `integrations` root never holds an `export_agent` field in new documents.
 
 ---
 

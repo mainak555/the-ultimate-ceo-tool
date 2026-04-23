@@ -43,7 +43,7 @@ See [docs/trello_integration.md](docs/trello_integration.md) for:
 ## Jira Integration
 
 See [docs/jira_integration.md](docs/jira_integration.md) for:
-- Architecture (jira_client → jira_service → jira_views + jira.js + jira_config.js)
+- Architecture (jira_client → jira_service facade + type services + jira_views + jira.js + jira_adapter_factory + jira_config.js)
 - Three independent project types: `software`, `service_desk`, `business`
 - Per-type credentials, per-type export_agents, and per-type export schema
 - Atlassian Document Format (ADF) requirement and how it is handled
@@ -88,3 +88,6 @@ See [docs/agent_teams.md](docs/agent_teams.md) for:
 23. **Nested fieldset indentation must be uniform across all nesting levels**: both L1 (`.form-group--nested`) and L2 (`.form-group--nested-l2`) use `margin-left: $space-md` and `padding-right: $space-sm`. Do not use `$space-lg` or any larger value for L2, and do not add `margin-top` to nested fieldsets — vertical rhythm is provided by the preceding element's `margin-bottom`. Missing `padding-right` causes textarea scrollbars and inputs to clip at the section edge. See `docs/scss_style_guide.md` §"Section Fieldsets (Config Form)" rules 4–6.
 24. **`export_modal_base.js` is the only modal shell**: all export providers call `window.ExportModalBase.open(ctx, adapter)` and implement the adapter interface defined in `.agents/skills/export_popup_base/SKILL.md`. No provider file may build an overlay DOM with `overlay.innerHTML = ...` for the modal wrapper.
 25. **Export modal context must include `projectId`**: the context object passed to `ProviderRegistry.openExportModal()` must always carry `{provider, sessionId, discussionId, secretKey, csrfToken, projectId}`. A missing `projectId` is a defect that must be fixed in `home.js`.
+26. **Jira backend separation is mandatory**: `server/jira_service.py` is the shared facade only. Type-owned logic must live in `server/jira_software_service.py`, `server/jira_service_desk_service.py`, and `server/jira_business_service.py`.
+27. **Jira frontend adapter separation is mandatory**: shared Jira export modal lifecycle logic belongs in `server/static/server/js/jira_adapter_factory.js`; type-owned provider registration belongs only in `jira_software.js`, `jira_service_desk.js`, and `jira_business.js`.
+28. **Jira layering skill is required for Jira refactors**: follow `.agents/skills/jira_layer_separation/SKILL.md` before changing Jira services or Jira export adapters.

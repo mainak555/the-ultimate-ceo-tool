@@ -3,7 +3,7 @@ Jira service layer — credential resolution and orchestration of jira_client ca
 
 Three project sub-types: software, service_desk, business.
 Each type has independent credentials (site_url, email, api_key).
-Export payloads stored as discussions[].exports.jira_<type>.
+Export payloads stored as discussions[].exports.jira.<type>.
 """
 
 from datetime import datetime, timezone
@@ -14,6 +14,9 @@ from bson.errors import InvalidId
 from .db import get_collection, CHAT_SESSIONS_COLLECTION
 from . import services
 from . import jira_client
+from . import jira_software_service
+from . import jira_service_desk_service
+from . import jira_business_service
 
 JIRA_TYPES = ("software", "service_desk", "business")
 
@@ -31,8 +34,8 @@ def _coerce_confidence(value):
 
 
 def _provider_key(type_name):
-    """Return the exports dict key for a given Jira type."""
-    return f"jira_{type_name}"
+    """Return the Jira exports subkey for a given Jira type."""
+    return (type_name or "").strip().lower()
 
 
 # ---------------------------------------------------------------------------
@@ -183,10 +186,13 @@ def fetch_project_spaces(project_id, type_name):
     """Fetch Jira projects for a project type (for config cascade)."""
     site_url, email, api_key = _resolve_project_type_credentials(project_id, type_name)
     if type_name == "service_desk":
-        return jira_client.get_service_desks(site_url, email, api_key)
+        return jira_service_desk_service.fetch_spaces(site_url, email, api_key)
+    if type_name == "software":
+        return jira_software_service.fetch_spaces(site_url, email, api_key)
+    if type_name == "business":
+        return jira_business_service.fetch_spaces(site_url, email, api_key)
     else:
-        jira_type_key = "software" if type_name == "software" else "business"
-        return jira_client.get_projects(site_url, email, api_key, type_key=jira_type_key)
+        raise ValueError(f"Unknown Jira type '{type_name}'.")
 
 
 # ---------------------------------------------------------------------------
@@ -197,10 +203,13 @@ def fetch_session_spaces(session_id, type_name):
     """Fetch Jira projects for a session type (for export modal)."""
     site_url, email, api_key = _resolve_session_type_credentials(session_id, type_name)
     if type_name == "service_desk":
-        return jira_client.get_service_desks(site_url, email, api_key)
+        return jira_service_desk_service.fetch_spaces(site_url, email, api_key)
+    if type_name == "software":
+        return jira_software_service.fetch_spaces(site_url, email, api_key)
+    if type_name == "business":
+        return jira_business_service.fetch_spaces(site_url, email, api_key)
     else:
-        jira_type_key = "software" if type_name == "software" else "business"
-        return jira_client.get_projects(site_url, email, api_key, type_key=jira_type_key)
+        raise ValueError(f"Unknown Jira type '{type_name}'.")
 
 
 # ---------------------------------------------------------------------------
@@ -307,11 +316,19 @@ def normalize_export_items(items, type_name):
             continue
 
         if type_name == "software":
-            normalized.append(_normalize_software_item(item))
+            normalized.append(
+                jira_software_service.normalize_item(item, _normalize_labels, _coerce_confidence)
+            )
         elif type_name == "service_desk":
-            normalized.append(_normalize_service_desk_item(item))
+            normalized.append(
+                jira_service_desk_service.normalize_item(item, _normalize_labels, _coerce_confidence)
+            )
         elif type_name == "business":
-            normalized.append(_normalize_business_item(item))
+            normalized.append(
+                jira_business_service.normalize_item(item, _normalize_labels, _coerce_confidence)
+            )
+        else:
+            raise ValueError(f"Unknown Jira type '{type_name}'.")
 
     return normalized
 
@@ -329,84 +346,13 @@ def _normalize_labels(labels):
     return out
 
 
-def _normalize_software_item(item):
-    summary = str(item.get("summary") or item.get("card_title") or "").strip() or "Untitled"
-    description = str(item.get("description") or item.get("card_description") or "").strip()
-    issue_type = str(item.get("issue_type") or "Story").strip() or "Story"
-    priority = str(item.get("priority") or "").strip()
-    labels = _normalize_labels(item.get("labels"))
-    story_points = item.get("story_points")
-    if story_points is not None:
-        try:
-            story_points = float(story_points)
-        except (TypeError, ValueError):
-            story_points = None
-    components = [str(c).strip() for c in (item.get("components") or []) if str(c).strip()]
-    acceptance_criteria = str(item.get("acceptance_criteria") or "").strip()
-
-    return {
-        "summary": summary,
-        "description": description,
-        "issue_type": issue_type,
-        "priority": priority,
-        "labels": labels,
-        "story_points": story_points,
-        "components": components,
-        "acceptance_criteria": acceptance_criteria,
-        "confidence_score": _coerce_confidence(item.get("confidence_score", 0.0)),
-    }
-
-
-def _normalize_service_desk_item(item):
-    summary = str(item.get("summary") or item.get("card_title") or "").strip() or "Untitled"
-    description = str(item.get("description") or item.get("card_description") or "").strip()
-    request_type = str(item.get("request_type") or "").strip()
-    priority = str(item.get("priority") or "").strip()
-    labels = _normalize_labels(item.get("labels"))
-    impact = str(item.get("impact") or "").strip()
-    urgency = str(item.get("urgency") or "").strip()
-
-    return {
-        "summary": summary,
-        "description": description,
-        "request_type": request_type,
-        "priority": priority,
-        "labels": labels,
-        "impact": impact,
-        "urgency": urgency,
-        "confidence_score": _coerce_confidence(item.get("confidence_score", 0.0)),
-    }
-
-
-def _normalize_business_item(item):
-    summary = str(item.get("summary") or item.get("card_title") or "").strip() or "Untitled"
-    description = str(item.get("description") or item.get("card_description") or "").strip()
-    issue_type = str(item.get("issue_type") or "Task").strip() or "Task"
-    priority = str(item.get("priority") or "").strip()
-    labels = _normalize_labels(item.get("labels"))
-    due_date = str(item.get("due_date") or "").strip()
-    category = str(item.get("category") or "").strip()
-
-    return {
-        "summary": summary,
-        "description": description,
-        "issue_type": issue_type,
-        "priority": priority,
-        "labels": labels,
-        "due_date": due_date,
-        "category": category,
-        "confidence_score": _coerce_confidence(item.get("confidence_score", 0.0)),
-    }
-
-
 # ---------------------------------------------------------------------------
 # Export payload persistence
 # ---------------------------------------------------------------------------
 
 def _build_export_payload(items, type_name, source):
     return {
-        "schema_version": "2026-04-22",
-        "type": type_name,
+        "schema_version": "2026-04-23",
         "updated_at": _utc_iso_now(),
         "exported": False,
         "source": (source or "manual").strip() or "manual",
@@ -416,20 +362,30 @@ def _build_export_payload(items, type_name, source):
 
 def get_saved_export(session_id, discussion_id, type_name):
     """Return persisted Jira export payload for a discussion/type, if any."""
-    return services.get_discussion_export_payload(session_id, discussion_id, _provider_key(type_name))
+    return services.get_discussion_export_payload(
+        session_id,
+        discussion_id,
+        "jira",
+        subkey=_provider_key(type_name),
+    )
 
 
 def save_export(session_id, discussion_id, type_name, items, source="manual"):
     """Persist Jira export payload for a discussion/type and return saved payload."""
     payload = _build_export_payload(items, type_name, source)
-    return services.set_discussion_export_payload(session_id, discussion_id, _provider_key(type_name), payload)
+    return services.set_discussion_export_payload(
+        session_id,
+        discussion_id,
+        "jira",
+        payload,
+        subkey=_provider_key(type_name),
+    )
 
 
 def save_push_result(session_id, discussion_id, type_name, project_key, push_result):
     """Persist push result into existing Jira export payload."""
     payload = get_saved_export(session_id, discussion_id, type_name) or {
-        "schema_version": "2026-04-22",
-        "type": type_name,
+        "schema_version": "2026-04-23",
         "updated_at": _utc_iso_now(),
         "exported": False,
         "source": "manual",
@@ -443,7 +399,11 @@ def save_push_result(session_id, discussion_id, type_name, project_key, push_res
     payload["exported"] = True
     payload["updated_at"] = _utc_iso_now()
     return services.set_discussion_export_payload(
-        session_id, discussion_id, _provider_key(type_name), payload
+        session_id,
+        discussion_id,
+        "jira",
+        payload,
+        subkey=_provider_key(type_name),
     )
 
 
@@ -460,12 +420,11 @@ def run_export_push(session_id, type_name, project_key, items):
     site_url, email, api_key = _resolve_session_type_credentials(session_id, type_name)
 
     if type_name == "software":
-        return jira_client.push_issues_software(site_url, email, api_key, project_key, normalized)
+        return jira_software_service.push_issues(site_url, email, api_key, project_key, normalized)
     elif type_name == "service_desk":
-        # project_key is treated as service_desk_id for service desk pushes
-        return jira_client.push_issues_service_desk(site_url, email, api_key, project_key, normalized)
+        return jira_service_desk_service.push_issues(site_url, email, api_key, project_key, normalized)
     elif type_name == "business":
-        return jira_client.push_issues_business(site_url, email, api_key, project_key, normalized)
+        return jira_business_service.push_issues(site_url, email, api_key, project_key, normalized)
     else:
         raise ValueError(f"Unknown Jira type '{type_name}'.")
 

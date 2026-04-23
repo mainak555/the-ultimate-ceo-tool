@@ -49,7 +49,8 @@ or `provider_registry.js`. Every provider is a self-contained adapter file.
 ## Jira Types Convention
 - Jira registers **three** separate providers: `jira_software`, `jira_service_desk`, `jira_business`.
 - All three share utilities from `window.JiraUtils` (defined in `jira.js`).
-- Each type has its own adapter file with its own element ID prefix.
+- Jira shared modal adapter behavior is centralized in `server/static/server/js/jira_adapter_factory.js`.
+- Each type keeps its own thin wrapper file (`jira_software.js`, `jira_service_desk.js`, `jira_business.js`) with its own element ID prefix and provider registration.
 
 ## Endpoint Contract
 Implement provider endpoints following this shape:

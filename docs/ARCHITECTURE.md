@@ -20,7 +20,10 @@ product-discovery/
 │   ├── trello_views.py  # Trello thin view controllers
 │   ├── trello_urls.py   # Trello URL routing (included under /trello/)
 │   ├── jira_client.py   # Pure Jira REST API client (3 types, ADF wrapper)
-│   ├── jira_service.py  # Jira business logic + credential resolution
+│   ├── jira_service.py  # Jira common facade (credential resolution, shared persistence, dispatch)
+│   ├── jira_software_service.py      # Jira Software type-specific business logic
+│   ├── jira_service_desk_service.py  # Jira Service Desk type-specific business logic
+│   ├── jira_business_service.py      # Jira Business type-specific business logic
 │   ├── jira_views.py    # Jira thin view controllers
 │   ├── jira_urls.py     # Jira URL routing (included under /jira/)
 │   ├── templates/server/
@@ -113,7 +116,11 @@ See [docs/agent_factory.md](agent_factory.md) for the full `agent_models.json` s
 - `server/static/server/js/trello_config.js`: Trello project-configuration behavior only (token generation, workspace/board/list cascade, create board/list modal).
 - `server/static/server/js/trello.js`: Trello export modal for chat sessions only.
 - `server/static/server/js/jira_config.js`: Jira project-configuration behavior only (per-type credential verify, project cascade dropdowns).
-- `server/static/server/js/jira.js`: Jira export modal for chat sessions only — registers three ProviderRegistry providers (`jira_software`, `jira_service_desk`, `jira_business`).
+- `server/static/server/js/jira.js`: shared Jira export helpers only (schemas, editor rendering, API helpers).
+- `server/static/server/js/jira_adapter_factory.js`: shared Jira adapter factory for export modal lifecycle and left-pane behavior.
+- `server/static/server/js/jira_software.js`: Jira Software provider registration wrapper only.
+- `server/static/server/js/jira_service_desk.js`: Jira Service Desk provider registration wrapper only.
+- `server/static/server/js/jira_business.js`: Jira Business provider registration wrapper only.
 - `server/static/server/js/provider_registry.js`: provider capability registry used by shared modules to open export modals and sync provider config without hardcoded provider switches.
 
 When adding new UI behavior, create a dedicated module for a distinct feature surface instead of extending `app.js`.
@@ -134,6 +141,7 @@ Repo-local extension skills live under `.agents/skills/`.
 
 - `.agents/skills/export_popup_base/SKILL.md` — baseline modal structure and lifecycle.
 - `.agents/skills/export_provider_adapter/SKILL.md` — adapter contract for provider endpoints.
+- `.agents/skills/jira_layer_separation/SKILL.md` — mandatory Jira module ownership and split-layer checklist.
 - `.agents/skills/markdown_viewer_reuse/SKILL.md` — shared markdown rendering across Home, export modals, and future providers.
 - `.agents/skills/ui_consistency_guardrails/SKILL.md` — cross-page visual consistency requirements.
 - `.agents/skills/scss_style_consistency/SKILL.md` — token-only SCSS and shared component style consistency requirements.

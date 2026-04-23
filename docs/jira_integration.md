@@ -2,16 +2,23 @@
 
 ## Architecture
 
-The Jira integration uses the same three-file backend split as Trello, plus two dedicated JS modules:
+The Jira integration uses a common facade + per-type services on the backend, and a shared adapter factory + per-type wrappers on the frontend:
 
 | File | Responsibility |
 |------|---------------|
 | `server/jira_client.py` | Pure Jira REST API client — no Django imports |
-| `server/jira_service.py` | Business logic — credential resolution, extraction, push orchestration |
+| `server/jira_service.py` | Common Jira facade — credential resolution, shared persistence, extraction orchestration, type dispatch |
+| `server/jira_software_service.py` | Jira Software type-specific normalization, spaces, and push logic |
+| `server/jira_service_desk_service.py` | Jira Service Desk type-specific normalization, spaces, and push logic |
+| `server/jira_business_service.py` | Jira Business type-specific normalization, spaces, and push logic |
 | `server/jira_views.py` | Django views (thin controllers) — JSON API endpoints |
 | `server/jira_urls.py` | URL routing — included under `/jira/` prefix |
 | `server/static/server/js/jira_config.js` | Config page Jira settings UX — verify credentials, cascade project dropdowns per type |
-| `server/static/server/js/jira.js` | Chat export modal — registers 3 ProviderRegistry providers |
+| `server/static/server/js/jira.js` | Shared Jira export helpers (`window.JiraUtils`) |
+| `server/static/server/js/jira_adapter_factory.js` | Shared Jira export adapter factory (`window.JiraAdapterFactory`) |
+| `server/static/server/js/jira_software.js` | Jira Software ProviderRegistry wrapper |
+| `server/static/server/js/jira_service_desk.js` | Jira Service Desk ProviderRegistry wrapper |
+| `server/static/server/js/jira_business.js` | Jira Business ProviderRegistry wrapper |
 | `server/model_catalog.py` | Export prompt hints per Jira type (`jira_export_prompt_hint(type_name)`) |
 
 Jira modules self-register three provider capabilities via `window.ProviderRegistry`:
@@ -67,6 +74,17 @@ integrations:
 - `_resolve_project_type_credentials(project_id, type_name)` is used by config-page (project-scoped) endpoints.
 - `_resolve_session_type_credentials(session_id, type_name)` is used by export modal (session-scoped) endpoints.
 
+## Service Layer Separation
+
+- `jira_service.py` is the common layer and public facade imported by `jira_views.py`.
+- Type-owned logic must remain in:
+  - `jira_software_service.py`
+  - `jira_service_desk_service.py`
+  - `jira_business_service.py`
+- Type modules must not import `jira_service.py`; the facade delegates to type modules.
+
+This keeps shared behavior (credential resolution, extraction orchestration, payload persistence, discussion reference fetch) separate from type-specific behavior (normalization, spaces selection, push implementation).
+
 ## Authentication
 
 All Jira API calls use HTTP Basic Auth: `base64("email:api_key")` in the `Authorization` header.
@@ -117,8 +135,14 @@ All endpoints require `X-App-Secret-Key` header.
 5. Project cascade dropdown loads via `/jira/<sid>/spaces/<type>/` with the saved default pre-selected.
 6. Right reference pane loads raw markdown from `/jira/<sid>/reference/<did>/`.
 7. "Extract Items" → `POST /jira/<sid>/extract/<did>/<type>/` — runs the LLM extraction agent and populates the left editor workspace.
-8. "Save" → `POST /jira/<sid>/export/<did>/<type>/` — persists the edited payload under `discussions[].exports.jira_<type>`.
+8. "Save" → `POST /jira/<sid>/export/<did>/<type>/` — persists the edited payload under `discussions[].exports.jira.<type>`.
 9. "Export to Jira" → `POST /jira/<sid>/push/<type>/` — creates issues and returns links/warnings.
+
+## Frontend Adapter Separation
+
+- `jira_adapter_factory.js` owns shared export modal adapter behavior.
+- `jira_software.js`, `jira_service_desk.js`, and `jira_business.js` stay thin and only register per-type providers.
+- Shared modules (`home.js`, `provider_registry.js`, `export_modal_base.js`) remain provider-agnostic.
 
 ## Export Field Schemas
 
@@ -195,9 +219,11 @@ Saved payloads are stored on the chat session document under `discussions[].expo
 
 ```json
 {
-  "jira_software":    { "issues": [...], "saved_at": "ISO", "source": "extract|manual" },
-  "jira_service_desk": { "issues": [...], "saved_at": "ISO", "source": "extract|manual" },
-  "jira_business":    { "issues": [...], "saved_at": "ISO", "source": "extract|manual" }
+  "jira": {
+    "software": { "schema_version": "...", "updated_at": "ISO", "exported": false, "source": "extract|manual", "issues": [...] },
+    "service_desk": { "schema_version": "...", "updated_at": "ISO", "exported": false, "source": "extract|manual", "issues": [...] },
+    "business": { "schema_version": "...", "updated_at": "ISO", "exported": false, "source": "extract|manual", "issues": [...] }
+  }
 }
 ```
 
