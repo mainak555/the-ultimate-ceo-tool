@@ -424,6 +424,75 @@ select.input {
   font-family: $font-family;
 }
 
+.agent-card__prompt--markdown {
+  white-space: normal;
+}
+
+.markdown-prose {
+  line-height: 1.6;
+
+  p {
+    margin: 0 0 $space-xs;
+  }
+
+  p:last-child {
+    margin-bottom: 0;
+  }
+
+  ul,
+  ol {
+    margin: 0 0 $space-sm $space-lg;
+    padding: 0;
+  }
+
+  li {
+    margin-bottom: $space-xs;
+  }
+
+  pre {
+    margin: 0 0 $space-sm;
+    padding: $space-sm;
+    background: $color-bg;
+    border: 1px solid $color-border;
+    border-radius: $radius;
+    overflow-x: auto;
+  }
+
+  code {
+    font-family: "SFMono-Regular", Consolas, monospace;
+    font-size: 0.8125rem;
+    background: $color-bg;
+    border: 1px solid $color-border;
+    border-radius: $radius;
+    padding: 1px 4px;
+  }
+
+  pre code {
+    border: none;
+    background: transparent;
+    padding: 0;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: $space-sm 0;
+  }
+
+  th,
+  td {
+    border: 1px solid $color-border;
+    padding: $space-xs $space-sm;
+    text-align: left;
+    vertical-align: top;
+  }
+
+  th {
+    background: $color-bg;
+    font-weight: 600;
+  }
+}
+
 .input--prompt {
   min-height: 18rem;
 }
@@ -455,6 +524,14 @@ select.input {
     margin-bottom: $space-sm;
     color: $color-primary;
   }
+}
+
+.config-readonly__markdown {
+  background: $color-surface;
+  border: 1px solid $color-border;
+  border-left: 3px solid $color-primary;
+  border-radius: $radius;
+  padding: $space-sm $space-md;
 }
 
 .config-readonly__hint {
