@@ -134,6 +134,7 @@ Repo-local extension skills live under `.agents/skills/`.
 
 - `.agents/skills/export_popup_base/SKILL.md` — baseline modal structure and lifecycle.
 - `.agents/skills/export_provider_adapter/SKILL.md` — adapter contract for provider endpoints.
+- `.agents/skills/markdown_viewer_reuse/SKILL.md` — shared markdown rendering across Home, export modals, and future providers.
 - `.agents/skills/ui_consistency_guardrails/SKILL.md` — cross-page visual consistency requirements.
 - `.agents/skills/scss_style_consistency/SKILL.md` — token-only SCSS and shared component style consistency requirements.
 

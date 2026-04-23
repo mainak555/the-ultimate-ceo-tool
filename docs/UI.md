@@ -98,6 +98,13 @@ Canonical styling rules for new SCSS work live in [docs/scss_style_guide.md](scs
 `trello.js` handles (home chat page only):
 - Trello export modal for extracting and pushing chat output to Trello.
 
+Jira export modals (home chat page only) are handled by provider-specific modules:
+- `jira_software.js` — Jira Software export modal.
+- `jira_service_desk.js` — Jira Service Desk export modal.
+- `jira_business.js` — Jira Business export modal.
+
+All three Jira modules share utilities from `jira.js` and register independently with `window.ProviderRegistry`.
+
 Shared markdown rendering for Home and export reference panes must go through `server/static/server/js/markdown_viewer.js`.
 
 `home.js` also handles (home chat page only):
