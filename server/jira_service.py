@@ -212,6 +212,32 @@ def fetch_session_spaces(session_id, type_name):
         raise ValueError(f"Unknown Jira type '{type_name}'.")
 
 
+def fetch_session_project_metadata(session_id, type_name, project_key):
+    """Fetch project metadata used by export editor dropdowns."""
+    project_key = (project_key or "").strip()
+    if not project_key:
+        raise ValueError("'project_key' is required.")
+
+    site_url, email, api_key = _resolve_session_type_credentials(session_id, type_name)
+    if type_name == "software":
+        return jira_software_service.fetch_project_metadata(site_url, email, api_key, project_key)
+    if type_name == "service_desk":
+        return {
+            "issue_types": [],
+            "priorities": [{"id": p, "name": p} for p in jira_client.PRIORITY_VALUES],
+            "sprints": [],
+            "epics": [],
+        }
+    if type_name == "business":
+        return {
+            "issue_types": [{"id": n, "name": n} for n in jira_client.ISSUE_TYPES.get("business", [])],
+            "priorities": [{"id": p, "name": p} for p in jira_client.PRIORITY_VALUES],
+            "sprints": [],
+            "epics": [],
+        }
+    raise ValueError(f"Unknown Jira type '{type_name}'.")
+
+
 # ---------------------------------------------------------------------------
 # Extraction
 # ---------------------------------------------------------------------------

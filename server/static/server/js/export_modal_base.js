@@ -2,7 +2,8 @@
  * export_modal_base.js — Shared shell for all provider export popups.
  *
  * Every provider implements an adapter object with:
- *   label                        String  — display name ("Trello", "Jira Software", …)
+ *   label                        String  — display name ("Trello", "Jira", …)
+ *   pushLabel                    String? — optional Export button label override
  *   renderLeftPane(ctx)          ()=>HTML string for the left 70% editor pane
  *   referenceUrl(ctx)            ()=>URL string or null for right-pane markdown
  *   onOpen(ctx, baseAPI)         lifecycle — called after DOM is built and appended
@@ -146,6 +147,7 @@
     if (existing) existing.remove();
 
     var label    = _esc(adapter.label || "Integration");
+    var pushLabel = _esc(adapter.pushLabel || adapter.label || "Integration");
     var leftPane = typeof adapter.renderLeftPane === "function" ? adapter.renderLeftPane(_ctx) : "";
 
     var overlay = document.createElement("div");
@@ -188,7 +190,7 @@
       + '<div class="export-modal__footer export-modal__footer--wrap">'
       + '<button type="button" class="btn btn--secondary btn--sm" id="export-modal-extract-btn" hidden>Extract Items</button>'
       + '<button type="button" class="btn btn--success btn--sm"   id="export-modal-save-btn">Save</button>'
-      + '<button type="button" class="btn btn--primary btn--sm"   id="export-modal-push-btn" hidden>Export to ' + label + '</button>'
+      + '<button type="button" class="btn btn--primary btn--sm"   id="export-modal-push-btn" hidden>Export to ' + pushLabel + '</button>'
       + '<button type="button" class="btn btn--secondary btn--sm" id="export-modal-cancel-btn">Close</button>'
       + '<span id="export-modal-status" class="form-hint"></span>'
       + '</div>'

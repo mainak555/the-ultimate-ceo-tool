@@ -119,6 +119,28 @@ def jira_session_spaces(request, session_id, type_name):
     return _json_response(spaces)
 
 
+@require_GET
+def jira_session_metadata(request, session_id, type_name):
+    """GET — Return project metadata for export editor dropdowns."""
+    if not _has_valid_secret(request):
+        return _json_error("Unauthorized", 403)
+
+    err = _validate_type(type_name)
+    if err:
+        return err
+
+    project_key = (request.GET.get("project_key") or "").strip()
+    if not project_key:
+        return _json_error("'project_key' is required")
+
+    try:
+        data = jira_service.fetch_session_project_metadata(session_id, type_name, project_key)
+    except ValueError as e:
+        return _json_error(str(e))
+
+    return _json_response(data)
+
+
 @csrf_exempt
 @require_POST
 def jira_extract(request, session_id, discussion_id, type_name):

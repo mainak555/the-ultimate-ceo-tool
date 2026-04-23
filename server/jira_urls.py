@@ -35,6 +35,12 @@ urlpatterns = [
         jira_views.jira_session_spaces,
         name="jira_session_spaces",
     ),
+    # Fetch project-scoped metadata (issue types, priorities, sprints, epics)
+    path(
+        "<str:session_id>/metadata/<str:type_name>/",
+        jira_views.jira_session_metadata,
+        name="jira_session_metadata",
+    ),
     # Extract issues from a discussion message
     path(
         "<str:session_id>/extract/<str:discussion_id>/<str:type_name>/",

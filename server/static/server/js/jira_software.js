@@ -16,7 +16,8 @@
     var adapter = window.JiraAdapterFactory.create({
       type: "software",
       prefix: "jira-sw",
-      label: "Jira Software",
+      label: "Jira",
+      pushLabel: "Jira Software",
       itemLabel: "Issue",
       itemLabelPlural: "Issues",
       destinationLabel: "Project",

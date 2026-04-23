@@ -26,6 +26,11 @@ Preserve a single visual language across Config, Home, and provider export modal
 1. Keep split layout and footer action order consistent with baseline export modal pattern.
 2. Provider-specific accents are additive only; do not alter shared destructive/control semantics.
 3. Preserve clear visual separation between editable workspace and raw reference pane.
+4. Add/create controls in export modal left panes should use shared class `export-modal__context-add-btn` for consistent contextual button color.
+5. Editable item cards in export modals should use token-derived light panel backgrounds (for example `lighten($color-bg, 1.5%)`) with shared border/radius rhythm.
+6. Export popup item headings should use the shared count badge class (`export-modal__count-badge`) rather than provider-specific badge styles.
+7. Jira Software editor classes (`.jira-editor__issues`, `.jira-issue-card*`, `.jira-workspace-section`) must preserve Trello-like spacing rhythm and token usage.
+8. Jira Software issue list scrolling must be implemented on the editor list container (`overflow-y: auto`) with `flex: 1` and `min-height: 0` to avoid clipping and non-scroll states.
 
 ## Review Checklist
 1. Confirm token usage only (no hardcoded hex/rgb/hsl).
@@ -34,3 +39,7 @@ Preserve a single visual language across Config, Home, and provider export modal
 4. Confirm desktop/mobile usability remains intact.
 5. Confirm feature-specific styles are scoped and do not pollute shared layers.
 6. Confirm nested sections have symmetric `padding-left` + `padding-right` (both required — right side prevents scrollbar/control clipping).
+7. Confirm Jira Software destination cascade and issue-card styles remain scoped to Jira classes and do not modify Trello-specific selectors.
+8. Confirm export-popup add/create buttons use `export-modal__context-add-btn` and keep consistent hover/focus color behavior.
+9. Confirm export-popup editable card backgrounds remain token-derived and visually consistent across providers.
+10. Confirm export-popup item heading badges use `export-modal__count-badge` and avoid ad-hoc badge class duplication.

@@ -1669,6 +1669,10 @@ select.input {
 }
 
 .export-modal {
+  $export-context-action-bg: lighten($color-primary, 43%);
+  $export-context-action-border: lighten($color-primary, 28%);
+  $export-context-action-text: darken($color-primary, 12%);
+
   background: $color-bg;
   border-radius: $radius;
   width: 100%;
@@ -1719,6 +1723,54 @@ select.input {
     }
   }
 
+  &__section-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: $space-sm;
+    margin-bottom: $space-xs;
+
+    h4 {
+      margin: 0;
+      display: inline-flex;
+      align-items: center;
+      gap: $space-xs;
+    }
+  }
+
+  &__section-divider {
+    border-top: 1px solid $color-border;
+    margin-bottom: $space-sm;
+  }
+
+  &__count-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 1.45rem;
+    height: 1.45rem;
+    border-radius: $radius;
+    padding: 0 $space-xs;
+    background: lighten($color-primary, 40%);
+    color: darken($color-primary, 14%);
+    font-size: $font-size-sm;
+    font-weight: 700;
+    line-height: 1;
+  }
+
+  &__context-add-btn {
+    background: $export-context-action-bg;
+    border-color: $export-context-action-border;
+    color: $export-context-action-text;
+
+    &:hover,
+    &:focus-visible {
+      background: lighten($color-primary, 38%);
+      border-color: lighten($color-primary, 20%);
+      color: darken($color-primary, 16%);
+    }
+  }
+
   &__footer {
     display: flex;
     align-items: center;
@@ -1730,6 +1782,7 @@ select.input {
   &__token-status {
     &--valid { color: $color-success; font-weight: 600; }
     &--expired { color: $color-error; }
+    &--error { color: $color-error; }
   }
 }
 
@@ -1750,18 +1803,6 @@ select.input {
 
     h4 { margin: 0; }
 
-    #trello-add-card-btn {
-      background: $trello-context-action-bg;
-      border-color: $trello-context-action-border;
-      color: $trello-context-action-text;
-
-      &:hover,
-      &:focus-visible {
-        background: lighten($color-primary, 38%);
-        border-color: lighten($color-primary, 20%);
-        color: darken($color-primary, 16%);
-      }
-    }
   }
 
   &__section-divider {
@@ -1920,6 +1961,63 @@ select.input {
     display: flex;
     flex-direction: column;
     margin-bottom: 0;
+  }
+}
+
+.trello-workbench__pane--editor {
+  .jira-workspace-section {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    margin-bottom: 0;
+  }
+}
+
+.jira-editor__issues {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: $space-xs;
+  display: flex;
+  flex-direction: column;
+  gap: $space-sm;
+}
+
+.jira-issue-card {
+  border: 1px solid darken($color-border, 3%);
+  border-radius: $radius;
+  background: lighten($color-bg, 1.5%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.55);
+  padding: $space-sm;
+  display: flex;
+  flex-direction: column;
+  gap: $space-sm;
+}
+
+.jira-issue-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: $space-sm;
+}
+
+.jira-issue-card__title {
+  font-size: $font-size-base;
+  font-weight: 700;
+  color: $color-text;
+}
+
+.jira-issue-card__field {
+  display: flex;
+  flex-direction: column;
+  gap: $space-xs;
+
+  label {
+    font-size: $font-size-sm;
+    font-weight: 600;
+    color: $color-text-muted;
+    margin: 0;
   }
 }
 
@@ -2114,6 +2212,14 @@ select.input {
     .cascade-select {
       grid-template-columns: 1fr;
     }
+  }
+
+  .jira-issue-card {
+    padding: $space-sm;
+  }
+
+  .jira-issue-card__header {
+    align-items: flex-start;
   }
 }
 

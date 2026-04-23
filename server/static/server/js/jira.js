@@ -61,7 +61,7 @@
   // ---------------------------------------------------------------------------
 
   var SCHEMAS = {
-    software:     ["summary", "description", "issue_type", "priority", "labels", "story_points", "components", "acceptance_criteria", "confidence_score"],
+    software:     ["summary", "description", "issue_type", "priority", "sprint", "epic", "labels", "story_points", "components", "acceptance_criteria", "confidence_score"],
     service_desk: ["summary", "description", "request_type", "priority", "labels", "impact", "urgency", "confidence_score"],
     business:     ["summary", "description", "issue_type", "priority", "labels", "due_date", "category", "confidence_score"],
   };
@@ -72,6 +72,8 @@
     issue_type:           "Issue Type",
     request_type:         "Request Type",
     priority:             "Priority",
+    sprint:               "Sprint",
+    epic:                 "Epic",
     labels:               "Labels",
     story_points:         "Story Points",
     components:           "Components",
@@ -86,8 +88,50 @@
   var TEXTAREA_FIELDS = ["description", "acceptance_criteria", "impact"];
   var ARRAY_FIELDS    = ["labels", "components"];
 
+  var DEFAULT_SELECT_OPTIONS = {
+    software: {
+      issue_type: ["Story", "Bug", "Task", "Epic", "Subtask"],
+      priority: ["Highest", "High", "Medium", "Low", "Lowest"],
+      sprint: [{ value: "", label: "Backlog" }],
+      epic: [{ value: "", label: "None" }],
+    },
+    service_desk: {
+      request_type: ["Service Request", "Incident", "Problem", "Change"],
+      priority: ["Highest", "High", "Medium", "Low", "Lowest"],
+    },
+    business: {
+      issue_type: ["Task", "Milestone", "Sub-task", "Epic"],
+      priority: ["Highest", "High", "Medium", "Low", "Lowest"],
+    },
+  };
+
   function _isTextarea(field) { return TEXTAREA_FIELDS.indexOf(field) !== -1; }
   function _isArray(field)    { return ARRAY_FIELDS.indexOf(field) !== -1; }
+
+  function _normalizeSelectOptions(raw) {
+    if (!Array.isArray(raw)) return [];
+    return raw
+      .map(function (item) {
+        if (item && typeof item === "object") {
+          var value = String(item.value || item.id || item.key || item.name || "");
+          var label = String(item.label || item.name || item.key || item.value || value);
+          if (!label && !value) return null;
+          return { value: value, label: label || value };
+        }
+        var text = String(item || "");
+        return { value: text, label: text };
+      })
+      .filter(Boolean);
+  }
+
+  function getDefaultFieldOptions(typeName) {
+    var src = DEFAULT_SELECT_OPTIONS[typeName] || {};
+    var out = {};
+    Object.keys(src).forEach(function (field) {
+      out[field] = _normalizeSelectOptions(src[field]);
+    });
+    return out;
+  }
 
   // ---------------------------------------------------------------------------
   // Empty issue factory
@@ -108,7 +152,7 @@
   // Render issue editor cards into a container element
   // ---------------------------------------------------------------------------
 
-  function renderEditorIssues(containerId, countId, issues, typeName, isExported) {
+  function renderEditorIssues(containerId, countId, issues, typeName, isExported, fieldOptions) {
     var editorEl = document.getElementById(containerId);
     if (!editorEl) return;
 
@@ -133,7 +177,22 @@
         html += '<div class="jira-issue-card__field">';
         html += '<label>' + esc(label) + '</label>';
 
-        if (_isTextarea(field)) {
+        if (fieldOptions && Array.isArray(fieldOptions[field]) && fieldOptions[field].length) {
+          var options = fieldOptions[field];
+          var valueStr = String(value || "");
+          html += '<select class="input input--sm" data-field="' + field + '"' + disabled + '>';
+          options.forEach(function (opt) {
+            var optValue = String((opt && opt.value) || "");
+            var optLabel = String((opt && opt.label) || optValue);
+            html += '<option value="' + esc(optValue) + '"'
+                  + (optValue === valueStr ? ' selected' : '')
+                  + '>' + esc(optLabel) + '</option>';
+          });
+          if (valueStr && !options.some(function (opt) { return String((opt && opt.value) || "") === valueStr; })) {
+            html += '<option value="' + esc(valueStr) + '" selected>' + esc(valueStr) + '</option>';
+          }
+          html += '</select>';
+        } else if (_isTextarea(field)) {
           html += '<textarea class="input input--sm input--textarea" data-field="' + field + '"'
                 + ' rows="3"' + disabled + '>'
                 + esc(String(value || "")) + '</textarea>';
@@ -214,6 +273,7 @@
     FIELD_LABELS:            FIELD_LABELS,
     TEXTAREA_FIELDS:         TEXTAREA_FIELDS,
     ARRAY_FIELDS:            ARRAY_FIELDS,
+    getDefaultFieldOptions:   getDefaultFieldOptions,
     emptyIssue:              emptyIssue,
     renderEditorIssues:      renderEditorIssues,
     collectIssuesFromEditor: collectIssuesFromEditor,

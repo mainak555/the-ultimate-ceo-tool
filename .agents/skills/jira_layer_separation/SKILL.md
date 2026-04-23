@@ -18,8 +18,14 @@ Keep Jira implementation cleanly separated by type (`software`, `service_desk`, 
 ## Backend Separation Rules
 1. Type modules must not import `jira_service.py`.
 2. Shared helpers (credential resolution, payload persistence, discussion reference reads) stay in `jira_service.py`.
-3. Type-specific behaviors (normalization, spaces fetch flavor, push flavor) stay in type modules.
+3. Type-specific behaviors (normalization, spaces fetch flavor, metadata fetch flavor, push flavor) stay in type modules.
 4. Keep endpoint contract unchanged when refactoring layers.
+
+## Jira Software Metadata Ownership
+1. Session metadata view route lives in `server/jira_views.py`, but calls only the `jira_service` facade.
+2. `server/jira_service.py` owns type dispatch for metadata endpoints (for example `/jira/<session_id>/metadata/<type_name>/`).
+3. Software-specific metadata aggregation (issue types, priorities, sprints, epics) lives in `server/jira_software_service.py`.
+4. Jira REST calls used by metadata live in `server/jira_client.py`; no view-level REST calls.
 
 ## Mandatory Frontend Ownership
 1. Shared Jira export adapter behavior belongs in `server/static/server/js/jira_adapter_factory.js`.
@@ -37,9 +43,14 @@ Keep Jira implementation cleanly separated by type (`software`, `service_desk`, 
    - `jira.js`
    - `jira_adapter_factory.js`
    - type wrapper files
+5. Jira connection-status rendering logic (success/error copy) stays centralized in `jira_adapter_factory.js`; wrapper files provide labels only.
+6. Jira option normalization/deduplication for issue-type/priority rendering stays centralized in `jira_adapter_factory.js` and Jira metadata helpers.
 
 ## Validation Checklist
 1. All Jira flows still work for each type: verify, spaces, extract, save, push.
-2. No circular imports in backend module graph.
-3. No duplicated modal lifecycle logic in per-type JS wrappers.
-4. Shared modules contain no hardcoded Jira type branches outside Jira-owned modules.
+2. Jira Software metadata flow works: project select -> metadata fetch -> dropdown options update.
+3. No circular imports in backend module graph.
+4. No duplicated modal lifecycle logic in per-type JS wrappers.
+5. Shared modules contain no hardcoded Jira type branches outside Jira-owned modules.
+6. Connection row shows `{Jira type label} Connected` on success and a type-scoped error message when credentials/config are missing.
+7. Issue Type/Priority dropdown options are deduplicated by display label (no repeated `Epic`).

@@ -121,6 +121,121 @@ def get_projects(site_url, email, api_key, type_key=None):
     return projects
 
 
+def get_project_issue_types(site_url, email, api_key, project_key):
+    """Return available issue types for a project key."""
+    project_key = (project_key or "").strip()
+    if not project_key:
+        return []
+    return _get_issue_types(site_url, email, api_key, project_key)
+
+
+def get_project_priorities(site_url, email, api_key, project_key=None):
+    """Return priorities available in the Jira instance (project-aware fallback)."""
+    url = f"{_base_url(site_url)}/rest/api/3/priority"
+    resp = requests.get(url, headers=_auth_headers(email, api_key), timeout=15)
+    _check(resp, "get_project_priorities")
+    out = []
+    seen = set()
+    for row in resp.json() or []:
+        name = str(row.get("name") or "").strip()
+        pid = str(row.get("id") or name).strip()
+        if not name:
+            continue
+        key = name.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({"id": pid, "name": name})
+    return out
+
+
+def get_project_sprints(site_url, email, api_key, project_key):
+    """Return sprints for all boards associated with a project key."""
+    project_key = (project_key or "").strip()
+    if not project_key:
+        return []
+
+    headers = _auth_headers(email, api_key)
+    base = _base_url(site_url)
+    boards_url = f"{base}/rest/agile/1.0/board"
+    boards_resp = requests.get(
+        boards_url,
+        headers=headers,
+        params={"projectKeyOrId": project_key, "maxResults": 50},
+        timeout=15,
+    )
+    _check(boards_resp, "get_project_sprints.boards")
+    boards = boards_resp.json().get("values") or []
+
+    sprint_map = {}
+    state_order = {"active": 0, "future": 1, "closed": 2}
+
+    for board in boards:
+        board_id = board.get("id")
+        if not board_id:
+            continue
+        sprints_url = f"{base}/rest/agile/1.0/board/{board_id}/sprint"
+        sprints_resp = requests.get(
+            sprints_url,
+            headers=headers,
+            params={"state": "active,future,closed", "maxResults": 100},
+            timeout=15,
+        )
+        if not sprints_resp.ok:
+            continue
+        for sprint in (sprints_resp.json().get("values") or []):
+            sid = str(sprint.get("id") or "").strip()
+            name = str(sprint.get("name") or "").strip()
+            state = str(sprint.get("state") or "").strip().lower()
+            if not sid or not name:
+                continue
+            if sid in sprint_map:
+                continue
+            sprint_map[sid] = {
+                "id": sid,
+                "name": name,
+                "state": state,
+                "state_rank": state_order.get(state, 99),
+            }
+
+    rows = sorted(
+        sprint_map.values(),
+        key=lambda r: (r.get("state_rank", 99), (r.get("name") or "").lower()),
+    )
+    return [{"id": row["id"], "name": row["name"], "state": row.get("state", "")} for row in rows]
+
+
+def get_project_epics(site_url, email, api_key, project_key):
+    """Return epic issues for a project key."""
+    project_key = (project_key or "").strip()
+    if not project_key:
+        return []
+
+    jql = f'project = "{project_key}" AND issuetype = Epic ORDER BY created DESC'
+    url = f"{_base_url(site_url)}/rest/api/3/search"
+    resp = requests.get(
+        url,
+        headers=_auth_headers(email, api_key),
+        params={"jql": jql, "fields": "summary", "maxResults": 100},
+        timeout=20,
+    )
+    _check(resp, "get_project_epics")
+
+    out = []
+    for issue in resp.json().get("issues") or []:
+        issue_id = str(issue.get("id") or "").strip()
+        key = str(issue.get("key") or "").strip()
+        summary = str(((issue.get("fields") or {}).get("summary") or "")).strip()
+        if not key:
+            continue
+        out.append({
+            "id": issue_id or key,
+            "key": key,
+            "name": summary or key,
+        })
+    return out
+
+
 def get_service_desks(site_url, email, api_key):
     """
     GET /rest/servicedeskapi/servicedesk — list service desk projects.
@@ -195,10 +310,18 @@ def _get_issue_types(site_url, email, api_key, project_key):
     data = resp.json()
     for project in data.get("projects") or []:
         if project.get("key") == project_key:
-            return [
-                {"id": it.get("id", ""), "name": it.get("name", "")}
-                for it in project.get("issuetypes") or []
-            ]
+            out = []
+            seen = set()
+            for it in project.get("issuetypes") or []:
+                name = str(it.get("name") or "").strip()
+                if not name:
+                    continue
+                dedupe_key = name.lower()
+                if dedupe_key in seen:
+                    continue
+                seen.add(dedupe_key)
+                out.append({"id": it.get("id", ""), "name": name})
+            return out
     return []
 
 

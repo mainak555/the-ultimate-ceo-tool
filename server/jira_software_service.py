@@ -8,6 +8,41 @@ def fetch_spaces(site_url, email, api_key):
     return jira_client.get_projects(site_url, email, api_key, type_key="software")
 
 
+def fetch_project_metadata(site_url, email, api_key, project_key):
+    """Return Jira Software project metadata for editor dropdowns."""
+    issue_types = []
+    priorities = []
+    sprints = []
+    epics = []
+
+    try:
+        issue_types = jira_client.get_project_issue_types(site_url, email, api_key, project_key)
+    except ValueError:
+        issue_types = []
+
+    try:
+        priorities = jira_client.get_project_priorities(site_url, email, api_key, project_key)
+    except ValueError:
+        priorities = []
+
+    try:
+        sprints = jira_client.get_project_sprints(site_url, email, api_key, project_key)
+    except ValueError:
+        sprints = []
+
+    try:
+        epics = jira_client.get_project_epics(site_url, email, api_key, project_key)
+    except ValueError:
+        epics = []
+
+    return {
+        "issue_types": issue_types,
+        "priorities": priorities,
+        "sprints": sprints,
+        "epics": epics,
+    }
+
+
 def normalize_item(item, normalize_labels, coerce_confidence):
     """Normalize one Jira Software issue payload."""
     summary = str(item.get("summary") or item.get("card_title") or "").strip() or "Untitled"
@@ -23,12 +58,16 @@ def normalize_item(item, normalize_labels, coerce_confidence):
             story_points = None
     components = [str(c).strip() for c in (item.get("components") or []) if str(c).strip()]
     acceptance_criteria = str(item.get("acceptance_criteria") or "").strip()
+    sprint = str(item.get("sprint") or "").strip()
+    epic = str(item.get("epic") or "").strip()
 
     return {
         "summary": summary,
         "description": description,
         "issue_type": issue_type,
         "priority": priority,
+        "sprint": sprint,
+        "epic": epic,
         "labels": labels,
         "story_points": story_points,
         "components": components,

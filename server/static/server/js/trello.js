@@ -84,6 +84,12 @@
     return (v && v !== "__new__") ? v : "";
   }
 
+  function _syncCardCountBadge(count) {
+    var badge = document.getElementById("trello-card-count");
+    if (!badge) return;
+    badge.textContent = String(Math.max(0, count || 0));
+  }
+
   // ---------------------------------------------------------------------------
   // Card editor render / collect
   // ---------------------------------------------------------------------------
@@ -95,6 +101,8 @@
     if (!_state.cards || !_state.cards.length) {
       _state.cards = [_emptyCard()];
     }
+
+    _syncCardCountBadge((_state.cards || []).length);
 
     var html = "";
     _state.cards.forEach(function (card, idx) {
@@ -234,6 +242,8 @@
         return { title: (card && card.card_title) ? card.card_title : "Untitled", url: "", warnings: [] };
       });
     }
+
+    _syncCardCountBadge(list.length || ((cards && cards.length) || 0));
 
     var html = '<div class="export-preview__success"><strong>Exported cards:</strong><ul>';
     if (!list.length) html += "<li>(no exported cards)</li>";
@@ -621,8 +631,8 @@
       // Card editor
       + '<div class="export-modal__section" id="trello-workspace-section">'
       + '<div class="trello-editor__section-head">'
-      + '<h4>Trello Cards</h4>'
-      + '<button type="button" class="btn btn--sm btn--primary" id="trello-add-card-btn">Add Card</button>'
+      + '<h4>Cards <span class="export-modal__count-badge" id="trello-card-count">0</span></h4>'
+      + '<button type="button" class="btn btn--sm btn--primary export-modal__context-add-btn" id="trello-add-card-btn">Add Card</button>'
       + '</div>'
       + '<div class="trello-editor__section-divider"></div>'
       + '<div id="trello-editor-cards" class="trello-editor__cards"></div>'
