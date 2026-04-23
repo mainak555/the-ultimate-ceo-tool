@@ -197,6 +197,13 @@ a:hover { text-decoration: underline; }
   &:hover { background: darken($color-error, 8%); }
 }
 
+.btn--warning {
+  background: $color-warning-bg;
+  color: $color-text;
+  border-color: $color-warning-bg;
+  &:hover { background: $color-warning-bg-dk; border-color: $color-warning-bg-dk; }
+}
+
 .btn--sm { padding: $space-xs $space-sm; font-size: $font-size-sm; }
 .btn--xs { padding: 2px 6px; font-size: $font-size-sm; line-height: 1; }
 
@@ -1601,15 +1608,15 @@ select.input {
   font-size: 0.86rem;
   font-weight: 600;
   justify-content: center;
-  background: $color-info;
-  border-color: darken($color-info, 6%);
-  color: #fff;
+  background: $color-warning-bg;
+  border-color: $color-warning-bg;
+  color: $color-text;
 
   &:hover,
   &:focus-visible {
-    background: darken($color-info, 6%);
-    border-color: darken($color-info, 10%);
-    color: #fff;
+    background: $color-warning-bg-dk;
+    border-color: $color-warning-bg-dk;
+    color: $color-text;
     outline: none;
   }
 }
