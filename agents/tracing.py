@@ -34,6 +34,14 @@ Env vars
       diagnosing failures without log scraping.
     * ``all`` / ``true`` / ``1``: print every finished span to stderr (very
       noisy — dev-only). Implicitly enabled when ``LOG_LEVEL=DEBUG``.
+- ``OTEL_INSTRUMENT_HTTP`` — Django + outbound ``requests`` auto-instrumentation
+  (app & API spans). Default ``on``; set to ``0``/``false``/``off`` to disable.
+- ``OTEL_INSTRUMENT_PYMONGO`` — pymongo auto-instrumentation (one span per
+  Mongo command — high cardinality). Default ``off``; set to ``1``/``true``
+  to enable when diagnosing query/connection issues.
+- ``OTEL_INSTRUMENT_AGENTS`` — AutoGen event-log → span bridge (LLM calls,
+  prompts, tool invocations). Default ``on``; set to ``0``/``false`` to
+  silence the LLM/agent layer.
 
 Boundaries
 ----------
@@ -449,13 +457,65 @@ def _build_console_span_processor() -> Any | None:
     return SimpleSpanProcessor(exporter)
 
 
+def _flag_enabled(env_var: str, *, default: bool) -> bool:
+    """Parse a yes/no env var with the given default.
+
+    Truthy: ``1``, ``true``, ``yes``, ``on``.
+    Falsy:  ``0``, ``false``, ``no``, ``off``.
+    Empty / missing / unrecognized -> ``default``.
+    """
+    raw = os.getenv(env_var, "").strip().lower()
+    if not raw:
+        return default
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
+def _http_tracing_enabled() -> bool:
+    """Django + outbound requests auto-instrumentation (default on)."""
+    return _flag_enabled("OTEL_INSTRUMENT_HTTP", default=True)
+
+
+def _pymongo_tracing_enabled() -> bool:
+    """Pymongo auto-instrumentation (default off).
+
+    Mongo spans are emitted per command and inflate trace volume. Enable
+    explicitly via ``OTEL_INSTRUMENT_PYMONGO=1`` when diagnosing query or
+    connection issues.
+    """
+    return _flag_enabled("OTEL_INSTRUMENT_PYMONGO", default=False)
+
+
+def _agents_tracing_enabled() -> bool:
+    """AutoGen event-log -> span bridge (default on).
+
+    Disable with ``OTEL_INSTRUMENT_AGENTS=0`` to silence LLM call,
+    prompt, and tool spans without touching the rest of the trace.
+    """
+    return _flag_enabled("OTEL_INSTRUMENT_AGENTS", default=True)
+
+
 def _wire_auto_instrumentation() -> None:
-    """Enable Django + requests + pymongo OpenTelemetry auto-instrumentation."""
-    for module_path, class_name, package in (
-        ("opentelemetry.instrumentation.django", "DjangoInstrumentor", "django"),
-        ("opentelemetry.instrumentation.requests", "RequestsInstrumentor", "requests"),
-        ("opentelemetry.instrumentation.pymongo", "PymongoInstrumentor", "pymongo"),
-    ):
+    """Enable OpenTelemetry auto-instrumentation per category toggles.
+
+    - HTTP    (Django + requests): ``OTEL_INSTRUMENT_HTTP``    (default on)
+    - PYMONGO (pymongo):           ``OTEL_INSTRUMENT_PYMONGO`` (default off)
+    """
+    targets: list[tuple[str, str, str]] = []
+    if _http_tracing_enabled():
+        targets.extend([
+            ("opentelemetry.instrumentation.django", "DjangoInstrumentor", "django"),
+            ("opentelemetry.instrumentation.requests", "RequestsInstrumentor", "requests"),
+        ])
+    if _pymongo_tracing_enabled():
+        targets.append(
+            ("opentelemetry.instrumentation.pymongo", "PymongoInstrumentor", "pymongo")
+        )
+
+    for module_path, class_name, package in targets:
         try:
             module = __import__(module_path, fromlist=[class_name])
             getattr(module, class_name)().instrument()
@@ -501,7 +561,8 @@ def init_tracing() -> bool:
             _tracer_provider = provider
 
             _wire_auto_instrumentation()
-            _install_autogen_event_bridge()
+            if _agents_tracing_enabled():
+                _install_autogen_event_bridge()
 
             logger.info(
                 "tracing.enabled",
@@ -509,6 +570,9 @@ def init_tracing() -> bool:
                     "service_name": resource.attributes.get("service.name"),
                     "max_payload_bytes": _max_payload_bytes(),
                     "console_span_mode": _resolve_console_span_mode(),
+                    "instrument_http": _http_tracing_enabled(),
+                    "instrument_pymongo": _pymongo_tracing_enabled(),
+                    "instrument_agents": _agents_tracing_enabled(),
                 },
             )
         except Exception:

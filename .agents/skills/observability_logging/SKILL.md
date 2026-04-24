@@ -73,7 +73,23 @@ non-2xx.
 ## Tracing Architecture
 1. `agents/tracing.py` owns all OpenTelemetry wiring. Nothing else imports OpenTelemetry directly except for `trace.get_current_span()` reads in HTTP client `_check` helpers.
 2. `init_tracing()` runs exactly once from `server/apps.py` `ServerConfig.ready()`. Idempotent across reloads. Never raises on tracing-setup failure — logs `EXCEPTION` and continues.
-3. Auto-instrumentation packages — `opentelemetry-instrumentation-django`, `-requests`, `-pymongo` — are wired inside `init_tracing()` via `_wire_auto_instrumentation()`. Each call is wrapped in try/except → `tracing.instrument_failed` exception log.
+3. Auto-instrumentation packages — `opentelemetry-instrumentation-django`, `-requests`, `-pymongo` — are wired inside `init_tracing()` via `_wire_auto_instrumentation()`. Each call is wrapped in try/except → `tracing.instrument_failed` exception log. Each package is gated by an env-var category toggle (see below).
+
+## Instrumentation Category Toggles
+Each span-producing layer is gated by an env var so operators can dial verbosity per concern without code changes. All toggles accept `1`/`true`/`yes`/`on` and `0`/`false`/`no`/`off`. Active values are echoed on the `tracing.enabled` startup log line (`instrument_http`, `instrument_pymongo`, `instrument_agents`).
+
+| Category | Env var | Default | Source |
+|---|---|---|---|
+| HTTP / API (Django + outbound `requests`) | `OTEL_INSTRUMENT_HTTP` | `on` | `_http_tracing_enabled()` in `agents/tracing.py` — gates `DjangoInstrumentor` + `RequestsInstrumentor`. |
+| Database (pymongo) | `OTEL_INSTRUMENT_PYMONGO` | `off` | `_pymongo_tracing_enabled()` — one span per Mongo command, off by default to keep trace volume sane. |
+| LLM / Agents (AutoGen event bridge) | `OTEL_INSTRUMENT_AGENTS` | `on` | `_agents_tracing_enabled()` — gates `_install_autogen_event_bridge()`. When off, the bridge never attaches and LLM/tool spans are not produced. |
+| Service mutations (`@traced_function`) | *(always on)* | n/a | Explicit per-callsite spans — cheap, namespaced, never gated. |
+
+Rules for new I/O code:
+1. Do **not** add a new env-var toggle for a new manual span. Use `@traced_function("<layer>.<area>.<op>")` and let the always-on category cover it.
+2. Do **not** add a fourth auto-instrumentation package without also adding a category env var following the `_flag_enabled(name, default=...)` pattern in `agents/tracing.py`.
+3. Never assume a span exists — callers can disable the AGENTS bridge or HTTP layer. Code that reads `trace.get_current_span()` must tolerate the no-recording sentinel.
+
 4. AutoGen event-log → span bridge: `AutoGenEventSpanBridgeHandler` converts INFO records on `autogen_*.events` loggers into spans with canonical `input.value`/`output.value` attributes. The bridge owns those loggers — it strips the shared `console` handler and never mutates handler levels (mutating the shared handler would silence other namespaces).
 
 ## Pluggable OTLP Backend
@@ -123,7 +139,7 @@ Don't:
 1. `grep -RnE "print\(" server/ agents/` returns zero matches (excluding tests / docs).
 2. `grep -RnE "logger\.info\(\"(trello|jira)\.api\.call\"" server/` returns zero matches (per-call HTTP success INFO is now console-suppressed and replaced by spans).
 3. `grep -Rn "AgentLlmFilteringExporter\|_is_agent_llm_span" agents/ server/` returns zero matches.
-4. Every new I/O function emits at least one ERROR/EXCEPTION event on failure and is wrapped in a span (manual via `traced_function` or auto-instrumented via Django/requests/pymongo).
+4. Every new I/O function emits at least one ERROR/EXCEPTION event on failure and is wrapped in a span (manual via `traced_function` or auto-instrumented via the gated HTTP/Mongo categories).
 5. `grep -nE "API_KEY|SECRET|password|Authorization|Bearer" <git-diff-files>` shows no occurrences inside log message strings.
 6. `python manage.py runserver` starts cleanly; the first HTTP request emits a JSON log line containing `request_id`. With `LANGFUSE_*` set, console shows `tracing.enabled` (with `max_payload_bytes`); without, shows `tracing.disabled`.
 7. New modules use `logging.getLogger(__name__)` — no string literals.

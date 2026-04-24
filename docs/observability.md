@@ -37,10 +37,13 @@ traces serve different purposes and are intentionally split:
 - `init_tracing()` runs exactly once from `server/apps.py`
   `ServerConfig.ready()`. Idempotent. Never raises.
 - Auto-instrumentation: `opentelemetry-instrumentation-django`,
-  `-requests`, `-pymongo`. Wired inside `_wire_auto_instrumentation()`.
+  `-requests`, `-pymongo`. Wired inside `_wire_auto_instrumentation()`,
+  each category gated by an env var (see
+  [Instrumentation Categories](#instrumentation-categories) below).
 - AutoGen event-log → span bridge: `AutoGenEventSpanBridgeHandler` converts
   INFO records on `autogen_core.events` / `autogen_agentchat.events` into
-  spans with canonical `input.value` / `output.value` payloads.
+  spans with canonical `input.value` / `output.value` payloads. Gated by
+  `OTEL_INSTRUMENT_AGENTS` (default on).
 
 ---
 
@@ -55,11 +58,53 @@ traces serve different purposes and are intentionally split:
 | `OTEL_SERVICE_NAME` | Service name attached to all spans | `product-discovery` |
 | `OTEL_MAX_PAYLOAD_BYTES` | Per-attribute payload truncation cap (bytes) | `32768` |
 | `OTEL_CONSOLE_EXPORTER` | Console span output mode (`off` / `error` / `all`) | `off` |
+| `OTEL_INSTRUMENT_HTTP` | Django + outbound `requests` auto-instrumentation. Disable when only deeper layers matter. | `on` |
+| `OTEL_INSTRUMENT_PYMONGO` | pymongo auto-instrumentation (one span per Mongo command — high cardinality). Enable for query/connection diagnostics. | `off` |
+| `OTEL_INSTRUMENT_AGENTS` | AutoGen event-log → span bridge (LLM calls, prompts, tool invocations). Disable to silence the LLM/agent layer entirely. | `on` |
 | `OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT` | OTel SDK attribute length limit. Must be raised when raising `OTEL_MAX_PAYLOAD_BYTES` above 32 KB. | *(SDK default 32768)* |
 
 Missing `LANGFUSE_*` keys → `tracing.disabled` info log, no exporter, no
 errors. Every helper (`traced_block`, `traced_function`,
 `set_payload_attribute`) becomes a safe no-op.
+
+The active values for all toggles are recorded on the startup
+`tracing.enabled` log line (`instrument_http`, `instrument_pymongo`,
+`instrument_agents`, `console_span_mode`, `max_payload_bytes`) so wiring
+can be confirmed at a glance.
+
+---
+
+## Instrumentation Categories
+
+Each span-producing layer is gated by an env var so operators can dial
+verbosity per concern without code changes. All toggles accept
+`1`/`true`/`yes`/`on` and `0`/`false`/`no`/`off` (case-insensitive).
+
+| Category | Env var | Default | What it produces | When to flip |
+|---|---|---|---|---|
+| **HTTP / API** (Django + outbound `requests`) | `OTEL_INSTRUMENT_HTTP` | `on` | One span per Django request; one span per outbound HTTP call (Trello, Jira, Langfuse export, etc.) | Disable in narrow load tests where you only care about agent latency. |
+| **Database** (pymongo) | `OTEL_INSTRUMENT_PYMONGO` | `off` | One span per Mongo command (`find`, `update_one`, etc.) | Enable when diagnosing slow queries, connection storms, or unexpected reads. Off by default because trace volume balloons quickly. |
+| **LLM / Agents** (AutoGen event bridge) | `OTEL_INSTRUMENT_AGENTS` | `on` | `autogen.event.LLMCall`, `autogen.event.ToolCall`, prompts, model responses, token usage | Disable when running purely-deterministic flows (Trello/Jira pushes without an agent run) and you want to suppress LLM payloads from the OTLP backend. |
+| **Service mutations** (manual `@traced_function`) | *(none — always on)* | n/a | `service.project.create`, `service.chat.create`, `service.trello.export.push`, `service.jira.<type>.push_issues`, etc. | Always emitted because each callsite is explicitly chosen by the developer; spans are cheap and namespaced. |
+
+### Common combinations
+
+```bash
+# Production default — quiet console, full traces to OTLP, no Mongo noise
+LOG_LEVEL=INFO OTEL_CONSOLE_EXPORTER=off
+
+# Production diagnostics — dump only failures with stacktrace
+LOG_LEVEL=INFO OTEL_CONSOLE_EXPORTER=error
+
+# Mongo deep dive
+OTEL_INSTRUMENT_PYMONGO=1
+
+# Reproduce an agent issue without HTTP/Mongo noise in the OTLP backend
+OTEL_INSTRUMENT_HTTP=0 OTEL_INSTRUMENT_PYMONGO=0 OTEL_INSTRUMENT_AGENTS=1
+
+# Local firehose — every span on console
+LOG_LEVEL=DEBUG
+```
 
 ---
 
@@ -67,11 +112,11 @@ errors. Every helper (`traced_block`, `traced_function`,
 
 | Layer | Mechanism | Span Examples |
 |---|---|---|
-| Django requests | Auto (`DjangoInstrumentor`) | `GET /chat/sessions/<id>/` |
-| Outbound HTTP (Trello, Jira) | Auto (`RequestsInstrumentor`) + enrichment in `_check()` | `HTTP POST` with `trello.action` / `jira.action`, `http.url` (redacted), `http.status_code`, `input.value`, `output.value` |
-| MongoDB ops | Auto (`PymongoInstrumentor`) | `mongo.find`, `mongo.insert_one` |
-| Service-layer mutations | Manual `@traced_function` | `service.project.create`, `service.chat.create`, `service.trello.export.push`, `service.jira.<type>.push_issues` |
-| AutoGen agent runs | Event-log bridge | `autogen.event.LLMCall`, `autogen.event.ToolCall` with full payloads |
+| Django requests | Auto (`DjangoInstrumentor`) — gated by `OTEL_INSTRUMENT_HTTP` | `GET /chat/sessions/<id>/` |
+| Outbound HTTP (Trello, Jira) | Auto (`RequestsInstrumentor`) + enrichment in `_check()` — gated by `OTEL_INSTRUMENT_HTTP` | `HTTP POST` with `trello.action` / `jira.action`, `http.url` (redacted), `http.status_code`, `input.value`, `output.value` |
+| MongoDB ops | Auto (`PymongoInstrumentor`) — gated by `OTEL_INSTRUMENT_PYMONGO` (default off) | `mongo.find`, `mongo.insert_one` |
+| Service-layer mutations | Manual `@traced_function` (always on) | `service.project.create`, `service.chat.create`, `service.trello.export.push`, `service.jira.<type>.push_issues` |
+| AutoGen agent runs | Event-log bridge — gated by `OTEL_INSTRUMENT_AGENTS` | `autogen.event.LLMCall`, `autogen.event.ToolCall` with full payloads |
 
 ---
 

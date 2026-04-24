@@ -64,6 +64,9 @@ The container runs `uvicorn` (ASGI) by default, which is required for SSE stream
 | `OTEL_SERVICE_NAME` | Service name attached to all spans | `product-discovery` |
 | `OTEL_MAX_PAYLOAD_BYTES` | Per-attribute span payload truncation cap (bytes) | `32768` |
 | `OTEL_CONSOLE_EXPORTER` | Console span output mode (`off` / `error` / `all`). See [docs/observability.md](docs/observability.md). | `off` |
+| `OTEL_INSTRUMENT_HTTP` | Django + outbound `requests` auto-instrumentation (app/API spans). | `on` |
+| `OTEL_INSTRUMENT_PYMONGO` | Pymongo auto-instrumentation (one span per Mongo command — high cardinality). Enable for query/connection diagnostics. | `off` |
+| `OTEL_INSTRUMENT_AGENTS` | AutoGen event-log → span bridge (LLM calls, prompts, tool spans). | `on` |
 | `OPENAI_API_KEY` | API key for direct OpenAI models | *(required for `openai` models)* |
 | `OPENAI_API_URL` | Endpoint fallback for `openai` models when `endpoint` is omitted in `agent_models.json` | *(optional)* |
 | `ANTHROPIC_API_KEY` | API key for direct Anthropic models | *(required for `anthropic` models)* |
@@ -120,6 +123,25 @@ are also written to stderr (they always go to the OTLP backend regardless):
 
 The active mode is recorded on the startup `tracing.enabled` log line as
 `console_span_mode`, so you can confirm the wiring.
+
+### Instrumentation categories (per-layer toggles)
+
+Each span-producing layer has its own env-var switch. All accept
+`1`/`true`/`yes`/`on` and `0`/`false`/`no`/`off`. Active values are echoed
+on the `tracing.enabled` startup log line.
+
+| Category | Env var | Default | Produces |
+|---|---|---|---|
+| HTTP / API (Django + `requests`) | `OTEL_INSTRUMENT_HTTP` | `on` | One span per Django request and per outbound HTTP call (Trello, Jira). |
+| Database (pymongo) | `OTEL_INSTRUMENT_PYMONGO` | `off` | One span per Mongo command. Off by default — enable for DB diagnostics. |
+| LLM / Agents (AutoGen bridge) | `OTEL_INSTRUMENT_AGENTS` | `on` | LLM calls, prompts, model responses, tool invocations, token usage. |
+| Service mutations (`@traced_function`) | *(always on)* | n/a | Explicit service-layer spans (`service.project.create`, `service.jira.<type>.push_issues`, …). |
+
+Useful combos:
+
+- Mongo deep dive: `OTEL_INSTRUMENT_PYMONGO=1`
+- Silence LLM payloads (e.g. PII review): `OTEL_INSTRUMENT_AGENTS=0`
+- Pure-agent latency profiling, no HTTP/Mongo noise: `OTEL_INSTRUMENT_HTTP=0 OTEL_INSTRUMENT_PYMONGO=0`
 
 Full architecture, env vars, span payload contract, redaction rules,
 backend-swap pattern, and validation checklist are in
