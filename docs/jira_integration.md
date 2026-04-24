@@ -144,6 +144,30 @@ All endpoints require `X-App-Secret-Key` header.
 - `jira_software.js`, `jira_service_desk.js`, and `jira_business.js` stay thin and only register per-type providers.
 - Shared modules (`home.js`, `provider_registry.js`, `export_modal_base.js`) remain provider-agnostic.
 
+## Jira Software Hierarchical Export
+
+Jira Software issues are nested. The export modal renders an accordion tree, the payload carries parent linkage via `temp_id` / `parent_temp_id`, and the push walks breadth-first so parents always exist before their children. The shared contract — including duplicate-id defense, cascade delete, BFS push, and parent-failure recovery — lives in [`.agents/skills/hierarchical_export_items/SKILL.md`](../.agents/skills/hierarchical_export_items/SKILL.md). Any new export provider whose items can nest must follow that skill.
+
+### Modal cascade
+The left pane shows a two-column cascade: **Project** and **Sprint**. The Sprint dropdown always exposes a `Backlog` option whose value is `""`. Changing either selector cascades to every issue card; per-card overrides remain editable afterwards.
+
+> The Epic dropdown that previously sat on the modal has been removed. Parent linkage is expressed in the issue tree (via `parent_temp_id`), not via a global Epic selector.
+
+### Push behavior (`push_issues_software`)
+
+1. Group items by `parent_temp_id`; identify roots (`parent_temp_id` null or referencing an unknown id).
+2. BFS from roots, populating `temp_to_key` after each successful create.
+3. For each child, set `fields.parent = {"key": temp_to_key[parent_temp_id]}`. On a `400` mentioning `parent` or `customfield`, retry once with `customfield_10014` (Epic Link) for company-managed-project compatibility.
+4. If a child's parent failed to create, append a warning (`Parent '<id>' was not created; this issue will be created as a root.`) and proceed without a parent reference. Descendants of a failed root are skipped.
+5. Result entries echo `temp_id` so the client can correlate.
+
+### Sprint assignment
+
+- `sprint == ""` → **Backlog**. Skip the Agile API call entirely; Jira places new issues in the backlog by default.
+- `sprint` non-empty and numeric → `POST /rest/agile/1.0/sprint/{sprintId}/issue` with `{"issues": [issue_key]}` after the issue is created.
+- Issue types `Epic` and `Sub-task` are **non-sprintable**; the Agile call is skipped with a warning.
+- Sprint API failures are recorded as per-issue warnings, never as a hard batch failure.
+
 ## Export Field Schemas
 
 Field schemas are defined in `server/model_catalog.py` and used by extraction prompts.
@@ -152,15 +176,20 @@ Field schemas are defined in `server/model_catalog.py` and used by extraction pr
 
 | Field | Notes |
 |-------|-------|
+| `temp_id` | Client-stable id used to wire parent / child relations within the batch. Auto-generated if missing. Never sent to Jira. |
+| `parent_temp_id` | `temp_id` of the parent item, or `null` for roots. Drives `fields.parent` at push time. |
 | `summary` | Required; issue title |
 | `description` | Plain text; wrapped in ADF by client |
-| `issue_type` | Story \| Bug \| Task \| Epic \| Subtask |
+| `issue_type` | Epic \| Feature \| Story \| Task \| Sub-task \| Bug |
 | `priority` | Highest \| High \| Medium \| Low \| Lowest |
+| `sprint` | Sprint id (string) or `""` for Backlog. Empty value skips the Agile API call. |
 | `labels` | List of strings |
 | `story_points` | Numeric; omitted if null |
 | `components` | List of component names |
 | `acceptance_criteria` | Plain text |
 | `confidence_score` | 0.0–1.0 |
+
+> Hierarchy is governed by the shared skill `.agents/skills/hierarchical_export_items/SKILL.md`. **Do not** add a `depth_level` field — depth is derived from the `parent_temp_id` chain.
 
 ### Service Desk (`jira_service_desk`)
 

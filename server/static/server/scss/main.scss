@@ -2098,6 +2098,80 @@ select.input {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Hierarchical accordion (Jira Software). Pattern is shared — see
+// .agents/skills/hierarchical_export_items/SKILL.md before reusing.
+// Token-only colors / spacing.
+// ---------------------------------------------------------------------------
+
+.jira-issue-card__caret {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  color: $color-text-muted;
+  font-size: $font-size-base;
+  line-height: 1;
+  padding: 0 $space-xs;
+  cursor: pointer;
+  border-radius: $radius;
+
+  &:hover,
+  &:focus {
+    color: $color-text;
+    background: lighten($color-bg, 0.5%);
+    outline: none;
+  }
+}
+
+.jira-issue-card__type-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 $space-xs;
+  border: 1px solid $color-border;
+  border-radius: $radius;
+  background: $color-surface;
+  color: $color-text-muted;
+  font-size: $font-size-sm;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.jira-issue-card__child-count {
+  margin-left: $space-xs;
+}
+
+.jira-issue-card__header-spacer {
+  flex: 1;
+}
+
+.jira-issue-card--collapsed > .jira-issue-card__body,
+.jira-issue-card--collapsed > .jira-issue-card__children {
+  display: none;
+}
+
+.jira-issue-card__children {
+  margin-top: $space-sm;
+  padding-left: $space-md;
+  border-left: 2px solid $color-border;
+  display: flex;
+  flex-direction: column;
+  gap: $space-sm;
+}
+
+// Depth-based subtle tinting — keeps the tree readable without
+// introducing hardcoded colors.
+.jira-issue-card--depth-1 {
+  background: lighten($color-bg, 0.5%);
+}
+.jira-issue-card--depth-2 {
+  background: $color-surface;
+}
+.jira-issue-card--depth-3,
+.jira-issue-card--depth-4 {
+  background: lighten($color-bg, 1%);
+}
+
 .trello-workbench__pane--reference {
   min-width: 0;
   min-height: 0;
@@ -2297,6 +2371,10 @@ select.input {
 
   .jira-issue-card__header {
     align-items: flex-start;
+  }
+
+  .jira-issue-card__children {
+    padding-left: $space-sm;
   }
 }
 

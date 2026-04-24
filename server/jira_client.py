@@ -344,90 +344,337 @@ def _resolve_issue_type_id(site_url, email, api_key, project_key, issue_type_nam
 # Push — Software
 # ---------------------------------------------------------------------------
 
+# Issue types that cannot receive a Sprint assignment via the Agile API.
+# Epics live above sprints; sub-tasks inherit from their parent.
+_NON_SPRINTABLE_TYPES = {"epic", "sub-task", "subtask"}
+
+# Aliases used when the extracted issue_type does not exist in the
+# destination project's issue type scheme. Each value is a list of
+# fallbacks tried in order against the project's available types.
+_ISSUE_TYPE_ALIASES = {
+    "feature": ["feature", "story", "task"],
+    "story": ["story", "task"],
+    "task": ["task", "story"],
+    "bug": ["bug", "defect", "task"],
+    "epic": ["epic"],
+    "sub-task": ["sub-task", "subtask"],
+    "subtask": ["subtask", "sub-task"],
+}
+
+
+def _build_type_resolver(project_types):
+    """Return a callable that maps an issue_type_name (any casing/alias)
+    to the EXACT name as defined in the destination project's issue type
+    scheme, or None if no candidate matches.
+    """
+    available = {t["name"].lower(): t["name"] for t in (project_types or []) if t.get("name")}
+
+    def resolve(name):
+        key = (name or "").strip().lower()
+        if not key:
+            return None
+        if key in available:
+            return available[key]
+        for alias in _ISSUE_TYPE_ALIASES.get(key, []):
+            if alias in available:
+                return available[alias]
+        # As a last resort, try the first available type so the create
+        # does not fail solely because of a missing custom type name.
+        if available:
+            return next(iter(available.values()))
+        return None
+
+    return resolve
+
+
+def _build_software_fields(item, project_key, parent_key, resolved_type_name, warnings):
+    """Compose the Jira REST `fields` payload for a Software issue."""
+    summary = str(item.get("summary") or item.get("card_title") or "Untitled").strip() or "Untitled"
+    description = str(item.get("description") or item.get("card_description") or "").strip()
+    issue_type_name = resolved_type_name or "Task"
+    priority = str(item.get("priority") or "").strip()
+    labels = [str(lbl).strip() for lbl in (item.get("labels") or []) if str(lbl).strip()]
+    story_points = item.get("story_points")
+    components = [str(c).strip() for c in (item.get("components") or []) if str(c).strip()]
+    acceptance_criteria = str(item.get("acceptance_criteria") or "").strip()
+
+    fields = {
+        "project": {"key": project_key},
+        "summary": summary,
+        "description": _adf_doc(description),
+        "issuetype": {"name": issue_type_name},
+    }
+
+    if priority:
+        fields["priority"] = {"name": priority}
+
+    if labels:
+        fields["labels"] = labels
+
+    if components:
+        fields["components"] = [{"name": c} for c in components]
+
+    if story_points is not None:
+        try:
+            sp = float(story_points)
+            fields["story_points"] = sp
+            # Also try the standard story points custom field name
+            fields["customfield_10016"] = sp
+        except (TypeError, ValueError):
+            warnings.append(f"Invalid story_points value: {story_points}")
+
+    if acceptance_criteria:
+        description_text = (
+            description + "\n\nAcceptance Criteria:\n" + acceptance_criteria
+            if description
+            else "Acceptance Criteria:\n" + acceptance_criteria
+        )
+        fields["description"] = _adf_doc(description_text)
+
+    if parent_key:
+        # Jira Cloud team-managed projects accept `fields.parent` for the
+        # full hierarchy (Epic -> Story -> Sub-task). Company-managed
+        # projects need the Epic Link customfield for Story->Epic — we
+        # cascade through fallbacks in `_create_software_issue`.
+        fields["parent"] = {"key": parent_key}
+
+    return fields, summary, issue_type_name
+
+
+def _format_jira_error(resp):
+    """Best-effort extraction of a human-readable error from a Jira response."""
+    try:
+        body = resp.json()
+        msgs = " ".join(body.get("errorMessages") or [])
+        details = "; ".join(f"{k}: {v}" for k, v in (body.get("errors") or {}).items())
+        combined = (msgs + " " + details).strip()
+        if combined:
+            return combined
+    except Exception:
+        pass
+    return (resp.text or "")[:300] or f"HTTP {resp.status_code}"
+
+
+def _create_software_issue(base, headers, fields, parent_key):
+    """POST /rest/api/3/issue with progressive parent-link fallbacks.
+
+    Strategy when ``parent_key`` is set and the first attempt returns 400:
+        1. ``fields.parent``         (team-managed projects, Sub-task in classic)
+        2. ``customfield_10014``     (classic Story -> Epic via Epic Link)
+        3. no parent at all          (issue is created un-linked + warning)
+
+    Returns ``(response, parent_method, attempts)`` where ``parent_method``
+    is one of ``"parent"``, ``"epic_link"``, ``"none"``, or ``""`` (no
+    parent attempted).
+    """
+    url = f"{base}/rest/api/3/issue"
+    resp = requests.post(url, headers=headers, json={"fields": fields}, timeout=20)
+    attempts = [("parent" if parent_key else "", resp.status_code)]
+
+    if resp.ok:
+        return resp, ("parent" if parent_key else ""), attempts
+    if not parent_key:
+        return resp, "", attempts
+
+    # Only retry on 400 — auth / project / type errors won't be helped by
+    # changing the parent linkage strategy.
+    if resp.status_code != 400:
+        return resp, "parent", attempts
+
+    # Attempt 2: Epic Link customfield (classic Story->Epic).
+    retry_fields = {k: v for k, v in fields.items() if k != "parent"}
+    retry_fields["customfield_10014"] = parent_key
+    resp2 = requests.post(url, headers=headers, json={"fields": retry_fields}, timeout=20)
+    attempts.append(("epic_link", resp2.status_code))
+    if resp2.ok:
+        return resp2, "epic_link", attempts
+    if resp2.status_code != 400:
+        return resp2, "epic_link", attempts
+
+    # Attempt 3: drop the parent linkage entirely so the issue is at
+    # least created. The caller appends a warning describing this.
+    bare_fields = {k: v for k, v in fields.items() if k not in ("parent", "customfield_10014")}
+    resp3 = requests.post(url, headers=headers, json={"fields": bare_fields}, timeout=20)
+    attempts.append(("none", resp3.status_code))
+    if resp3.ok:
+        return resp3, "none", attempts
+
+    # All three attempts failed — return the most recent (unlinked) error
+    # so the user sees the cleanest message.
+    return resp3, "none", attempts
+
+
+def _assign_issue_to_sprint(base, headers, sprint_value, issue_key):
+    """POST /rest/agile/1.0/sprint/{sprintId}/issue. Returns warning string
+    on failure, otherwise empty string."""
+    sprint_id = str(sprint_value or "").strip()
+    if not sprint_id or not sprint_id.isdigit():
+        return f"Sprint '{sprint_value}' is not a numeric sprint id; skipped sprint assignment."
+    resp = requests.post(
+        f"{base}/rest/agile/1.0/sprint/{sprint_id}/issue",
+        headers=headers,
+        json={"issues": [issue_key]},
+        timeout=20,
+    )
+    if resp.ok:
+        return ""
+    return f"Sprint assignment failed (sprint id {sprint_id}): {_format_jira_error(resp)}"
+
+
 def push_issues_software(site_url, email, api_key, project_key, items):
     """
-    Create Jira issues for a Software project.
+    Create Jira Software issues with parent/child hierarchy preserved.
 
-    items — [{summary, description, issue_type, priority, labels,
-              story_points, components, acceptance_criteria, confidence_score}]
+    items — flat list of normalized issues. Each item carries:
+      summary, description, issue_type, priority, sprint, labels,
+      story_points, components, acceptance_criteria, confidence_score,
+      temp_id, parent_temp_id
 
-    Returns [{issue_key, summary, url, warnings}].
+    Strategy
+    --------
+    1. Resolve every requested ``issue_type`` against the destination
+       project's real issue type scheme (with sensible aliases) so a
+       missing custom type like ``Feature`` falls back to ``Story``
+       instead of failing the create outright.
+    2. Build a parent → children index using ``temp_id`` /
+       ``parent_temp_id``. Roots are items whose ``parent_temp_id`` is
+       missing or unknown.
+    3. Walk the tree breadth-first from the roots so a parent's Jira key
+       is always known before we create its children.
+    4. Maintain ``temp_to_key = {temp_id: jira_key}`` and pass each
+       child's parent reference. ``_create_software_issue`` cascades
+       through ``fields.parent`` -> ``customfield_10014`` -> no parent
+       so a single 400 does not abort the create.
+    5. After issue create, assign Sprint via the Agile API only when the
+       issue carries a non-empty numeric sprint id and is sprintable.
+       Empty sprint == Backlog == skip the call entirely.
+
+    Returns [{issue_key, issue_id, summary, url, warnings, temp_id}].
+    Order matches the BFS push order (roots first, then breadth-first).
     """
     base = _base_url(site_url)
     headers = _auth_headers(email, api_key)
+
+    items = list(items or [])
+    project_types = _get_issue_types(site_url, email, api_key, project_key)
+    resolve_type = _build_type_resolver(project_types)
+
+    by_temp_id = {}
+    for it in items:
+        tid = str((it or {}).get("temp_id") or "").strip()
+        if not tid:
+            continue
+        by_temp_id[tid] = it
+
+    children_of = {}
+    roots = []
+    for it in items:
+        tid = str((it or {}).get("temp_id") or "").strip()
+        if not tid:
+            # No temp_id -> treat as root, will be created without parent.
+            roots.append(it)
+            continue
+        pid = (it or {}).get("parent_temp_id")
+        pid = str(pid).strip() if pid else ""
+        if pid and pid in by_temp_id and pid != tid:
+            children_of.setdefault(pid, []).append(it)
+        else:
+            roots.append(it)
+
+    temp_to_key = {}
     results = []
 
-    for item in items:
+    # BFS from roots — guarantees parents are created before children.
+    queue = list(roots)
+    while queue:
+        item = queue.pop(0)
         warnings = []
-        summary = str(item.get("summary") or item.get("card_title") or "Untitled").strip() or "Untitled"
-        description = str(item.get("description") or item.get("card_description") or "").strip()
-        issue_type_name = str(item.get("issue_type") or "Story").strip() or "Story"
-        priority = str(item.get("priority") or "").strip()
-        labels = [str(lbl).strip() for lbl in (item.get("labels") or []) if str(lbl).strip()]
-        story_points = item.get("story_points")
-        components = [str(c).strip() for c in (item.get("components") or []) if str(c).strip()]
-        acceptance_criteria = str(item.get("acceptance_criteria") or "").strip()
+        tid = str((item or {}).get("temp_id") or "").strip()
+        parent_tid = (item or {}).get("parent_temp_id")
+        parent_tid = str(parent_tid).strip() if parent_tid else ""
 
-        fields = {
-            "project": {"key": project_key},
-            "summary": summary,
-            "description": _adf_doc(description),
-            "issuetype": {"name": issue_type_name},
-        }
+        parent_key = ""
+        if parent_tid:
+            parent_key = temp_to_key.get(parent_tid, "")
+            if not parent_key:
+                warnings.append(
+                    f"Parent '{parent_tid}' was not created; this issue will be created as a root."
+                )
 
-        if priority:
-            fields["priority"] = {"name": priority}
+        requested_type = str((item or {}).get("issue_type") or "Task").strip() or "Task"
+        resolved_type = resolve_type(requested_type) or requested_type
+        if resolved_type.lower() != requested_type.lower():
+            warnings.append(
+                f"Issue type '{requested_type}' is not available in this project; "
+                f"using '{resolved_type}' instead."
+            )
 
-        if labels:
-            fields["labels"] = labels
-
-        if components:
-            fields["components"] = [{"name": c} for c in components]
-
-        if story_points is not None:
-            try:
-                sp = float(story_points)
-                fields["story_points"] = sp
-                # Also try the standard story points custom field name
-                fields["customfield_10016"] = sp
-            except (TypeError, ValueError):
-                warnings.append(f"Invalid story_points value: {story_points}")
-
-        if acceptance_criteria:
-            # Append acceptance criteria to description
-            description_text = description + "\n\nAcceptance Criteria:\n" + acceptance_criteria if description else "Acceptance Criteria:\n" + acceptance_criteria
-            fields["description"] = _adf_doc(description_text)
-
-        resp = requests.post(
-            f"{base}/rest/api/3/issue",
-            headers=headers,
-            json={"fields": fields},
-            timeout=20,
+        fields, summary, issue_type_name = _build_software_fields(
+            item, project_key, parent_key, resolved_type, warnings
         )
 
+        resp, parent_method, attempts = _create_software_issue(base, headers, fields, parent_key)
+
+        if resp.ok and parent_key:
+            if parent_method == "epic_link":
+                warnings.append(
+                    "Parent linked via Epic Link customfield_10014 (company-managed project fallback)."
+                )
+            elif parent_method == "none":
+                warnings.append(
+                    "Parent link could not be applied — issue was created without a parent. "
+                    "Link it manually in Jira if required."
+                )
+
         if not resp.ok:
-            try:
-                err = resp.json()
-                err_msg = " ".join(err.get("errorMessages") or [])
-                err_detail = "; ".join(f"{k}: {v}" for k, v in (err.get("errors") or {}).items())
-                msg = (err_msg + " " + err_detail).strip() or f"HTTP {resp.status_code}"
-            except Exception:
-                msg = resp.text[:200] or f"HTTP {resp.status_code}"
-            warnings.append(f"Failed to create issue: {msg}")
-            results.append({"issue_key": None, "summary": summary, "url": "", "warnings": warnings})
+            attempt_summary = ", ".join(f"{m or 'no-parent'}={s}" for m, s in attempts)
+            warnings.append(
+                f"Failed to create issue: {_format_jira_error(resp)} (tried: {attempt_summary})"
+            )
+            results.append({
+                "issue_key": None,
+                "issue_id": None,
+                "summary": summary,
+                "url": "",
+                "warnings": warnings,
+                "temp_id": tid,
+            })
+            # Skip enqueuing children — they have no parent to attach to.
             continue
 
         data = resp.json()
         issue_key = data.get("key", "")
         issue_id = data.get("id", "")
         issue_url = f"{base}/browse/{issue_key}" if issue_key else ""
+
+        if tid and issue_key:
+            temp_to_key[tid] = issue_key
+
+        # Sprint assignment via Agile API. Backlog (empty) -> skip.
+        sprint_value = str((item or {}).get("sprint") or "").strip()
+        if sprint_value and issue_key:
+            if issue_type_name.strip().lower() in _NON_SPRINTABLE_TYPES:
+                warnings.append(
+                    f"Skipped sprint assignment: '{issue_type_name}' issues cannot be placed in a sprint."
+                )
+            else:
+                sprint_warning = _assign_issue_to_sprint(base, headers, sprint_value, issue_key)
+                if sprint_warning:
+                    warnings.append(sprint_warning)
+
         results.append({
             "issue_key": issue_key,
             "issue_id": issue_id,
             "summary": summary,
             "url": issue_url,
             "warnings": warnings,
+            "temp_id": tid,
         })
+
+        # Enqueue this node's direct children for the next BFS level.
+        if tid:
+            for child in children_of.get(tid, []):
+                queue.append(child)
 
     return results
 

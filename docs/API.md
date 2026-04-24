@@ -60,7 +60,7 @@ See [docs/trello_integration.md](trello_integration.md) for full Trello integrat
 | `GET` | `/jira/<sid>/export/<did>/<type>/` | `jira_export_data` | Load saved export payload for discussion |
 | `POST` | `/jira/<sid>/export/<did>/<type>/` | `jira_export_data` | Save edited export payload for discussion |
 | `GET` | `/jira/<sid>/reference/<did>/` | `jira_reference` | Raw markdown from `discussion.content` (shared across types) |
-| `POST` | `/jira/<sid>/push/<type>/` | `jira_push` | Push issues to Jira → `{status, result: [{issue_key, summary, url, warnings}]}` |
+| `POST` | `/jira/<sid>/push/<type>/` | `jira_push` | Push issues to Jira → `{status, result: [{issue_key, summary, url, warnings, temp_id}]}`. For `type=software` the push is BFS over the parent/child tree (`temp_id` / `parent_temp_id`) and may also assign the issue to a sprint via `/rest/agile/1.0/sprint/{id}/issue` when `sprint` is non-empty. See [`docs/jira_integration.md`](jira_integration.md#jira-software-hierarchical-export). |
 
 ### Project-scoped (config page — `/jira/project/<pid>/`)
 

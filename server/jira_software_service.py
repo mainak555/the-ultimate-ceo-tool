@@ -1,6 +1,12 @@
 """Jira Software type-specific service helpers."""
 
+import secrets
+
 from . import jira_client
+
+
+def _gen_temp_id():
+    return f"T{secrets.token_hex(4)}"
 
 
 def fetch_spaces(site_url, email, api_key):
@@ -44,7 +50,15 @@ def fetch_project_metadata(site_url, email, api_key, project_key):
 
 
 def normalize_item(item, normalize_labels, coerce_confidence):
-    """Normalize one Jira Software issue payload."""
+    """Normalize one Jira Software issue payload.
+
+    Hierarchy fields: ``temp_id`` (auto-generated if missing) and
+    ``parent_temp_id`` (str or ``None``) are preserved so push-time parent
+    linking can resolve via a ``temp_id -> jira_key`` map. ``depth_level``
+    on input is intentionally ignored — depth is derived from the parent
+    chain at render and push time. The legacy ``epic`` field is dropped;
+    parent linkage replaces it.
+    """
     summary = str(item.get("summary") or item.get("card_title") or "").strip() or "Untitled"
     description = str(item.get("description") or item.get("card_description") or "").strip()
     issue_type = str(item.get("issue_type") or "Story").strip() or "Story"
@@ -59,7 +73,16 @@ def normalize_item(item, normalize_labels, coerce_confidence):
     components = [str(c).strip() for c in (item.get("components") or []) if str(c).strip()]
     acceptance_criteria = str(item.get("acceptance_criteria") or "").strip()
     sprint = str(item.get("sprint") or "").strip()
-    epic = str(item.get("epic") or "").strip()
+
+    temp_id = str(item.get("temp_id") or "").strip() or _gen_temp_id()
+    raw_parent = item.get("parent_temp_id")
+    if raw_parent is None:
+        parent_temp_id = None
+    else:
+        parent_temp_id = str(raw_parent).strip() or None
+    if parent_temp_id == temp_id:
+        # Self-referential parent → treat as root.
+        parent_temp_id = None
 
     return {
         "summary": summary,
@@ -67,12 +90,13 @@ def normalize_item(item, normalize_labels, coerce_confidence):
         "issue_type": issue_type,
         "priority": priority,
         "sprint": sprint,
-        "epic": epic,
         "labels": labels,
         "story_points": story_points,
         "components": components,
         "acceptance_criteria": acceptance_criteria,
         "confidence_score": coerce_confidence(item.get("confidence_score", 0.0)),
+        "temp_id": temp_id,
+        "parent_temp_id": parent_temp_id,
     }
 
 

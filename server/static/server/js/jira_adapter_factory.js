@@ -36,7 +36,7 @@
         ? window.JiraUtils.getDefaultFieldOptions(cfg.type)
         : {},
       metadataByProject: {},
-      globalSelections: { sprint: "", epic: "" },
+      globalSelections: { sprint: "" },
       baseAPI: null,
     };
 
@@ -70,16 +70,13 @@
     function setGlobalDropdowns() {
       if (!isSoftware()) return;
       var sprintSel = document.getElementById(cfg.prefix + "-default-sprint-select");
-      var epicSel = document.getElementById(cfg.prefix + "-default-epic-select");
       if (sprintSel) sprintSel.value = state.globalSelections.sprint || "";
-      if (epicSel) epicSel.value = state.globalSelections.epic || "";
     }
 
     function renderGlobalDropdownOptions() {
       if (!isSoftware()) return;
 
       var sprintSel = document.getElementById(cfg.prefix + "-default-sprint-select");
-      var epicSel = document.getElementById(cfg.prefix + "-default-epic-select");
 
       if (sprintSel) {
         var sprintHtml = "";
@@ -91,16 +88,6 @@
         sprintSel.innerHTML = sprintHtml;
       }
 
-      if (epicSel) {
-        var epicHtml = "";
-        (state.fieldOptions.epic || [{ value: "", label: "None" }]).forEach(function (opt) {
-          var value = window.JiraUtils.esc(String((opt && opt.value) || ""));
-          var label = window.JiraUtils.esc(String((opt && opt.label) || value || "None"));
-          epicHtml += '<option value="' + value + '">' + label + '</option>';
-        });
-        epicSel.innerHTML = epicHtml;
-      }
-
       setGlobalDropdowns();
     }
 
@@ -110,13 +97,11 @@
       state.issues = (state.issues || []).map(function (issue) {
         var next = Object.assign({}, issue);
         next.sprint = state.globalSelections.sprint || "";
-        next.epic = state.globalSelections.epic || "";
         return next;
       });
       if (!state.issues.length) {
         var empty = window.JiraUtils.emptyIssue(cfg.type);
         empty.sprint = state.globalSelections.sprint || "";
-        empty.epic = state.globalSelections.epic || "";
         state.issues.push(empty);
       }
       renderIssues(false);
@@ -142,7 +127,6 @@
     function fallbackSoftwareOptions() {
       var fallback = window.JiraUtils.getDefaultFieldOptions("software");
       fallback.sprint = [{ value: "", label: "Backlog" }];
-      fallback.epic = [{ value: "", label: "None" }];
       return fallback;
     }
 
@@ -152,7 +136,6 @@
       if (!meta || useFallback) {
         state.fieldOptions = fallbackSoftwareOptions();
         state.globalSelections.sprint = "";
-        state.globalSelections.epic = "";
         renderGlobalDropdownOptions();
         setGlobalDropdowns();
         applyGlobalSelectionsToIssues();
@@ -167,25 +150,15 @@
         return { value: row.label, label: row.label };
       });
       var sprints = [{ value: "", label: "Backlog" }].concat(toOptionRows(meta.sprints, "Sprint"));
-      var epics = [{ value: "", label: "None" }].concat(
-        (meta.epics || []).map(function (epic) {
-          var value = String(epic.id || epic.key || epic.name || "").trim();
-          var name = String(epic.name || epic.key || value).trim();
-          var key = String(epic.key || "").trim();
-          return { value: value || key || name, label: key ? (key + " - " + name) : name };
-        }).filter(function (row) { return !!(row.value || row.label); })
-      );
 
       var defaultOptions = window.JiraUtils.getDefaultFieldOptions("software");
       state.fieldOptions = {
         issue_type: issueTypes.length ? issueTypes : defaultOptions.issue_type,
         priority: priorities.length ? priorities : defaultOptions.priority,
         sprint: sprints,
-        epic: epics,
       };
 
       state.globalSelections.sprint = "";
-      state.globalSelections.epic = "";
       renderGlobalDropdownOptions();
       setGlobalDropdowns();
       applyGlobalSelectionsToIssues();
@@ -304,7 +277,8 @@
             state.issues = state.issues.map(function (issue) {
               var next = Object.assign({}, issue);
               if (next.sprint === undefined || next.sprint === null) next.sprint = "";
-              if (next.epic === undefined || next.epic === null) next.epic = "";
+              if (!next.temp_id) next.temp_id = window.JiraUtils.genTempId();
+              if (next.parent_temp_id === undefined) next.parent_temp_id = null;
               return next;
             });
           }
@@ -343,7 +317,8 @@
             state.issues = state.issues.map(function (issue) {
               var next = Object.assign({}, issue);
               next.sprint = state.globalSelections.sprint || "";
-              next.epic = state.globalSelections.epic || "";
+              if (!next.temp_id) next.temp_id = window.JiraUtils.genTempId();
+              if (next.parent_temp_id === undefined) next.parent_temp_id = null;
               return next;
             });
           }
@@ -417,28 +392,55 @@
         });
     }
 
-    function bindLeftPaneEvents() {
+    // Default child issue type by parent issue type. Falls back to "Task".
+    var CHILD_TYPE_DEFAULTS = {
+      "epic":     "Story",
+      "feature":  "Story",
+      "story":    "Task",
+      "task":     "Sub-task",
+      "sub-task": "Sub-task",
+      "subtask":  "Sub-task",
+      "bug":      "Sub-task",
+    };
+
+    function _defaultChildType(parentType) {
+      var key = String(parentType || "").trim().toLowerCase();
+      return CHILD_TYPE_DEFAULTS[key] || "Task";
+    }
+
+    // Recursively collect a temp_id and all of its descendant temp_ids
+    // from the current state.issues list.
+    function _descendantIds(rootTempId) {
+      var byParent = {};
+      (state.issues || []).forEach(function (it) {
+        var pid = it && it.parent_temp_id;
+        if (!pid) return;
+        (byParent[pid] = byParent[pid] || []).push(it.temp_id);
+      });
+      var out = [];
+      var stack = [rootTempId];
+      while (stack.length) {
+        var id = stack.pop();
+        out.push(id);
+        (byParent[id] || []).forEach(function (cid) { stack.push(cid); });
+      }
+      return out;
+    }
+
+    function bindLeftPaneEvents(ctx) {
       var sel = document.getElementById(cfg.prefix + "-project-select");
       if (sel) {
         sel.addEventListener("change", function () {
           syncFooter();
-          loadProjectMetadata(_ctx, sel.value || "");
+          loadProjectMetadata(ctx, sel.value || "");
         });
       }
 
       if (isSoftware()) {
         var sprintSel = document.getElementById(cfg.prefix + "-default-sprint-select");
-        var epicSel = document.getElementById(cfg.prefix + "-default-epic-select");
         if (sprintSel) {
           sprintSel.addEventListener("change", function () {
             state.globalSelections.sprint = sprintSel.value || "";
-            applyGlobalSelectionsToIssues();
-            syncFooter();
-          });
-        }
-        if (epicSel) {
-          epicSel.addEventListener("change", function () {
-            state.globalSelections.epic = epicSel.value || "";
             applyGlobalSelectionsToIssues();
             syncFooter();
           });
@@ -452,10 +454,13 @@
             setStatus("Export is locked. Click Extract Items to unlock.");
             return;
           }
+          // Persist any in-flight edits before re-rendering.
+          state.issues = window.JiraUtils.collectIssuesFromEditor(cfg.prefix + "-editor-issues", cfg.type);
           var empty = window.JiraUtils.emptyIssue(cfg.type);
           if (isSoftware()) {
             empty.sprint = state.globalSelections.sprint || "";
-            empty.epic = state.globalSelections.epic || "";
+            empty.parent_temp_id = null;
+            empty.issue_type = "Epic";
           }
           state.issues.push(empty);
           renderIssues(false);
@@ -466,19 +471,72 @@
       var editorEl = document.getElementById(cfg.prefix + "-editor-issues");
       if (editorEl) {
         editorEl.addEventListener("click", function (e) {
+          // Caret toggle is allowed even when locked (read-only browsing).
+          var caretBtn = e.target.closest(".js-toggle-issue");
+          if (caretBtn) {
+            var card = caretBtn.closest(".jira-issue-card");
+            if (!card) return;
+            var collapsed = card.classList.toggle("jira-issue-card--collapsed");
+            caretBtn.textContent = collapsed ? "\u25B8" : "\u25BE";
+            window.JiraUtils.setCardCollapsed(
+              card.getAttribute("data-temp-id") || "",
+              collapsed
+            );
+            return;
+          }
+
           if (state.exported) {
             setStatus("Export is locked. Click Extract Items to unlock.");
             return;
           }
-          var btn = e.target.closest(".js-delete-issue");
-          if (!btn) return;
 
-          var idx = parseInt(btn.getAttribute("data-issue-index") || "-1", 10);
-          if (idx < 0) return;
+          var addChildBtn = e.target.closest(".js-add-child");
+          if (addChildBtn && isSoftware()) {
+            var parentTempId = addChildBtn.getAttribute("data-temp-id") || "";
+            if (!parentTempId) return;
+            state.issues = window.JiraUtils.collectIssuesFromEditor(cfg.prefix + "-editor-issues", cfg.type);
+            var parent = (state.issues || []).filter(function (it) { return it.temp_id === parentTempId; })[0];
+            var child = window.JiraUtils.emptyIssue(cfg.type);
+            child.parent_temp_id = parentTempId;
+            child.sprint = state.globalSelections.sprint || "";
+            child.issue_type = _defaultChildType(parent && parent.issue_type);
+            // Ensure parent stays expanded so the new child is visible.
+            window.JiraUtils.setCardCollapsed(parentTempId, false);
+            state.issues.push(child);
+            renderIssues(false);
+            syncFooter();
+            return;
+          }
+
+          var delBtn = e.target.closest(".js-delete-issue");
+          if (!delBtn) return;
 
           state.issues = window.JiraUtils.collectIssuesFromEditor(cfg.prefix + "-editor-issues", cfg.type);
-          state.issues.splice(idx, 1);
-          if (!state.issues.length) state.issues.push(window.JiraUtils.emptyIssue(cfg.type));
+
+          if (isSoftware()) {
+            var tempId = delBtn.getAttribute("data-temp-id") || "";
+            if (!tempId) return;
+            var toRemove = _descendantIds(tempId);
+            if (toRemove.length > 1) {
+              var ok = window.confirm("Delete this issue and all " + (toRemove.length - 1) + " nested child issue(s)?");
+              if (!ok) return;
+            }
+            var removeSet = {};
+            toRemove.forEach(function (id) { removeSet[id] = true; });
+            state.issues = (state.issues || []).filter(function (it) { return !removeSet[it.temp_id]; });
+            if (!state.issues.length) {
+              var seed = window.JiraUtils.emptyIssue(cfg.type);
+              seed.parent_temp_id = null;
+              seed.issue_type = "Epic";
+              seed.sprint = state.globalSelections.sprint || "";
+              state.issues.push(seed);
+            }
+          } else {
+            var idx = parseInt(delBtn.getAttribute("data-issue-index") || "-1", 10);
+            if (idx < 0) return;
+            state.issues.splice(idx, 1);
+            if (!state.issues.length) state.issues.push(window.JiraUtils.emptyIssue(cfg.type));
+          }
           renderIssues(false);
           syncFooter();
         });
@@ -506,12 +564,6 @@
           + '<label for="' + cfg.prefix + '-default-sprint-select">Sprint</label>'
           + '<select id="' + cfg.prefix + '-default-sprint-select" class="input input--sm">'
           + '<option value="" selected>Backlog</option>'
-          + '</select>'
-          + '</div>'
-          + '<div class="cascade-select__group">'
-          + '<label for="' + cfg.prefix + '-default-epic-select">Epic</label>'
-          + '<select id="' + cfg.prefix + '-default-epic-select" class="input input--sm">'
-          + '<option value="" selected>None</option>'
           + '</select>'
           + '</div>'
           + '</div>';
@@ -563,10 +615,10 @@
             ? window.JiraUtils.getDefaultFieldOptions(cfg.type)
             : {},
           metadataByProject: {},
-          globalSelections: { sprint: "", epic: "" },
+          globalSelections: { sprint: "" },
           baseAPI: baseAPI,
         };
-        bindLeftPaneEvents();
+        bindLeftPaneEvents(ctx);
         checkStatus(ctx);
       },
 
