@@ -17,6 +17,27 @@ from agents.tracing import traced_block
 logger = logging.getLogger(__name__)
 
 
+_MARKDOWN_PATTERN = re.compile(
+    r"(^\s{0,3}#{1,6}\s+)|(^\s{0,3}[-*+]\s+)|(^\s{0,3}>\s+)|(```)|(`[^`]+`)|(\[[^\]]+\]\([^\)]+\))",
+    re.MULTILINE,
+)
+
+
+def _infer_text_mime_type(text: str) -> str:
+    payload = (text or "").strip()
+    if not payload:
+        return "text/plain"
+    try:
+        parsed = json.loads(payload)
+        if isinstance(parsed, (dict, list, tuple)):
+            return "application/json"
+    except Exception:
+        pass
+    if _MARKDOWN_PATTERN.search(payload):
+        return "text/markdown"
+    return "text/plain"
+
+
 def run_extraction(
     system_prompt: str,
     discussion_text: str,
@@ -68,6 +89,10 @@ def run_extraction(
         SystemMessage(content=system_prompt),
         UserMessage(content=discussion_text, source="user"),
     ]
+    input_payload = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": discussion_text},
+    ]
 
     import asyncio
 
@@ -87,11 +112,17 @@ def run_extraction(
             "app.component": "agents.integrations.extractor",
             "app.model_name": model_name,
             "app.discussion_chars": len(discussion_text or ""),
+            "input.value": json.dumps(input_payload, ensure_ascii=False),
+            "input.mime_type": "application/json",
         },
     ) as span:
         t0 = time.monotonic()
         raw = asyncio.run(_run())
         elapsed_ms = int((time.monotonic() - t0) * 1000)
+
+        if span is not None:
+            span.set_attribute("output.value", raw)
+            span.set_attribute("output.mime_type", _infer_text_mime_type(raw))
 
         # Parse JSON from the response — handle markdown code fences.
         text = raw.strip()

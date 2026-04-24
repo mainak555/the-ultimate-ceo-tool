@@ -11,13 +11,14 @@ Single source of truth for application logging and AutoGen tracing. Every new HT
 ## Mandatory Logger Rules
 1. Every Python module that performs I/O declares `logger = logging.getLogger(__name__)` at module top. No custom logger names. No `print()` for diagnostics.
 2. Logging configuration lives only in `config/settings.py` (`LOGGING` dict). One stderr `StreamHandler` + JSON formatter (`python-json-logger`). Root level driven by `LOG_LEVEL` env var (default `INFO`).
-3. App/Python logs are currently console output only. If future work adds OpenTelemetry log/trace adapters for app telemetry, they must use a separate pipeline/exporter and must never route app telemetry to Langfuse.
-3. Event names use dotted snake_case scoped by layer:
+3. AutoGen event payload loggers must be explicitly constrained: `autogen_core.events` and `autogen_agentchat.events` must keep console visibility at ERROR-only and `propagate=False` so full system prompts/tool payloads are never dumped to console. When tracing is enabled, INFO payload events should be routed via a dedicated trace bridge handler to Langfuse.
+4. App/Python logs are currently console output only. If future work adds OpenTelemetry log/trace adapters for app telemetry, they must use a separate pipeline/exporter and must never route app telemetry to Langfuse.
+5. Event names use dotted snake_case scoped by layer:
    - Service layer: `mongo.connect`, `mongo.connect_failed`, `project.created`, `chat.session.started`.
    - HTTP clients: `trello.api.call`, `trello.api.error`, `jira.api.call`, `jira.api.error`.
    - Agent runtime: `agents.model_client.created`, `agents.team.built`, `agents.team.cancelled`, `agents.extraction.completed`, `agents.extraction.parse_failed`.
-4. Use `logger.info` for successful lifecycle events with structured context (`extra={...}`). Use `logger.warning` immediately before raising a `ValueError` for an expected business-rule failure. Use `logger.exception` for unexpected exceptions.
-5. Never log full request/response payloads. Log identifiers, counts, status codes, and `elapsed_ms`. Body snippets allowed only when needed for debugging (≤ 500 chars, sanitized).
+6. Use `logger.info` for successful lifecycle events with structured context (`extra={...}`). Use `logger.warning` immediately before raising a `ValueError` for an expected business-rule failure. Use `logger.exception` for unexpected exceptions.
+7. Never log full request/response payloads. Log identifiers, counts, status codes, and `elapsed_ms`. Body snippets allowed only when needed for debugging (≤ 500 chars, sanitized).
 
 ## Mandatory Redaction Rules
 1. Strip Trello `key=` and `token=` query parameters from any URL before logging it.
@@ -59,8 +60,36 @@ Both `server/trello_client.py` and `server/jira_client.py` wrap their request he
 2. `init_tracing()` reads `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_HOST` (default `https://cloud.langfuse.com`). If any of the first two is missing, log `tracing.disabled` (INFO) and return — no exporter, no errors.
 3. With keys present: build a Basic-auth header `base64(public:secret)`, configure an OTLP HTTP exporter to `{LANGFUSE_HOST}/api/public/otel/v1/traces`, attach a `BatchSpanProcessor` to a `TracerProvider`, then enable AutoGen instrumentation.
 4. Export boundary is strict: not all OpenTelemetry data goes to Langfuse. Only Agent/LLM spans are sent to Langfuse (AutoGen-core spans plus approved agent LLM spans such as `agents.extraction.run`). Generic app/framework spans are filtered out before export.
-4. `init_tracing()` is invoked exactly once from `server/apps.py` `ServerConfig.ready()`. Idempotent across reloads.
-5. Never log Langfuse keys. Never raise on tracing setup failure — log `EXCEPTION` and continue.
+5. Payload attributes are canonical and non-duplicated: use `input.value`/`output.value` plus `input.mime_type`/`output.mime_type`; do not store the same payload under parallel keys (`gen_ai.input` and `input.value`, etc.).
+6. MIME types must be inferred from content: JSON-like payloads => `application/json`, markdown text => `text/markdown`, fallback => `text/plain`.
+7. AutoGen bridge spans keep one raw event blob under `langfuse.observation.metadata.autogen_event_raw` for generic/raw debugging while preserving canonical input/output fields.
+8. `init_tracing()` is invoked exactly once from `server/apps.py` `ServerConfig.ready()`. Idempotent across reloads.
+9. Never log Langfuse keys. Never raise on tracing setup failure — log `EXCEPTION` and continue.
+
+### Do/Don't Examples (Payload Contract)
+
+Do:
+- Set `input.value` and `output.value` exactly once per span.
+- Infer and set `input.mime_type` and `output.mime_type` (`application/json`, `text/markdown`, `text/plain`).
+- Keep one raw bridge payload under `langfuse.observation.metadata.autogen_event_raw` for debugging.
+
+Don't:
+- Duplicate the same payload under both canonical and legacy keys (`input.value` + `gen_ai.input`, `output.value` + `gen_ai.output`).
+- Hardcode a single MIME type for all payloads.
+- Emit AutoGen INFO payload logs to console; keep them bridge-only for Langfuse.
+
+Preferred span attribute shape:
+
+```python
+span.set_attribute("input.value", input_text)
+span.set_attribute("input.mime_type", input_mime)
+span.set_attribute("output.value", output_text)
+span.set_attribute("output.mime_type", output_mime)
+span.set_attribute(
+   "langfuse.observation.metadata.autogen_event_raw",
+   raw_event_json,
+)
+```
 
 ## Validation Checklist
 1. `grep -RnE "print\(" server/ agents/` returns zero matches (excluding tests / docs).
@@ -70,3 +99,5 @@ Both `server/trello_client.py` and `server/jira_client.py` wrap their request he
 5. With `LANGFUSE_*` env vars unset, server starts and logs `tracing.disabled`. With them set, AutoGen runs produce traces in Langfuse.
 6. New modules use `logging.getLogger(__name__)` — no string literals.
 7. Langfuse contains only Agent/LLM traces. If app telemetry later uses OpenTelemetry adapters, confirm that app exporters remain separate and do not target Langfuse.
+8. Console output does not include `autogen_core.events` or `autogen_agentchat.events` INFO payload entries (`LLMCall`, system prompt dumps, tool payload dumps). ERROR entries remain visible, and INFO payload events are present in Langfuse through the bridge spans.
+9. Spans use canonical payload fields only (`input.value`/`output.value` + inferred MIME types) with no duplicate payload copies.

@@ -156,6 +156,10 @@ LOGGING = {
     "loggers": {
         "server": {"handlers": ["console"], "level": LOG_LEVEL, "propagate": False},
         "agents": {"handlers": ["console"], "level": LOG_LEVEL, "propagate": False},
+        "autogen_core": {"handlers": ["console"], "level": "WARNING", "propagate": False},
+        "autogen_core.events": {"handlers": ["console"], "level": "ERROR", "propagate": False},
+        "autogen_agentchat": {"handlers": ["console"], "level": "WARNING", "propagate": False},
+        "autogen_agentchat.events": {"handlers": ["console"], "level": "ERROR", "propagate": False},
         "django.request": {"handlers": ["console"], "level": "WARNING", "propagate": False},
         "django.server": {"handlers": ["console"], "level": "WARNING", "propagate": False},
         "pymongo": {"handlers": ["console"], "level": "WARNING", "propagate": False},

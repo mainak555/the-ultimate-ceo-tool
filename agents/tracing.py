@@ -15,8 +15,10 @@ falls back to the global one used by manual spans.
 
 import base64
 from contextlib import contextmanager
+import json
 import logging
 import os
+import re
 from threading import Lock
 from typing import Any, Iterator
 
@@ -25,6 +27,43 @@ logger = logging.getLogger(__name__)
 _initialized = False
 _lock = Lock()
 _tracer_provider = None
+_event_bridge_installed = False
+
+
+_MARKDOWN_PATTERN = re.compile(
+    r"(^\s{0,3}#{1,6}\s+)|(^\s{0,3}[-*+]\s+)|(^\s{0,3}>\s+)|(```)|(`[^`]+`)|(\[[^\]]+\]\([^\)]+\))",
+    re.MULTILINE,
+)
+
+
+def _infer_mime_type(value: Any) -> str:
+    """Infer a payload MIME type for generic trace attributes."""
+    if isinstance(value, (dict, list, tuple)):
+        return "application/json"
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return "text/plain"
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, (dict, list, tuple)):
+                return "application/json"
+        except Exception:
+            pass
+        if _MARKDOWN_PATTERN.search(text):
+            return "text/markdown"
+        return "text/plain"
+    return "text/plain"
+
+
+def _stringify_payload(value: Any) -> str:
+    """Convert payload values to raw strings for span attributes."""
+    if isinstance(value, str):
+        return value
+    try:
+        return json.dumps(value, ensure_ascii=False)
+    except Exception:
+        return str(value)
 
 
 def _is_agent_llm_span(span: Any) -> bool:
@@ -76,6 +115,108 @@ class AgentLlmFilteringExporter:
             except TypeError:
                 return bool(force_flush())
         return True
+
+
+class AutoGenEventSpanBridgeHandler(logging.Handler):
+    """Convert AutoGen structured event logs into OTel spans.
+
+    AutoGen emits rich LLM input/output payloads through `autogen_core.events`
+    and `autogen_agentchat.events`. This handler bridges those events into trace
+    spans so payload detail is visible in Langfuse without printing INFO payload
+    dumps to console.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(level=logging.INFO)
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            from opentelemetry import trace
+            from opentelemetry.trace import Status, StatusCode
+        except Exception:
+            return
+
+        tracer = trace.get_tracer("autogen.events.bridge")
+        raw_message = record.getMessage()
+
+        event_data: dict[str, Any]
+        try:
+            parsed = json.loads(raw_message)
+            event_data = parsed if isinstance(parsed, dict) else {"message": raw_message}
+        except Exception:
+            event_data = {"message": raw_message}
+
+        event_type = str(event_data.get("type", "event")).lower()
+        span_name = f"autogen.event.{event_type}"
+
+        attrs: dict[str, Any] = {
+            "gen_ai.system": "autogen",
+            "autogen.event.type": event_data.get("type", "event"),
+            "autogen.event.logger": record.name,
+            "autogen.event.level": record.levelname,
+            "langfuse.observation.metadata.autogen_event_raw": raw_message,
+        }
+
+        if "agent_id" in event_data and event_data.get("agent_id") is not None:
+            attrs["autogen.agent.id"] = str(event_data["agent_id"])
+        if "prompt_tokens" in event_data:
+            attrs["gen_ai.usage.prompt_tokens"] = int(event_data["prompt_tokens"])
+        if "completion_tokens" in event_data:
+            attrs["gen_ai.usage.completion_tokens"] = int(event_data["completion_tokens"])
+
+        messages = event_data.get("messages")
+        if messages is not None:
+            attrs["input.value"] = _stringify_payload(messages)
+            attrs["input.mime_type"] = _infer_mime_type(messages)
+        response = event_data.get("response")
+        if response is not None:
+            attrs["output.value"] = _stringify_payload(response)
+            attrs["output.mime_type"] = _infer_mime_type(response)
+
+        if "tool_name" in event_data:
+            attrs["gen_ai.tool.name"] = str(event_data.get("tool_name"))
+        if "arguments" in event_data:
+            attrs["gen_ai.tool.arguments"] = _stringify_payload(event_data.get("arguments"))
+        if "result" in event_data:
+            attrs["gen_ai.tool.result"] = _stringify_payload(event_data.get("result"))
+
+        with tracer.start_as_current_span(span_name) as span:
+            for key, value in attrs.items():
+                if value is None:
+                    continue
+                try:
+                    span.set_attribute(key, value)
+                except Exception:
+                    # Best-effort only: drop non-serializable attributes.
+                    continue
+
+            if record.levelno >= logging.ERROR:
+                span.set_status(Status(StatusCode.ERROR, raw_message[:300]))
+
+
+def _install_autogen_event_bridge() -> None:
+    """Attach a tracing bridge for AutoGen event payload logs."""
+    global _event_bridge_installed
+    if _event_bridge_installed:
+        return
+
+    bridge_handler = AutoGenEventSpanBridgeHandler()
+
+    for logger_name in ("autogen_core.events", "autogen_agentchat.events"):
+        event_logger = logging.getLogger(logger_name)
+
+        # Keep event generation enabled for trace bridging.
+        event_logger.setLevel(logging.INFO)
+        event_logger.propagate = False
+
+        # Keep console behavior ERROR-only while allowing INFO to bridge traces.
+        for handler in event_logger.handlers:
+            if isinstance(handler, logging.StreamHandler):
+                handler.setLevel(logging.ERROR)
+
+        event_logger.addHandler(bridge_handler)
+
+    _event_bridge_installed = True
 
 
 def get_tracer_provider():
@@ -161,6 +302,7 @@ def init_tracing() -> bool:
             provider.add_span_processor(BatchSpanProcessor(filtered_exporter))
             trace.set_tracer_provider(provider)
             _tracer_provider = provider
+            _install_autogen_event_bridge()
             logger.info(
                 "tracing.enabled",
                 extra={"host": host, "service_name": resource.attributes.get("service.name")},
