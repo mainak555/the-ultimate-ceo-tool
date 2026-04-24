@@ -15,7 +15,7 @@ import re
 
 import requests
 
-from agents.tracing import set_payload_attribute
+from core.tracing import set_payload_attribute
 
 logger = logging.getLogger(__name__)
 

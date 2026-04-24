@@ -27,7 +27,7 @@ traces serve different purposes and are intentionally split:
         ▼                    │
 ┌────────────────────────┐  │
 │  TracerProvider        │  │
-│  (agents/tracing.py)   │  │
+│   (core/tracing.py)    │  │
 └────────────────────────┘  │
         │                    │
         ├── BatchSpanProcessor ─▶ OTLP exporter (Langfuse | other)
@@ -131,7 +131,7 @@ LOG_LEVEL=DEBUG
   - `RequestIdFilter` — injects `request_id` from the `contextvars` set by `RequestIdMiddleware`.
   - `TraceContextFilter` — reads the active span and injects `trace_id` / `span_id`.
   - `EventOnlyConsoleFilter` — drops INFO records ending in `.api.call`. Per-call HTTP success detail lives on spans, not console.
-- AutoGen payload loggers (`autogen_core.events`, `autogen_agentchat.events`) are **owned by `agents.tracing._install_autogen_event_bridge()`**, not by `config/settings.py` LOGGING. The bridge strips the shared `console` handler from those loggers and attaches `AutoGenEventSpanBridgeHandler` instead, so INFO payload events flow to spans (with redaction + truncation) and never reach console. ERROR records on those loggers set `Span.status = ERROR`, which is then surfaced through `OTEL_CONSOLE_EXPORTER=error` (if enabled) and through Django request logging at the outer layer.
+- AutoGen payload loggers (`autogen_core.events`, `autogen_agentchat.events`) are **owned by `core.tracing._install_autogen_event_bridge()`**, not by `config/settings.py` LOGGING. The bridge strips the shared `console` handler from those loggers and attaches `AutoGenEventSpanBridgeHandler` instead, so INFO payload events flow to spans (with redaction + truncation) and never reach console. ERROR records on those loggers set `Span.status = ERROR`, which is then surfaced through `OTEL_CONSOLE_EXPORTER=error` (if enabled) and through Django request logging at the outer layer.
 
 ### Span dumps (opt-in)
 
@@ -146,7 +146,7 @@ Set `OTEL_CONSOLE_EXPORTER` for stderr span output:
 `LOG_LEVEL=DEBUG` implicitly upgrades the default to `all`.
 
 Wiring lives only in `_build_console_span_processor()` in
-`agents/tracing.py`. Never add a second `ConsoleSpanExporter` elsewhere.
+`core/tracing.py`. Never add a second `ConsoleSpanExporter` elsewhere.
 
 ---
 
@@ -156,7 +156,7 @@ Langfuse is the currently-wired exporter, but the architecture supports any
 OTLP target.
 
 - Backend-specific construction lives in `_build_langfuse_exporter()` in
-  `agents/tracing.py`. Returns either an `OTLPSpanExporter` or `None`.
+  `core/tracing.py`. Returns either an `OTLPSpanExporter` or `None`.
 - `_build_exporter()` is the single dispatch point.
 
 ### Swapping backends (Jaeger / Tempo / Honeycomb / OTel collector)
@@ -183,7 +183,7 @@ helpers, and `set_payload_attribute()` all remain identical.
 ## Span Payload Contract
 
 **Canonical, non-duplicated.** Every payload reaching a span goes through
-`set_payload_attribute(span, key, value)` from `agents/tracing.py`, which:
+`set_payload_attribute(span, key, value)` from `core/tracing.py`, which:
 
 1. Calls `redact_payload()` — masks any field whose key matches
    `(?i)api_key|secret|password|token|authorization|x-app-secret-key`.
@@ -270,7 +270,7 @@ Levels:
 ## Adding a New Span
 
 ```python
-from agents.tracing import traced_function, traced_block, set_payload_attribute
+from core.tracing import traced_function, traced_block, set_payload_attribute
 
 # 1. Decorator on a service-layer function
 @traced_function("service.<area>.<op>")

@@ -18,7 +18,7 @@ from . import jira_client
 from . import jira_software_service
 from . import jira_service_desk_service
 from . import jira_business_service
-from agents.tracing import traced_function
+from core.tracing import traced_function
 
 logger = logging.getLogger(__name__)
 

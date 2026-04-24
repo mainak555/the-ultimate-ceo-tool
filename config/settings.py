@@ -163,7 +163,7 @@ LOGGING = {
         "server": {"handlers": ["console"], "level": LOG_LEVEL, "propagate": False},
         "agents": {"handlers": ["console"], "level": LOG_LEVEL, "propagate": False},
         # NOTE: `autogen_core.events` and `autogen_agentchat.events` are
-        # intentionally NOT listed here. `agents.tracing._install_autogen_event_bridge`
+        # intentionally NOT listed here. `core.tracing._install_autogen_event_bridge`
         # owns those loggers — it strips the shared `console` handler and
         # attaches the span-bridge handler instead. INFO payload events flow
         # to spans (with redaction + truncation), never to console.

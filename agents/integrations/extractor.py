@@ -12,7 +12,7 @@ import re
 import time
 
 from agents.factory import build_model_client
-from agents.tracing import traced_block
+from core.tracing import traced_block
 
 logger = logging.getLogger(__name__)
 

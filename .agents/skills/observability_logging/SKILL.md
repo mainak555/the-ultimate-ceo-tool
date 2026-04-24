@@ -22,7 +22,7 @@ serve different purposes:
 1. Every Python module that performs I/O declares `logger = logging.getLogger(__name__)` at module top. No custom logger names. No `print()` for diagnostics.
 2. Logging configuration lives only in `config/settings.py` (`LOGGING` dict). One stderr `StreamHandler` + JSON formatter (`python-json-logger`). Root level driven by `LOG_LEVEL` env (default `INFO`).
 3. The `console` handler installs `EventOnlyConsoleFilter` from `server/logging_utils.py`, which drops INFO records whose message ends in `.api.call`. Per-call HTTP detail belongs on spans, not console.
-4. AutoGen event payload loggers (`autogen_core.events`, `autogen_agentchat.events`) are owned by `_install_autogen_event_bridge()` in `agents/tracing.py`, NOT by `config/settings.py` LOGGING. The bridge strips the shared `console` handler from those loggers and attaches `AutoGenEventSpanBridgeHandler` instead, so INFO payload events flow to spans and never reach console. Do not re-add `autogen_*.events` entries to the LOGGING dict.
+4. AutoGen event payload loggers (`autogen_core.events`, `autogen_agentchat.events`) are owned by `_install_autogen_event_bridge()` in `core/tracing.py`, NOT by `config/settings.py` LOGGING. The bridge strips the shared `console` handler from those loggers and attaches `AutoGenEventSpanBridgeHandler` instead, so INFO payload events flow to spans and never reach console. Do not re-add `autogen_*.events` entries to the LOGGING dict.
 5. Event names use dotted snake_case scoped by layer:
    - Service layer: `mongo.connect`, `mongo.connect_failed`, `project.created`, `chat.session.started`.
    - HTTP clients: `trello.api.error`, `jira.api.error` (success no longer logged — see rule 3).
@@ -34,7 +34,7 @@ serve different purposes:
 ## Mandatory Redaction Rules
 1. Strip Trello `key=` and `token=` query parameters from any URL before logging — use `_redact_url()` in `server/trello_client.py`.
 2. Never log the `Authorization` header, Basic-auth strings, API keys, OAuth tokens, passwords, or `X-App-Secret-Key`.
-3. Span payload attributes must be set via `set_payload_attribute()` from `agents/tracing.py`, which calls `redact_payload()` (masks any field whose key matches `(?i)api_key|secret|password|token|authorization|x-app-secret-key`) before serialization.
+3. Span payload attributes must be set via `set_payload_attribute()` from `core/tracing.py`, which calls `redact_payload()` (masks any field whose key matches `(?i)api_key|secret|password|token|authorization|x-app-secret-key`) before serialization.
 4. Validate diffs with `grep -nE "API_KEY|SECRET|password|Authorization|Bearer" <changed files>` and ensure no matches sit inside log strings.
 
 ## Service Layer Events Catalog
@@ -71,7 +71,7 @@ non-2xx.
 4. Async tasks awaited within a request inherit the contextvar automatically. Do not pass request ids manually.
 
 ## Tracing Architecture
-1. `agents/tracing.py` owns all OpenTelemetry wiring. Nothing else imports OpenTelemetry directly except for `trace.get_current_span()` reads in HTTP client `_check` helpers.
+1. `core/tracing.py` owns all OpenTelemetry wiring. Nothing else imports OpenTelemetry directly except for `trace.get_current_span()` reads in HTTP client `_check` helpers.
 2. `init_tracing()` runs exactly once from `server/apps.py` `ServerConfig.ready()`. Idempotent across reloads. Never raises on tracing-setup failure — logs `EXCEPTION` and continues.
 3. Auto-instrumentation packages — `opentelemetry-instrumentation-django`, `-requests`, `-pymongo` — are wired inside `init_tracing()` via `_wire_auto_instrumentation()`. Each call is wrapped in try/except → `tracing.instrument_failed` exception log. Each package is gated by an env-var category toggle (see below).
 
@@ -80,14 +80,14 @@ Each span-producing layer is gated by an env var so operators can dial verbosity
 
 | Category | Env var | Default | Source |
 |---|---|---|---|
-| HTTP / API (Django + outbound `requests`) | `OTEL_INSTRUMENT_HTTP` | `on` | `_http_tracing_enabled()` in `agents/tracing.py` — gates `DjangoInstrumentor` + `RequestsInstrumentor`. |
+| HTTP / API (Django + outbound `requests`) | `OTEL_INSTRUMENT_HTTP` | `on` | `_http_tracing_enabled()` in `core/tracing.py` — gates `DjangoInstrumentor` + `RequestsInstrumentor`. |
 | Database (pymongo) | `OTEL_INSTRUMENT_PYMONGO` | `off` | `_pymongo_tracing_enabled()` — one span per Mongo command, off by default to keep trace volume sane. |
 | LLM / Agents (AutoGen event bridge) | `OTEL_INSTRUMENT_AGENTS` | `on` | `_agents_tracing_enabled()` — gates `_install_autogen_event_bridge()`. When off, the bridge never attaches and LLM/tool spans are not produced. |
 | Service mutations (`@traced_function`) | *(always on)* | n/a | Explicit per-callsite spans — cheap, namespaced, never gated. |
 
 Rules for new I/O code:
 1. Do **not** add a new env-var toggle for a new manual span. Use `@traced_function("<layer>.<area>.<op>")` and let the always-on category cover it.
-2. Do **not** add a fourth auto-instrumentation package without also adding a category env var following the `_flag_enabled(name, default=...)` pattern in `agents/tracing.py`.
+2. Do **not** add a fourth auto-instrumentation package without also adding a category env var following the `_flag_enabled(name, default=...)` pattern in `core/tracing.py`.
 3. Never assume a span exists — callers can disable the AGENTS bridge or HTTP layer. Code that reads `trace.get_current_span()` must tolerate the no-recording sentinel.
 
 4. AutoGen event-log → span bridge: `AutoGenEventSpanBridgeHandler` converts INFO records on `autogen_*.events` loggers into spans with canonical `input.value`/`output.value` attributes. The bridge owns those loggers — it strips the shared `console` handler and never mutates handler levels (mutating the shared handler would silence other namespaces).
@@ -121,7 +121,7 @@ OTLP target.
   - `off` (default): backend gets all spans; console gets logs only.
   - `error`: backend gets all spans; console additionally dumps any span whose status is `ERROR` (with recorded exception, full attributes, stacktrace). Recommended for staging/production diagnostics.
   - `all` / `true` / `1`: console dumps every span (very noisy — dev-only). `LOG_LEVEL=DEBUG` implicitly upgrades the default to `all`.
-- Wiring lives only in `_build_console_span_processor()` (`agents/tracing.py`). Never add a second `ConsoleSpanExporter` elsewhere.
+- Wiring lives only in `_build_console_span_processor()` (`core/tracing.py`). Never add a second `ConsoleSpanExporter` elsewhere.
 - `_install_autogen_event_bridge()` must NOT mutate the shared `console` handler's level — many loggers point at the same handler instance. Instead it strips non-bridge handlers from `autogen_*.events` loggers.
 
 ## Span Payload Contract (canonical, non-duplicated)

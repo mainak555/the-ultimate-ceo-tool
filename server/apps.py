@@ -14,7 +14,7 @@ class ServerConfig(AppConfig):
         # exporter (currently Langfuse), Django/requests/pymongo auto-
         # instrumentation, and the AutoGen event-log -> span bridge.
         try:
-            from agents.tracing import init_tracing
+            from core.tracing import init_tracing
             init_tracing()
         except Exception:
             logger.exception("tracing.init_failed")

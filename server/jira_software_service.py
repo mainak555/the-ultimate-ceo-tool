@@ -8,7 +8,7 @@ from . import jira_client
 logger = logging.getLogger(__name__)
 
 
-from agents.tracing import traced_function
+from core.tracing import traced_function
 
 
 def _gen_temp_id():

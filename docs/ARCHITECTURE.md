@@ -6,6 +6,8 @@
 product-discovery/
 ├── agents/              # Root AutoGen runtime package (model factory, team builder)
 │   └── integrations/    # Jira/Trello export clients + LLM extractor
+├── core/                # Shared cross-cutting infrastructure modules
+│   └── tracing.py       # OpenTelemetry wiring/helpers used by server + agents
 ├── agent_models.json    # Shared model catalog keyed by model name
 ├── config/              # Django project package (settings, root URLs, WSGI)
 ├── server/              # Main Django app
@@ -84,6 +86,12 @@ Deletion policy:
 - `agents/factory.py` resolves provider-specific AutoGen model clients from model names.
 - `agents/prompt_builder.py` resolves system prompts and appends the project objective.
 - `agents/team_builder.py` builds AutoGen teams (`RoundRobinGroupChat` or `SelectorGroupChat`) from saved configuration. The team type is read from `project["team"]["type"]`. Each `AssistantAgent` receives `description=` (line 1 of its resolved system message) so that `SelectorGroupChat`'s `{roles}` placeholder renders meaningful routing context.
+
+### Root `core/` Package — Shared Infrastructure
+- `core/tracing.py` owns OpenTelemetry setup and helpers (`init_tracing`,
+	`traced_function`, `traced_block`, `set_payload_attribute`).
+- Shared by both Django app modules in `server/` and agent runtime modules
+	in `agents/`.
 
 Provider client resolution in `agents/factory.py` (builder-per-provider pattern):
 - `openai`          → `OpenAIChatCompletionClient` — direct OpenAI API
