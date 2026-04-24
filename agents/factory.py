@@ -53,14 +53,29 @@ def _require_env(env_name: str) -> str:
     return value
 
 
-def _require_meta(model_name: str, metadata: dict, field: str) -> str:
-    """Return a required field from model metadata or raise ValueError."""
-    value = str(metadata.get(field) or "").strip()
-    if not value:
+def _resolve_endpoint(model_name: str, metadata: dict, provider: str, *, required: bool) -> str:
+    """Resolve endpoint from metadata, then provider env var, then requirement policy.
+
+    Resolution order:
+      1) ``agent_models.json`` entry field ``endpoint``
+      2) ``{PROVIDER_UPPER}_API_URL`` environment variable
+      3) if required, raise ``ValueError``
+    """
+    endpoint = str(metadata.get("endpoint") or "").strip()
+    if endpoint:
+        return endpoint
+
+    env_name = f"{provider.upper()}_API_URL"
+    endpoint = str(os.getenv(env_name, "") or "").strip()
+    if endpoint:
+        return endpoint
+
+    if required:
         raise ValueError(
-            f"Model '{model_name}' is missing required field '{field}' in agent_models.json."
+            f"Model '{model_name}' is missing required endpoint. "
+            f"Set 'endpoint' in agent_models.json or set environment variable '{env_name}'."
         )
-    return value
+    return ""
 
 
 def _default_model_info() -> dict:
@@ -112,7 +127,7 @@ def _build_openai(model_name: str, metadata: dict, **kwargs: Any):
     """
     cls = _import_class("autogen_ext.models.openai", "OpenAIChatCompletionClient")
     kwargs.setdefault("api_key", _require_env("OPENAI_API_KEY"))
-    endpoint = str(metadata.get("endpoint") or "").strip()
+    endpoint = _resolve_endpoint(model_name, metadata, "openai", required=False)
     if endpoint:
         kwargs.setdefault("base_url", endpoint)
     model_info = metadata.get("model_info")
@@ -130,7 +145,7 @@ def _build_anthropic(model_name: str, metadata: dict, **kwargs: Any):
     """
     cls = _import_class("autogen_ext.models.anthropic", "AnthropicChatCompletionClient")
     kwargs.setdefault("api_key", _require_env("ANTHROPIC_API_KEY"))
-    endpoint = str(metadata.get("endpoint") or "").strip()
+    endpoint = _resolve_endpoint(model_name, metadata, "anthropic", required=False)
     if endpoint:
         kwargs.setdefault("base_url", endpoint)
     model_info = metadata.get("model_info")
@@ -152,7 +167,7 @@ def _build_google(model_name: str, metadata: dict, **kwargs: Any):
     """
     cls = _import_class("autogen_ext.models.openai", "OpenAIChatCompletionClient")
     kwargs.setdefault("api_key", _require_env("GOOGLE_API_KEY"))
-    endpoint = str(metadata.get("endpoint") or "").strip()
+    endpoint = _resolve_endpoint(model_name, metadata, "google", required=False)
     if endpoint:
         kwargs.setdefault("base_url", endpoint)
     kwargs.setdefault("model_info", _resolve_model_info(metadata))
@@ -170,7 +185,7 @@ def _build_azure_openai(model_name: str, metadata: dict, **kwargs: Any):
     Env var: AZURE_OPENAI_API_KEY
     """
     cls = _import_class("autogen_ext.models.openai", "AzureOpenAIChatCompletionClient")
-    endpoint = _require_meta(model_name, metadata, "endpoint")
+    endpoint = _resolve_endpoint(model_name, metadata, "azure_openai", required=True)
     api_version = str(metadata.get("api_version") or "2024-12-01-preview").strip()
     deployment = str(metadata.get("deployment_name") or model_name).strip()
     kwargs.setdefault("api_key", _require_env("AZURE_OPENAI_API_KEY"))
@@ -194,7 +209,7 @@ def _build_azure_anthropic(model_name: str, metadata: dict, **kwargs: Any):
     Env var: AZURE_ANTHROPIC_API_KEY
     """
     cls = _import_class("autogen_ext.models.anthropic", "AnthropicChatCompletionClient")
-    endpoint = _require_meta(model_name, metadata, "endpoint")
+    endpoint = _resolve_endpoint(model_name, metadata, "azure_anthropic", required=True)
     deployment = str(metadata.get("deployment_name") or model_name).strip()
     kwargs.setdefault("api_key", _require_env("AZURE_ANTHROPIC_API_KEY"))
     kwargs.setdefault("base_url", endpoint)

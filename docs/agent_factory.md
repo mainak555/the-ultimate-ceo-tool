@@ -11,7 +11,7 @@ Each key is a **model name** (the identifier shown in the UI and used at runtime
   "model_name": {
     "provider": "openai | anthropic | google | azure_openai | azure_anthropic",
     "model": "<actual-model-id>",       // optional; model identifier for AutoGen (default: key name)
-    "endpoint": "<url>",                // required for azure_*; optional for others
+    "endpoint": "<url>",                // optional for all; falls back to <PROVIDER_UPPER>_API_URL env var
     "api_version": "<version>",         // optional; azure_openai only (default: 2024-12-01-preview)
     "deployment_name": "<deployment>",  // optional; azure_* only (default: key name)
     "model_info": { ... }               // optional; per-model capability overrides (see below)
@@ -25,7 +25,7 @@ Each key is a **model name** (the identifier shown in the UI and used at runtime
 |-------------------|--------|----------|--------------------|-------------|
 | `provider`        | string | **yes**  | all                | Provider identifier — must match a registered builder |
 | `model`           | string | no       | all                | Actual model identifier passed as `model=` to the AutoGen client. Defaults to the JSON key. Use when the provider resolves to a versioned name (e.g. `gpt-5.4-mini-2026-03-17`) |
-| `endpoint`        | string | **yes** for azure_* | all       | API endpoint URL. Required for Azure providers; optional for others (custom proxy / compatible endpoint) |
+| `endpoint`        | string | no       | all       | API endpoint URL. Resolution order: JSON `endpoint` -> `{PROVIDER_UPPER}_API_URL`. Azure providers still require a resolved endpoint after fallback; non-Azure providers keep it optional. |
 | `api_version`     | string | no       | `azure_openai`     | Azure API version string. Defaults to `2024-12-01-preview` |
 | `deployment_name` | string | no       | `azure_openai`, `azure_anthropic` | Azure deployment name override. Defaults to the key name |
 | `model_info`      | object | no       | all                | Per-model capability overrides — merged over defaults (see Model Info) |
@@ -66,17 +66,18 @@ Each key is a **model name** (the identifier shown in the UI and used at runtime
 
 ## Environment Variables
 
-API keys follow the convention `{PROVIDER_UPPER}_API_KEY`:
+API keys follow the convention `{PROVIDER_UPPER}_API_KEY`.
+Endpoint fallbacks follow the convention `{PROVIDER_UPPER}_API_URL`.
 
-| Provider          | Environment Variable       |
-|-------------------|----------------------------|
-| `openai`          | `OPENAI_API_KEY`           |
-| `anthropic`       | `ANTHROPIC_API_KEY`        |
-| `google`          | `GOOGLE_API_KEY`           |
-| `azure_openai`    | `AZURE_OPENAI_API_KEY`     |
-| `azure_anthropic` | `AZURE_ANTHROPIC_API_KEY`  |
+| Provider          | API Key Env Var            | Endpoint Env Var          |
+|-------------------|----------------------------|---------------------------|
+| `openai`          | `OPENAI_API_KEY`           | `OPENAI_API_URL`          |
+| `anthropic`       | `ANTHROPIC_API_KEY`        | `ANTHROPIC_API_URL`       |
+| `google`          | `GOOGLE_API_KEY`           | `GOOGLE_API_URL`          |
+| `azure_openai`    | `AZURE_OPENAI_API_KEY`     | `AZURE_OPENAI_API_URL`    |
+| `azure_anthropic` | `AZURE_ANTHROPIC_API_KEY`  | `AZURE_ANTHROPIC_API_URL` |
 
-Set these in your `.env` file or shell environment. The factory raises `ValueError` at runtime if the required key is missing.
+Set these in your `.env` file or shell environment. The factory raises `ValueError` at runtime if a required API key is missing, or if an Azure endpoint cannot be resolved from either JSON `endpoint` or the provider URL env var.
 
 ---
 
@@ -102,7 +103,7 @@ from autogen_ext.models.openai import OpenAIChatCompletionClient
 client = OpenAIChatCompletionClient(
     model="gpt-4o",
     api_key=OPENAI_API_KEY,
-    # base_url=endpoint,      # optional — set via "endpoint" in agent_models.json
+    # base_url=endpoint,      # optional — from JSON "endpoint" or OPENAI_API_URL fallback
 )
 ```
 
@@ -116,7 +117,7 @@ from autogen_ext.models.anthropic import AnthropicChatCompletionClient
 client = AnthropicChatCompletionClient(
     model="claude-3-7-sonnet",
     api_key=ANTHROPIC_API_KEY,
-    # base_url=endpoint,      # optional
+    # base_url=endpoint,      # optional — from JSON "endpoint" or ANTHROPIC_API_URL fallback
 )
 ```
 
@@ -139,7 +140,7 @@ client = OpenAIChatCompletionClient(
         "family": "unknown",
         "structured_output": False,
     },
-    # base_url=endpoint,      # optional
+    # base_url=endpoint,      # optional — from JSON "endpoint" or GOOGLE_API_URL fallback
 )
 ```
 
@@ -152,7 +153,7 @@ from autogen_ext.models.openai import AzureOpenAIChatCompletionClient
 
 client = AzureOpenAIChatCompletionClient(
     model=model,                    # from "model" or key name (for token/cost estimation)
-    azure_endpoint=endpoint,        # from "endpoint" (required)
+    azure_endpoint=endpoint,        # from JSON "endpoint" or AZURE_OPENAI_API_URL (required after fallback)
     azure_deployment=deployment_name,  # from "deployment_name" or key name (for Azure routing)
     api_version="2024-12-01-preview",
     api_key=AZURE_OPENAI_API_KEY,
@@ -166,7 +167,8 @@ client = AzureOpenAIChatCompletionClient(
 )
 ```
 
-- `endpoint` is **required** in `agent_models.json`.
+- `endpoint` resolution order: JSON `endpoint` first, then `AZURE_OPENAI_API_URL` env var.
+- Azure OpenAI still requires a resolved endpoint after fallback.
 - `model` — the actual model identifier for AutoGen token/cost estimation. Defaults to the key name. Set when Azure resolves to a versioned name (e.g. `"model": "gpt-5.4-mini-2026-03-17"`).
 - `deployment_name` defaults to the key name if omitted.
 - `api_version` defaults to `2024-12-01-preview` if omitted.
@@ -178,7 +180,7 @@ from autogen_ext.models.anthropic import AnthropicChatCompletionClient
 
 client = AnthropicChatCompletionClient(
     model=model,                    # from "model" or key name
-    base_url=endpoint,              # from "endpoint" (required)
+    base_url=endpoint,              # from JSON "endpoint" or AZURE_ANTHROPIC_API_URL (required after fallback)
     api_key=AZURE_ANTHROPIC_API_KEY,
     model_info={
         "json_output": False,
@@ -190,7 +192,8 @@ client = AnthropicChatCompletionClient(
 )
 ```
 
-- `endpoint` is **required** — the Azure AI Services Anthropic URL (e.g. `https://<resource>.services.ai.azure.com/anthropic/`).
+- `endpoint` resolution order: JSON `endpoint` first, then `AZURE_ANTHROPIC_API_URL` env var.
+- Azure Anthropic still requires a resolved endpoint after fallback.
 - `model` — the actual model identifier. Defaults to the key name.
 - `deployment_name` defaults to the key name if omitted.
 

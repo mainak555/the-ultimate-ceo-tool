@@ -58,10 +58,15 @@ The container runs `uvicorn` (ASGI) by default, which is required for SSE stream
 | `DEBUG` | Django debug mode | `True` |
 | `ALLOWED_HOSTS` | Comma-separated allowed hosts | `localhost,127.0.0.1` |
 | `OPENAI_API_KEY` | API key for direct OpenAI models | *(required for `openai` models)* |
+| `OPENAI_API_URL` | Endpoint fallback for `openai` models when `endpoint` is omitted in `agent_models.json` | *(optional)* |
 | `ANTHROPIC_API_KEY` | API key for direct Anthropic models | *(required for `anthropic` models)* |
+| `ANTHROPIC_API_URL` | Endpoint fallback for `anthropic` models when `endpoint` is omitted in `agent_models.json` | *(optional)* |
 | `GOOGLE_API_KEY` | API key for direct Google Gemini models | *(required for `google` models)* |
+| `GOOGLE_API_URL` | Endpoint fallback for `google` models when `endpoint` is omitted in `agent_models.json` | *(optional)* |
 | `AZURE_OPENAI_API_KEY` | API key for Azure AI Foundry OpenAI deployments | *(required for `azure_openai` models)* |
+| `AZURE_OPENAI_API_URL` | Endpoint fallback for `azure_openai` models when `endpoint` is omitted in `agent_models.json` | *(required if JSON `endpoint` is missing)* |
 | `AZURE_ANTHROPIC_API_KEY` | API key for Azure AI Foundry Anthropic deployments | *(required for `azure_anthropic` models)* |
+| `AZURE_ANTHROPIC_API_URL` | Endpoint fallback for `azure_anthropic` models when `endpoint` is omitted in `agent_models.json` | *(required if JSON `endpoint` is missing)* |
 
 ---
 
@@ -72,6 +77,7 @@ See [AGENTS.md](AGENTS.md) for full architecture and development instructions.
 ## Configuration Notes
 
 - Supported agent models are defined in `agent_models.json` at the repository root.
-- For Azure models, the model key is the deployment name. Each Azure model entry stores its `endpoint` URL (and optional `api_version`) in `agent_models.json`; API keys are env-only.
+- The runtime resolves model endpoint as: JSON `endpoint` first, then `{PROVIDER_UPPER}_API_URL` env var fallback.
+- For Azure models, the model key is the deployment name. Azure endpoints remain required, but may now come from either JSON `endpoint` or `AZURE_OPENAI_API_URL` / `AZURE_ANTHROPIC_API_URL`.
 - The AutoGen runtime lives in the root `agents/` package, separate from the Django `server/` app.
 - Agent execution is streamed over SSE (`/chat/sessions/<id>/run/`). The server **must** run under ASGI (`uvicorn`) for real-time streaming; WSGI will buffer the entire response before sending.
