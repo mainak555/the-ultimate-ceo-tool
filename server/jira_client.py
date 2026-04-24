@@ -17,8 +17,11 @@ project_type_key values used in Jira API:
 """
 
 import base64
+import logging
 
 import requests
+
+logger = logging.getLogger(__name__)
 
 # Valid Jira project type keys
 JIRA_TYPES = ("software", "service_desk", "business")
@@ -52,22 +55,52 @@ def _auth_headers(email, api_key):
 
 
 def _check(resp, action):
-    """Raise ValueError with a clear message on non-2xx."""
-    if not resp.ok:
-        detail = ""
-        try:
-            body = resp.json()
-            detail = body.get("errorMessages", [])
-            if detail:
-                detail = " ".join(detail)
-            else:
-                errors = body.get("errors") or {}
-                detail = "; ".join(f"{k}: {v}" for k, v in errors.items()) if errors else ""
-        except Exception:
-            pass
-        if not detail:
-            detail = resp.text[:200] if resp.text else resp.reason
-        raise ValueError(f"Jira API error ({action}): {resp.status_code} — {detail}")
+    """Log the call (success or error) and raise ValueError on non-2xx.
+
+    Never log the Authorization header or request body.
+    """
+    method = getattr(resp.request, "method", "?") if resp.request else "?"
+    url = getattr(resp.request, "url", "") or ""
+    elapsed_ms = int(resp.elapsed.total_seconds() * 1000) if resp.elapsed else 0
+
+    if resp.ok:
+        logger.info(
+            "jira.api.call",
+            extra={
+                "action": action,
+                "method": method,
+                "url": url,
+                "status": resp.status_code,
+                "elapsed_ms": elapsed_ms,
+            },
+        )
+        return
+
+    detail = ""
+    try:
+        body = resp.json()
+        detail = body.get("errorMessages", [])
+        if detail:
+            detail = " ".join(detail)
+        else:
+            errors = body.get("errors") or {}
+            detail = "; ".join(f"{k}: {v}" for k, v in errors.items()) if errors else ""
+    except Exception:
+        pass
+    if not detail:
+        detail = resp.text[:200] if resp.text else resp.reason
+    logger.error(
+        "jira.api.error",
+        extra={
+            "action": action,
+            "method": method,
+            "url": url,
+            "status": resp.status_code,
+            "elapsed_ms": elapsed_ms,
+            "body_snippet": (resp.text or "")[:500],
+        },
+    )
+    raise ValueError(f"Jira API error ({action}): {resp.status_code} — {detail}")
 
 
 # ---------------------------------------------------------------------------
@@ -206,17 +239,22 @@ def get_project_sprints(site_url, email, api_key, project_key):
 
 
 def get_project_epics(site_url, email, api_key, project_key):
-    """Return epic issues for a project key."""
+    """Return epic issues for a project key.
+
+    Uses the new ``/rest/api/3/search/jql`` endpoint (the legacy
+    ``/rest/api/3/search`` was removed by Atlassian — see
+    https://developer.atlassian.com/changelog/#CHANGE-2046).
+    """
     project_key = (project_key or "").strip()
     if not project_key:
         return []
 
     jql = f'project = "{project_key}" AND issuetype = Epic ORDER BY created DESC'
-    url = f"{_base_url(site_url)}/rest/api/3/search"
-    resp = requests.get(
+    url = f"{_base_url(site_url)}/rest/api/3/search/jql"
+    resp = requests.post(
         url,
         headers=_auth_headers(email, api_key),
-        params={"jql": jql, "fields": "summary", "maxResults": 100},
+        json={"jql": jql, "fields": ["summary"], "maxResults": 100},
         timeout=20,
     )
     _check(resp, "get_project_epics")

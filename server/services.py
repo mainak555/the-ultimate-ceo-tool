@@ -7,12 +7,15 @@ and translate results into HTTP/HTMX responses.
 
 import hmac
 import json
+import logging
 import os
 from datetime import datetime, timezone
 from uuid import uuid4
 
 from bson import ObjectId
 from bson.errors import InvalidId
+
+logger = logging.getLogger(__name__)
 from pymongo.errors import DuplicateKeyError
 
 from .db import get_collection, ensure_indexes, CHAT_SESSIONS_COLLECTION
@@ -319,11 +322,23 @@ def create_project(data):
     try:
         col.insert_one(doc)
     except DuplicateKeyError:
+        logger.warning(
+            "project.create_duplicate",
+            extra={"project_name": cleaned.get("project_name", "")},
+        )
         raise ValueError(
             f"A project named '{cleaned['project_name']}' already exists."
         )
 
-    return normalize_project(doc)
+    normalized = normalize_project(doc)
+    logger.info(
+        "project.created",
+        extra={
+            "project_id": str(normalized.get("project_id", "")),
+            "project_name": normalized.get("project_name", ""),
+        },
+    )
+    return normalized
 
 
 def update_project(project_id, data):
@@ -354,6 +369,10 @@ def update_project(project_id, data):
     try:
         result = col.replace_one({"_id": oid}, cleaned)
     except DuplicateKeyError:
+        logger.warning(
+            "project.update_duplicate",
+            extra={"project_id": project_id, "project_name": cleaned.get("project_name", "")},
+        )
         raise ValueError(
             f"A project named '{cleaned['project_name']}' already exists."
         )
@@ -361,7 +380,12 @@ def update_project(project_id, data):
         raise ValueError(f"Project not found.")
 
     cleaned["_id"] = oid
-    return normalize_project(cleaned)
+    normalized = normalize_project(cleaned)
+    logger.info(
+        "project.updated",
+        extra={"project_id": project_id, "project_name": normalized.get("project_name", "")},
+    )
+    return normalized
 
 
 def _restore_masked_secrets(data, existing):
@@ -414,6 +438,7 @@ def delete_project(project_id):
     result = col.delete_one({"_id": oid})
     if result.deleted_count == 0:
         raise ValueError("Project not found.")
+    logger.info("project.deleted", extra={"project_id": project_id})
 
 
 def clone_project(project_id):
@@ -519,7 +544,15 @@ def create_chat_session(project_id, description):
         "current_round": 0,
     }
     col.insert_one(doc)
-    return normalize_chat_session(doc)
+    normalized = normalize_chat_session(doc)
+    logger.info(
+        "chat.session.created",
+        extra={
+            "session_id": str(normalized.get("session_id", "")),
+            "project_id": cleaned["project_id"],
+        },
+    )
+    return normalized
 
 
 def set_session_status(session_id, status):

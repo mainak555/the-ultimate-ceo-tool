@@ -5,9 +5,12 @@ Uses PyMongo directly — no Django ORM.
 Connection string and database name come from os.getenv().
 """
 
+import logging
 import os
 from pymongo import MongoClient
 from pymongo.errors import CollectionInvalid, ConnectionFailure
+
+logger = logging.getLogger(__name__)
 
 # Module-level cache for the MongoClient instance
 _client = None
@@ -15,12 +18,26 @@ PROJECT_SETTINGS_COLLECTION = "project_settings"
 CHAT_SESSIONS_COLLECTION = "chat_sessions"
 
 
+def _redact_uri(uri: str) -> str:
+    """Strip credentials from a MongoDB URI for safe logging."""
+    if not uri or "@" not in uri:
+        return uri
+    scheme, _, rest = uri.partition("://")
+    _, _, host = rest.partition("@")
+    return f"{scheme}://***@{host}" if scheme else f"***@{host}"
+
+
 def get_client():
     """Return a cached MongoClient instance (created on first call)."""
     global _client
     if _client is None:
         uri = os.getenv("MONGODB_URI", "mongodb://localhost:27017")
-        _client = MongoClient(uri, serverSelectionTimeoutMS=5000)
+        try:
+            _client = MongoClient(uri, serverSelectionTimeoutMS=5000)
+            logger.info("mongo.connect", extra={"uri": _redact_uri(uri)})
+        except Exception:
+            logger.exception("mongo.connect_failed", extra={"uri": _redact_uri(uri)})
+            raise
     return _client
 
 
@@ -72,4 +89,4 @@ try:
 except ConnectionFailure:
     # MongoDB may not be reachable at import time (e.g. during collectstatic).
     # Indexes will be created on first actual request via the service layer.
-    pass
+    logger.warning("mongo.ensure_indexes.deferred", extra={"reason": "connection_unavailable"})

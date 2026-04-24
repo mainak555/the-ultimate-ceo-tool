@@ -1,8 +1,11 @@
 """Jira Software type-specific service helpers."""
 
+import logging
 import secrets
 
 from . import jira_client
+
+logger = logging.getLogger(__name__)
 
 
 def _gen_temp_id():
@@ -24,28 +27,41 @@ def fetch_project_metadata(site_url, email, api_key, project_key):
     try:
         issue_types = jira_client.get_project_issue_types(site_url, email, api_key, project_key)
     except ValueError:
+        logger.warning(
+            "jira.software.metadata.fallback",
+            extra={"field": "issue_types", "project_key": project_key},
+            exc_info=True,
+        )
         issue_types = []
 
     try:
         priorities = jira_client.get_project_priorities(site_url, email, api_key, project_key)
     except ValueError:
+        logger.warning(
+            "jira.software.metadata.fallback",
+            extra={"field": "priorities", "project_key": project_key},
+            exc_info=True,
+        )
         priorities = []
 
     try:
         sprints = jira_client.get_project_sprints(site_url, email, api_key, project_key)
     except ValueError:
+        logger.warning(
+            "jira.software.metadata.fallback",
+            extra={"field": "sprints", "project_key": project_key},
+            exc_info=True,
+        )
         sprints = []
 
-    try:
-        epics = jira_client.get_project_epics(site_url, email, api_key, project_key)
-    except ValueError:
-        epics = []
-
+    # NOTE: Epics are intentionally not fetched here. The export modal no
+    # longer exposes a global Epic selector — parent linkage is expressed
+    # via the issue tree (`temp_id` / `parent_temp_id`). Avoiding this call
+    # also sidesteps the deprecated `/rest/api/3/search` endpoint.
     return {
         "issue_types": issue_types,
         "priorities": priorities,
         "sprints": sprints,
-        "epics": epics,
     }
 
 

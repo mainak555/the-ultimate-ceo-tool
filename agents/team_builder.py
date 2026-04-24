@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import logging
+
 from .factory import build_model_client
 from .prompt_builder import resolve_system_prompt
+
+logger = logging.getLogger(__name__)
 
 
 def build_agent_runtime_spec(agent_config: dict, objective: str = "") -> dict:
@@ -92,6 +96,16 @@ def build_team(project: dict):
 
         allow_repeated = team_cfg.get("allow_repeated_speaker", True)
 
+        logger.info(
+            "agents.team.built",
+            extra={
+                "team_type": "selector",
+                "agent_count": n_agents,
+                "max_iterations": max_iter,
+                "human_gate": has_gate,
+                "selector_model": selector_model_name,
+            },
+        )
         return SelectorGroupChat(
             agents,
             model_client=selector_model_client,
@@ -103,5 +117,14 @@ def build_team(project: dict):
     # Default: round_robin
     from autogen_agentchat.teams import RoundRobinGroupChat
 
+    logger.info(
+        "agents.team.built",
+        extra={
+            "team_type": "round_robin",
+            "agent_count": n_agents,
+            "max_iterations": max_iter,
+            "human_gate": has_gate,
+        },
+    )
     return RoundRobinGroupChat(agents, termination_condition=termination)
 

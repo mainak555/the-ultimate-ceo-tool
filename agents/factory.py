@@ -19,11 +19,14 @@ See docs/agent_factory.md for full schema reference and environment setup.
 
 from __future__ import annotations
 
+import logging
 import os
 from importlib import import_module
 from typing import Any
 
 from .config_loader import get_model_metadata
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -235,4 +238,16 @@ def build_model_client(model_name: str, **kwargs: Any):
             f"Supported providers: {supported}."
         )
 
-    return builder(model_name, metadata, **kwargs)
+    try:
+        client = builder(model_name, metadata, **kwargs)
+    except Exception:
+        logger.exception(
+            "agents.model_client.failed",
+            extra={"provider": provider, "model_name": model_name},
+        )
+        raise
+    logger.info(
+        "agents.model_client.created",
+        extra={"provider": provider, "model_name": model_name},
+    )
+    return client

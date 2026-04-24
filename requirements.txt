@@ -11,3 +11,7 @@ autogen-agentchat>=0.4
 requests>=2.32
 autogen-core>=0.4
 autogen-ext[openai,azure,anthropic]>=0.4
+python-json-logger>=2.0
+opentelemetry-api>=1.27
+opentelemetry-sdk>=1.27
+opentelemetry-exporter-otlp-proto-http>=1.27

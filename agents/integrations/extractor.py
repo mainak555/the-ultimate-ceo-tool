@@ -7,9 +7,13 @@ extraction prompt and parse the JSON output.
 from __future__ import annotations
 
 import json
+import logging
 import re
+import time
 
 from agents.factory import build_model_client
+
+logger = logging.getLogger(__name__)
 
 
 def run_extraction(
@@ -70,7 +74,13 @@ def run_extraction(
         result = await client.create(messages)
         return result.content
 
+    logger.info(
+        "agents.extraction.started",
+        extra={"model_name": model_name, "discussion_chars": len(discussion_text or "")},
+    )
+    t0 = time.monotonic()
     raw = asyncio.run(_run())
+    elapsed_ms = int((time.monotonic() - t0) * 1000)
 
     # Parse JSON from the response — handle markdown code fences
     text = raw.strip()
@@ -81,6 +91,14 @@ def run_extraction(
     try:
         parsed = json.loads(text)
     except json.JSONDecodeError as exc:
+        logger.exception(
+            "agents.extraction.parse_failed",
+            extra={
+                "model_name": model_name,
+                "elapsed_ms": elapsed_ms,
+                "raw_snippet": text[:500],
+            },
+        )
         raise ValueError(f"Extractor returned invalid JSON: {exc}\n\nRaw output:\n{text}")
 
     # Normalize common model output variants.
@@ -89,11 +107,23 @@ def run_extraction(
     if isinstance(parsed, dict):
         items = parsed.get("items")
         if items is None:
+            logger.info(
+                "agents.extraction.completed",
+                extra={"model_name": model_name, "elapsed_ms": elapsed_ms, "item_count": 0},
+            )
             return []
     else:
         items = parsed
 
     if not isinstance(items, list):
+        logger.error(
+            "agents.extraction.shape_mismatch",
+            extra={"model_name": model_name, "actual_type": type(items).__name__},
+        )
         raise ValueError(f"Expected 'items' array in extractor output, got: {type(items).__name__}")
 
+    logger.info(
+        "agents.extraction.completed",
+        extra={"model_name": model_name, "elapsed_ms": elapsed_ms, "item_count": len(items)},
+    )
     return items

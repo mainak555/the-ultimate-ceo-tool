@@ -5,10 +5,24 @@ Every function takes (api_key, token) plus endpoint-specific params.
 All responses are simplified dicts; errors raise ValueError.
 """
 
+import logging
+import re
+
 import requests
+
+logger = logging.getLogger(__name__)
 
 TRELLO_API = "https://api.trello.com/1"
 LABEL_COLORS = ["green", "yellow", "orange", "red", "purple", "blue", "sky", "lime", "pink", "black"]
+
+_SECRET_PARAM_RE = re.compile(r"(?i)([?&])(key|token)=[^&]*")
+
+
+def _redact_url(url: str) -> str:
+    """Strip Trello `key=` and `token=` query parameters before logging."""
+    if not url:
+        return url
+    return _SECRET_PARAM_RE.sub(lambda m: f"{m.group(1)}{m.group(2)}=***", url)
 
 
 def _auth_params(api_key, token):
@@ -17,10 +31,37 @@ def _auth_params(api_key, token):
 
 
 def _check(resp, action):
-    """Raise ValueError with a clear message on non-2xx."""
-    if not resp.ok:
-        detail = resp.text[:200] if resp.text else resp.reason
-        raise ValueError(f"Trello API error ({action}): {resp.status_code} — {detail}")
+    """Log the call (success or error) and raise ValueError on non-2xx."""
+    method = getattr(resp.request, "method", "?") if resp.request else "?"
+    url = _redact_url(getattr(resp.request, "url", "") or "")
+    elapsed_ms = int(resp.elapsed.total_seconds() * 1000) if resp.elapsed else 0
+
+    if resp.ok:
+        logger.info(
+            "trello.api.call",
+            extra={
+                "action": action,
+                "method": method,
+                "url": url,
+                "status": resp.status_code,
+                "elapsed_ms": elapsed_ms,
+            },
+        )
+        return
+
+    detail = resp.text[:200] if resp.text else resp.reason
+    logger.error(
+        "trello.api.error",
+        extra={
+            "action": action,
+            "method": method,
+            "url": url,
+            "status": resp.status_code,
+            "elapsed_ms": elapsed_ms,
+            "body_snippet": (resp.text or "")[:500],
+        },
+    )
+    raise ValueError(f"Trello API error ({action}): {resp.status_code} — {detail}")
 
 
 # ---------------------------------------------------------------------------

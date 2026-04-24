@@ -6,6 +6,7 @@ Each type has independent credentials (site_url, email, api_key).
 Export payloads stored as discussions[].exports.jira.<type>.
 """
 
+import logging
 from datetime import datetime, timezone
 
 from bson import ObjectId
@@ -17,6 +18,8 @@ from . import jira_client
 from . import jira_software_service
 from . import jira_service_desk_service
 from . import jira_business_service
+
+logger = logging.getLogger(__name__)
 
 JIRA_TYPES = ("software", "service_desk", "business")
 

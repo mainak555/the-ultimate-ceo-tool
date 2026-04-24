@@ -4,6 +4,7 @@ and orchestration of trello_client calls.
 """
 
 from datetime import datetime, timedelta, timezone
+import logging
 from urllib.parse import quote
 
 from bson import ObjectId
@@ -12,6 +13,8 @@ from bson.errors import InvalidId
 from .db import get_collection, CHAT_SESSIONS_COLLECTION
 from . import services
 from . import trello_client
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------

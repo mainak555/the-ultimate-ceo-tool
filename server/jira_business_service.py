@@ -1,6 +1,10 @@
 """Jira Business type-specific service helpers."""
 
+import logging
+
 from . import jira_client
+
+logger = logging.getLogger(__name__)
 
 
 def fetch_spaces(site_url, email, api_key):

@@ -12,11 +12,14 @@ initial task so agents retain context.
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from autogen_agentchat.teams import RoundRobinGroupChat, SelectorGroupChat
     from autogen_core import CancellationToken
+
+logger = logging.getLogger(__name__)
 
 # session_id → team instance
 _TEAM_CACHE: dict[str, "RoundRobinGroupChat | SelectorGroupChat"] = {}
@@ -40,8 +43,11 @@ def get_or_build_team(
 
     cache_miss = session_id not in _TEAM_CACHE
     if cache_miss:
+        logger.info("agents.team.cache_miss", extra={"session_id": session_id})
         _TEAM_CACHE[session_id] = build_team(project)
         _CANCEL_TOKENS[session_id] = CT()
+    else:
+        logger.debug("agents.team.cache_hit", extra={"session_id": session_id})
 
     return _TEAM_CACHE[session_id], _CANCEL_TOKENS[session_id], cache_miss
 
@@ -69,10 +75,13 @@ def cancel_team(session_id: str) -> None:
     """Signal the currently-running SSE stream to stop after this agent's turn."""
     token = _CANCEL_TOKENS.get(session_id)
     if token:
+        logger.info("agents.team.cancelled", extra={"session_id": session_id})
         token.cancel()
 
 
 def evict_team(session_id: str) -> None:
     """Remove team from cache (call after stop or final completion)."""
+    if session_id in _TEAM_CACHE:
+        logger.info("agents.team.evicted", extra={"session_id": session_id})
     _TEAM_CACHE.pop(session_id, None)
     _CANCEL_TOKENS.pop(session_id, None)
