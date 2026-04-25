@@ -27,7 +27,7 @@ traces serve different purposes and are intentionally split:
         ▼                    │
 ┌────────────────────────┐  │
 │  TracerProvider        │  │
-│  (agents/tracing.py)   │  │
+│   (core/tracing.py)    │  │
 └────────────────────────┘  │
         │                    │
         ├── BatchSpanProcessor ─▶ OTLP exporter (Langfuse | other)
@@ -59,7 +59,8 @@ traces serve different purposes and are intentionally split:
 | `OTEL_MAX_PAYLOAD_BYTES` | Per-attribute payload truncation cap (bytes) | `32768` |
 | `OTEL_CONSOLE_EXPORTER` | Console span output mode (`off` / `error` / `all`) | `off` |
 | `OTEL_INSTRUMENT_HTTP` | Django + outbound `requests` auto-instrumentation. Disable when only deeper layers matter. | `on` |
-| `OTEL_INSTRUMENT_PYMONGO` | pymongo auto-instrumentation (one span per Mongo command — high cardinality). Enable for query/connection diagnostics. | `off` |
+| `OTEL_HTTP_LOG_BODY` | Controls request/response payload capture for successful (2xx) outbound HTTP calls instrumented via `core/http_tracing.py`. Non-2xx still always capture payloads. | `on` |
+| `OTEL_INSTRUMENT_MONGO` | pymongo auto-instrumentation (one span per Mongo command — high cardinality). Enable for query/connection diagnostics. | `off` |
 | `OTEL_INSTRUMENT_AGENTS` | AutoGen event-log → span bridge (LLM calls, prompts, tool invocations). Disable to silence the LLM/agent layer entirely. | `on` |
 | `OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT` | OTel SDK attribute length limit. Must be raised when raising `OTEL_MAX_PAYLOAD_BYTES` above 32 KB. | *(SDK default 32768)* |
 
@@ -83,7 +84,7 @@ verbosity per concern without code changes. All toggles accept
 | Category | Env var | Default | What it produces | When to flip |
 |---|---|---|---|---|
 | **HTTP / API** (Django + outbound `requests`) | `OTEL_INSTRUMENT_HTTP` | `on` | One span per Django request; one span per outbound HTTP call (Trello, Jira, Langfuse export, etc.) | Disable in narrow load tests where you only care about agent latency. |
-| **Database** (pymongo) | `OTEL_INSTRUMENT_PYMONGO` | `off` | One span per Mongo command (`find`, `update_one`, etc.) | Enable when diagnosing slow queries, connection storms, or unexpected reads. Off by default because trace volume balloons quickly. |
+| **Database** (pymongo) | `OTEL_INSTRUMENT_MONGO` | `off` | One span per Mongo command (`find`, `update_one`, etc.) | Enable when diagnosing slow queries, connection storms, or unexpected reads. Off by default because trace volume balloons quickly. |
 | **LLM / Agents** (AutoGen event bridge) | `OTEL_INSTRUMENT_AGENTS` | `on` | `autogen.event.LLMCall`, `autogen.event.ToolCall`, prompts, model responses, token usage | Disable when running purely-deterministic flows (Trello/Jira pushes without an agent run) and you want to suppress LLM payloads from the OTLP backend. |
 | **Service mutations** (manual `@traced_function`) | *(none — always on)* | n/a | `service.project.create`, `service.chat.create`, `service.trello.export.push`, `service.jira.<type>.push_issues`, etc. | Always emitted because each callsite is explicitly chosen by the developer; spans are cheap and namespaced. |
 
@@ -97,10 +98,10 @@ LOG_LEVEL=INFO OTEL_CONSOLE_EXPORTER=off
 LOG_LEVEL=INFO OTEL_CONSOLE_EXPORTER=error
 
 # Mongo deep dive
-OTEL_INSTRUMENT_PYMONGO=1
+OTEL_INSTRUMENT_MONGO=1
 
 # Reproduce an agent issue without HTTP/Mongo noise in the OTLP backend
-OTEL_INSTRUMENT_HTTP=0 OTEL_INSTRUMENT_PYMONGO=0 OTEL_INSTRUMENT_AGENTS=1
+OTEL_INSTRUMENT_HTTP=0 OTEL_INSTRUMENT_MONGO=0 OTEL_INSTRUMENT_AGENTS=1
 
 # Local firehose — every span on console
 LOG_LEVEL=DEBUG
@@ -113,8 +114,8 @@ LOG_LEVEL=DEBUG
 | Layer | Mechanism | Span Examples |
 |---|---|---|
 | Django requests | Auto (`DjangoInstrumentor`) — gated by `OTEL_INSTRUMENT_HTTP` | `GET /chat/sessions/<id>/` |
-| Outbound HTTP (Trello, Jira) | Auto (`RequestsInstrumentor`) + enrichment in `_check()` — gated by `OTEL_INSTRUMENT_HTTP` | `HTTP POST` with `trello.action` / `jira.action`, `http.url` (redacted), `http.status_code`, `input.value`, `output.value` |
-| MongoDB ops | Auto (`PymongoInstrumentor`) — gated by `OTEL_INSTRUMENT_PYMONGO` (default off) | `mongo.find`, `mongo.insert_one` |
+| Outbound HTTP (Trello, Jira, future providers) | Auto (`RequestsInstrumentor`) + shared `core/http_tracing.py` helper (`instrument_http_response`) in client `_handle_api_response()`/fallback branches — gated by `OTEL_INSTRUMENT_HTTP` | `HTTP POST` with `<provider>.action`, `http.url` (redacted when needed), `http.status_code`, `input.value`, `output.value`, and `<provider>.error.*` on non-2xx |
+| MongoDB ops | Auto (`PymongoInstrumentor`) — gated by `OTEL_INSTRUMENT_MONGO` (default off) | `mongo.find`, `mongo.insert_one` |
 | Service-layer mutations | Manual `@traced_function` (always on) | `service.project.create`, `service.chat.create`, `service.trello.export.push`, `service.jira.<type>.push_issues` |
 | AutoGen agent runs | Event-log bridge — gated by `OTEL_INSTRUMENT_AGENTS` | `autogen.event.LLMCall`, `autogen.event.ToolCall` with full payloads |
 
@@ -131,7 +132,7 @@ LOG_LEVEL=DEBUG
   - `RequestIdFilter` — injects `request_id` from the `contextvars` set by `RequestIdMiddleware`.
   - `TraceContextFilter` — reads the active span and injects `trace_id` / `span_id`.
   - `EventOnlyConsoleFilter` — drops INFO records ending in `.api.call`. Per-call HTTP success detail lives on spans, not console.
-- AutoGen payload loggers (`autogen_core.events`, `autogen_agentchat.events`) are **owned by `agents.tracing._install_autogen_event_bridge()`**, not by `config/settings.py` LOGGING. The bridge strips the shared `console` handler from those loggers and attaches `AutoGenEventSpanBridgeHandler` instead, so INFO payload events flow to spans (with redaction + truncation) and never reach console. ERROR records on those loggers set `Span.status = ERROR`, which is then surfaced through `OTEL_CONSOLE_EXPORTER=error` (if enabled) and through Django request logging at the outer layer.
+- AutoGen payload loggers (`autogen_core.events`, `autogen_agentchat.events`) are **owned by `core.tracing._install_autogen_event_bridge()`**, not by `config/settings.py` LOGGING. The bridge strips the shared `console` handler from those loggers and attaches `AutoGenEventSpanBridgeHandler` instead, so INFO payload events flow to spans (with redaction + truncation) and never reach console. ERROR records on those loggers set `Span.status = ERROR`, which is then surfaced through `OTEL_CONSOLE_EXPORTER=error` (if enabled) and through Django request logging at the outer layer.
 
 ### Span dumps (opt-in)
 
@@ -146,7 +147,7 @@ Set `OTEL_CONSOLE_EXPORTER` for stderr span output:
 `LOG_LEVEL=DEBUG` implicitly upgrades the default to `all`.
 
 Wiring lives only in `_build_console_span_processor()` in
-`agents/tracing.py`. Never add a second `ConsoleSpanExporter` elsewhere.
+`core/tracing.py`. Never add a second `ConsoleSpanExporter` elsewhere.
 
 ---
 
@@ -156,7 +157,7 @@ Langfuse is the currently-wired exporter, but the architecture supports any
 OTLP target.
 
 - Backend-specific construction lives in `_build_langfuse_exporter()` in
-  `agents/tracing.py`. Returns either an `OTLPSpanExporter` or `None`.
+  `core/tracing.py`. Returns either an `OTLPSpanExporter` or `None`.
 - `_build_exporter()` is the single dispatch point.
 
 ### Swapping backends (Jaeger / Tempo / Honeycomb / OTel collector)
@@ -175,15 +176,44 @@ def _build_exporter():
     return _build_langfuse_exporter()
 ```
 
-No call sites in `server/` change. Service decorators, HTTP client `_check`
-helpers, and `set_payload_attribute()` all remain identical.
+No call sites in `server/` change. Service decorators and
+`set_payload_attribute()` remain identical; outbound client instrumentation
+is centralized in `core/http_tracing.py`.
+
+---
+
+## Shared HTTP Client Tracing Standard
+
+All outbound integration clients must use `core/http_tracing.py` as the
+single tracing path:
+
+- `instrument_http_response(resp, provider=..., action=...)` on success.
+- `instrument_http_response(..., detail=..., error_messages=..., field_errors=...)`
+  on non-2xx paths (including graceful fallback branches that continue).
+- Name client response handlers meaningfully (for example
+  `_handle_api_response`) instead of generic names like `_check`.
+
+This guarantees a uniform contract across all providers:
+
+- Request/response payloads always go to canonical `input.value` /
+  `output.value` via `set_payload_attribute()`.
+- `OTEL_HTTP_LOG_BODY=off` skips `input.value` / `output.value`
+  for successful (2xx) outbound calls to reduce payload volume.
+- Error spans always set `StatusCode.ERROR` with `<provider>.error.detail`,
+  `<provider>.error.status_code`, `<provider>.error.response_body`, and
+  optional structured payloads (`<provider>.error.messages`,
+  `<provider>.error.fields`).
+- Non-2xx spans always include request/response payloads regardless of
+  `OTEL_HTTP_LOG_BODY`.
+- Provider-specific code only supplies business parsing and optional URL
+  redaction; it does not implement span plumbing.
 
 ---
 
 ## Span Payload Contract
 
 **Canonical, non-duplicated.** Every payload reaching a span goes through
-`set_payload_attribute(span, key, value)` from `agents/tracing.py`, which:
+`set_payload_attribute(span, key, value)` from `core/tracing.py`, which:
 
 1. Calls `redact_payload()` — masks any field whose key matches
    `(?i)api_key|secret|password|token|authorization|x-app-secret-key`.
@@ -270,7 +300,7 @@ Levels:
 ## Adding a New Span
 
 ```python
-from agents.tracing import traced_function, traced_block, set_payload_attribute
+from core.tracing import traced_function, traced_block, set_payload_attribute
 
 # 1. Decorator on a service-layer function
 @traced_function("service.<area>.<op>")
@@ -302,3 +332,4 @@ Before merging new I/O code, confirm:
 7. Spans use canonical payload fields only (`input.value` / `output.value` + inferred MIME types) routed through `set_payload_attribute()`.
 8. Sending a request body > 32 KB produces a span with `span.body.truncated=true` and `span.body.original_bytes=<n>`.
 9. With `OTEL_CONSOLE_EXPORTER=error`, an intentionally raised exception inside a `traced_block` dumps a single-span JSON blob to stderr with `status_code: "ERROR"`, `exception.stacktrace`, and matching `trace_id` from the preceding log line.
+10. New HTTP clients do not implement local span helper copies (for example `_current_span`, `_enrich_span`, `_mark_span_error`) and instead call `core.http_tracing.instrument_http_response()`.

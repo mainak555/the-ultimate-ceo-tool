@@ -24,10 +24,11 @@ project_type_key values used in Jira API:
 
 import base64
 import logging
+import re
 
 import requests
 
-from agents.tracing import set_payload_attribute
+from core.http_tracing import instrument_http_response
 
 logger = logging.getLogger(__name__)
 
@@ -62,36 +63,17 @@ def _auth_headers(email, api_key):
     }
 
 
-def _check(resp, action):
+def _handle_api_response(resp, action):
     """Enrich the active span and raise ValueError on non-2xx responses.
 
     Never logs the Authorization header or request body to console.
     """
-    span = None
-    try:
-        from opentelemetry import trace
-        candidate = trace.get_current_span()
-        if candidate and candidate.is_recording():
-            span = candidate
-    except Exception:
-        span = None
-
-    if span is not None:
-        try:
-            span.set_attribute("jira.action", action)
-            span.set_attribute("http.status_code", resp.status_code)
-            url = getattr(resp.request, "url", "") or ""
-            if url:
-                span.set_attribute("http.url", url)
-        except Exception:
-            pass
-        request_body = getattr(getattr(resp, "request", None), "body", None)
-        if request_body:
-            set_payload_attribute(span, "input.value", request_body)
-        if resp.text:
-            set_payload_attribute(span, "output.value", resp.text)
-
     if resp.ok:
+        instrument_http_response(
+            resp,
+            provider="jira",
+            action=action,
+        )
         return
 
     method = getattr(resp.request, "method", "?") if resp.request else "?"
@@ -99,18 +81,32 @@ def _check(resp, action):
     elapsed_ms = int(resp.elapsed.total_seconds() * 1000) if resp.elapsed else 0
 
     detail = ""
+    error_messages = []
+    field_errors = {}
     try:
         body = resp.json()
-        detail = body.get("errorMessages", [])
+        error_messages = body.get("errorMessages", []) or []
+        field_errors = body.get("errors") or {}
+        detail = error_messages
         if detail:
             detail = " ".join(detail)
         else:
-            errors = body.get("errors") or {}
-            detail = "; ".join(f"{k}: {v}" for k, v in errors.items()) if errors else ""
+            detail = "; ".join(f"{k}: {v}" for k, v in field_errors.items()) if field_errors else ""
     except Exception:
         pass
     if not detail:
         detail = resp.text[:200] if resp.text else resp.reason
+
+    _, detail = instrument_http_response(
+        resp,
+        provider="jira",
+        action=action,
+        detail=detail,
+        error_messages=error_messages,
+        field_errors=field_errors,
+    )
+    detail = detail or "HTTP error"
+
     logger.error(
         "jira.api.error",
         extra={
@@ -137,7 +133,7 @@ def verify_credentials(site_url, email, api_key):
     """
     url = f"{_base_url(site_url)}/rest/api/3/myself"
     resp = requests.get(url, headers=_auth_headers(email, api_key), timeout=15)
-    _check(resp, "verify_credentials")
+    _handle_api_response(resp, "verify_credentials")
     data = resp.json()
     return {
         "account_id": data.get("accountId", ""),
@@ -163,7 +159,7 @@ def get_projects(site_url, email, api_key, type_key=None):
 
     url = f"{_base_url(site_url)}/rest/api/3/project/search"
     resp = requests.get(url, headers=_auth_headers(email, api_key), params=params, timeout=15)
-    _check(resp, "get_projects")
+    _handle_api_response(resp, "get_projects")
     data = resp.json()
     projects = []
     for p in data.get("values") or []:
@@ -188,7 +184,7 @@ def get_project_priorities(site_url, email, api_key, project_key=None):
     """Return priorities available in the Jira instance (project-aware fallback)."""
     url = f"{_base_url(site_url)}/rest/api/3/priority"
     resp = requests.get(url, headers=_auth_headers(email, api_key), timeout=15)
-    _check(resp, "get_project_priorities")
+    _handle_api_response(resp, "get_project_priorities")
     out = []
     seen = set()
     for row in resp.json() or []:
@@ -219,7 +215,7 @@ def get_project_sprints(site_url, email, api_key, project_key):
         params={"projectKeyOrId": project_key, "maxResults": 50},
         timeout=15,
     )
-    _check(boards_resp, "get_project_sprints.boards")
+    _handle_api_response(boards_resp, "get_project_sprints.boards")
     boards = boards_resp.json().get("values") or []
 
     sprint_map = {}
@@ -237,6 +233,12 @@ def get_project_sprints(site_url, email, api_key, project_key):
             timeout=15,
         )
         if not sprints_resp.ok:
+            instrument_http_response(
+                sprints_resp,
+                provider="jira",
+                action="get_project_sprints.sprints",
+                detail=_format_jira_error(sprints_resp),
+            )
             continue
         for sprint in (sprints_resp.json().get("values") or []):
             sid = str(sprint.get("id") or "").strip()
@@ -279,7 +281,7 @@ def get_project_epics(site_url, email, api_key, project_key):
         json={"jql": jql, "fields": ["summary"], "maxResults": 100},
         timeout=20,
     )
-    _check(resp, "get_project_epics")
+    _handle_api_response(resp, "get_project_epics")
 
     out = []
     for issue in resp.json().get("issues") or []:
@@ -296,6 +298,39 @@ def get_project_epics(site_url, email, api_key, project_key):
     return out
 
 
+def get_project_existing_issues(site_url, email, api_key, project_key):
+    """Return existing Jira issues for a project.
+
+    Uses ``/rest/api/3/search/jql`` and returns rows shaped as:
+    ``[{key, summary, issue_type, parent_key}]``.
+    """
+    project_key = (project_key or "").strip()
+    if not project_key:
+        return []
+
+    jql = f'project = "{project_key}" ORDER BY created DESC'
+    url = f"{_base_url(site_url)}/rest/api/3/search/jql"
+    resp = requests.post(
+        url,
+        headers=_auth_headers(email, api_key),
+        json={"jql": jql, "fields": ["summary", "issuetype", "parent"], "maxResults": 500},
+        timeout=20,
+    )
+    _handle_api_response(resp, "get_project_existing_issues")
+
+    out = []
+    for issue in resp.json().get("issues") or []:
+        key = str(issue.get("key") or "").strip()
+        fields = issue.get("fields") or {}
+        summary = str((fields.get("summary") or "")).strip()
+        issue_type = str(((fields.get("issuetype") or {}).get("name") or "")).strip()
+        parent_key = str(((fields.get("parent") or {}).get("key") or "")).strip()
+        if not key:
+            continue
+        out.append({"key": key, "summary": summary, "issue_type": issue_type, "parent_key": parent_key})
+    return out
+
+
 def get_service_desks(site_url, email, api_key):
     """
     GET /rest/servicedeskapi/servicedesk — list service desk projects.
@@ -304,7 +339,7 @@ def get_service_desks(site_url, email, api_key):
     """
     url = f"{_base_url(site_url)}/rest/servicedeskapi/servicedesk"
     resp = requests.get(url, headers=_auth_headers(email, api_key), timeout=15)
-    _check(resp, "get_service_desks")
+    _handle_api_response(resp, "get_service_desks")
     data = resp.json()
     desks = []
     for d in data.get("values") or []:
@@ -324,7 +359,7 @@ def get_service_desk_request_types(site_url, email, api_key, service_desk_id):
     """
     url = f"{_base_url(site_url)}/rest/servicedeskapi/servicedesk/{service_desk_id}/requesttype"
     resp = requests.get(url, headers=_auth_headers(email, api_key), timeout=15)
-    _check(resp, "get_request_types")
+    _handle_api_response(resp, "get_request_types")
     data = resp.json()
     types = []
     for t in data.get("values") or []:
@@ -366,6 +401,12 @@ def _get_issue_types(site_url, email, api_key, project_key):
         timeout=15,
     )
     if not resp.ok:
+        instrument_http_response(
+            resp,
+            provider="jira",
+            action="get_issue_types",
+            detail=_format_jira_error(resp),
+        )
         return []
     data = resp.json()
     for project in data.get("projects") or []:
@@ -417,8 +458,9 @@ _ISSUE_TYPE_ALIASES = {
     "task": ["task", "story"],
     "bug": ["bug", "defect", "task"],
     "epic": ["epic"],
-    "sub-task": ["sub-task", "subtask"],
-    "subtask": ["subtask", "sub-task"],
+    # Some projects disable Sub-task issue types; gracefully degrade to Task.
+    "sub-task": ["sub-task", "subtask", "task"],
+    "subtask": ["subtask", "sub-task", "task"],
 }
 
 
@@ -438,10 +480,6 @@ def _build_type_resolver(project_types):
         for alias in _ISSUE_TYPE_ALIASES.get(key, []):
             if alias in available:
                 return available[alias]
-        # As a last resort, try the first available type so the create
-        # does not fail solely because of a missing custom type name.
-        if available:
-            return next(iter(available.values()))
         return None
 
     return resolve
@@ -477,8 +515,9 @@ def _build_software_fields(item, project_key, parent_key, resolved_type_name, wa
     if story_points is not None:
         try:
             sp = float(story_points)
-            fields["story_points"] = sp
-            # Also try the standard story points custom field name
+            # Keep internal `story_points` as a logical field only.
+            # Jira REST accepts custom fields (for example customfield_10016),
+            # not a top-level `story_points` field.
             fields["customfield_10016"] = sp
         except (TypeError, ValueError):
             warnings.append(f"Invalid story_points value: {story_points}")
@@ -515,7 +554,51 @@ def _format_jira_error(resp):
     return (resp.text or "")[:300] or f"HTTP {resp.status_code}"
 
 
-def _create_software_issue(base, headers, fields, parent_key):
+def _extract_jira_error_details(resp):
+    """Return (message, errors_dict) parsed from a Jira error response."""
+    message = ""
+    errors = {}
+    try:
+        body = resp.json()
+        msg = " ".join(body.get("errorMessages") or []).strip()
+        errs = body.get("errors") or {}
+        details = "; ".join(f"{k}: {v}" for k, v in errs.items())
+        message = (msg + " " + details).strip()
+        errors = errs
+    except Exception:
+        message = (resp.text or "").strip()
+        errors = {}
+    if not message:
+        message = f"HTTP {resp.status_code}"
+    return message, errors
+
+
+def _unsupported_field_keys(resp, attempted_fields):
+    """Best-effort detection of field keys Jira says are unknown/unsettable."""
+    message, errors = _extract_jira_error_details(resp)
+    keys = set()
+
+    for key, val in (errors or {}).items():
+        txt = str(val or "").lower()
+        if any(
+            token in txt
+            for token in (
+                "cannot be set",
+                "unknown",
+                "not on the appropriate screen",
+                "field was not found",
+            )
+        ):
+            keys.add(str(key))
+
+    # Some Jira errors only appear in `errorMessages`.
+    for match in re.findall(r"[Ff]ield\s+'([^']+)'", message or ""):
+        keys.add(match)
+
+    return [k for k in keys if k in (attempted_fields or {})]
+
+
+def _create_software_issue(base, headers, fields, parent_key, allow_epic_link=True):
     """POST /rest/api/3/issue with progressive parent-link fallbacks.
 
     Strategy when ``parent_key`` is set and the first attempt returns 400:
@@ -529,6 +612,12 @@ def _create_software_issue(base, headers, fields, parent_key):
     """
     url = f"{base}/rest/api/3/issue"
     resp = requests.post(url, headers=headers, json={"fields": fields}, timeout=20)
+    instrument_http_response(
+        resp,
+        provider="jira",
+        action="push_issues_software.create_issue.parent",
+        detail=_format_jira_error(resp) if not resp.ok else None,
+    )
     attempts = [("parent" if parent_key else "", resp.status_code)]
 
     if resp.ok:
@@ -541,20 +630,33 @@ def _create_software_issue(base, headers, fields, parent_key):
     if resp.status_code != 400:
         return resp, "parent", attempts
 
-    # Attempt 2: Epic Link customfield (classic Story->Epic).
-    retry_fields = {k: v for k, v in fields.items() if k != "parent"}
-    retry_fields["customfield_10014"] = parent_key
-    resp2 = requests.post(url, headers=headers, json={"fields": retry_fields}, timeout=20)
-    attempts.append(("epic_link", resp2.status_code))
-    if resp2.ok:
-        return resp2, "epic_link", attempts
-    if resp2.status_code != 400:
-        return resp2, "epic_link", attempts
+    if allow_epic_link:
+        # Attempt 2: Epic Link customfield (classic Story->Epic).
+        retry_fields = {k: v for k, v in fields.items() if k != "parent"}
+        retry_fields["customfield_10014"] = parent_key
+        resp2 = requests.post(url, headers=headers, json={"fields": retry_fields}, timeout=20)
+        instrument_http_response(
+            resp2,
+            provider="jira",
+            action="push_issues_software.create_issue.epic_link",
+            detail=_format_jira_error(resp2) if not resp2.ok else None,
+        )
+        attempts.append(("epic_link", resp2.status_code))
+        if resp2.ok:
+            return resp2, "epic_link", attempts
+        if resp2.status_code != 400:
+            return resp2, "epic_link", attempts
 
     # Attempt 3: drop the parent linkage entirely so the issue is at
     # least created. The caller appends a warning describing this.
     bare_fields = {k: v for k, v in fields.items() if k not in ("parent", "customfield_10014")}
     resp3 = requests.post(url, headers=headers, json={"fields": bare_fields}, timeout=20)
+    instrument_http_response(
+        resp3,
+        provider="jira",
+        action="push_issues_software.create_issue.no_parent",
+        detail=_format_jira_error(resp3) if not resp3.ok else None,
+    )
     attempts.append(("none", resp3.status_code))
     if resp3.ok:
         return resp3, "none", attempts
@@ -576,9 +678,21 @@ def _assign_issue_to_sprint(base, headers, sprint_value, issue_key):
         json={"issues": [issue_key]},
         timeout=20,
     )
+    instrument_http_response(
+        resp,
+        provider="jira",
+        action="push_issues_software.assign_sprint",
+        detail=_format_jira_error(resp) if not resp.ok else None,
+    )
     if resp.ok:
         return ""
     return f"Sprint assignment failed (sprint id {sprint_id}): {_format_jira_error(resp)}"
+
+
+def _update_software_issue(base, headers, issue_key, fields):
+    """PUT /rest/api/3/issue/{issue_key} for updating an existing issue."""
+    url = f"{base}/rest/api/3/issue/{issue_key}"
+    return requests.put(url, headers=headers, json={"fields": fields}, timeout=20)
 
 
 def push_issues_software(site_url, email, api_key, project_key, items):
@@ -588,7 +702,7 @@ def push_issues_software(site_url, email, api_key, project_key, items):
     items — flat list of normalized issues. Each item carries:
       summary, description, issue_type, priority, sprint, labels,
       story_points, components, acceptance_criteria, confidence_score,
-      temp_id, parent_temp_id
+            temp_id, parent_temp_id, existing_issue_key
 
     Strategy
     --------
@@ -608,6 +722,10 @@ def push_issues_software(site_url, email, api_key, project_key, items):
     5. After issue create, assign Sprint via the Agile API only when the
        issue carries a non-empty numeric sprint id and is sprintable.
        Empty sprint == Backlog == skip the call entirely.
+        6. If ``existing_issue_key`` is present, update that existing Jira
+             issue with the card's fields, map ``temp_to_key[temp_id] =
+             existing_issue_key``, emit a success-style result row, and
+             continue BFS so descendants can attach to that key.
 
     Returns [{issue_key, issue_id, summary, url, warnings, temp_id}].
     Order matches the BFS push order (roots first, then breadth-first).
@@ -653,6 +771,7 @@ def push_issues_software(site_url, email, api_key, project_key, items):
         parent_tid = (item or {}).get("parent_temp_id")
         parent_tid = str(parent_tid).strip() if parent_tid else ""
 
+        existing_issue_key = str((item or {}).get("existing_issue_key") or "").strip()
         parent_key = ""
         if parent_tid:
             parent_key = temp_to_key.get(parent_tid, "")
@@ -661,8 +780,24 @@ def push_issues_software(site_url, email, api_key, project_key, items):
                     f"Parent '{parent_tid}' was not created; this issue will be created as a root."
                 )
 
+        if existing_issue_key and tid:
+            # Children may still link to this existing issue even if update
+            # partially fails, so publish the mapping early.
+            temp_to_key[tid] = existing_issue_key
+
         requested_type = str((item or {}).get("issue_type") or "Task").strip() or "Task"
-        resolved_type = resolve_type(requested_type) or requested_type
+        if not parent_key and requested_type.strip().lower() in {"sub-task", "subtask"}:
+            warnings.append(
+                "Parent issue is unavailable; converting Sub-task to Task so creation can continue."
+            )
+            requested_type = "Task"
+        resolved_type = resolve_type(requested_type)
+        if not resolved_type:
+            resolved_type = requested_type
+            warnings.append(
+                f"Issue type '{requested_type}' is not recognized for this project; "
+                f"attempting Jira create with '{requested_type}'."
+            )
         if resolved_type.lower() != requested_type.lower():
             warnings.append(
                 f"Issue type '{requested_type}' is not available in this project; "
@@ -673,7 +808,84 @@ def push_issues_software(site_url, email, api_key, project_key, items):
             item, project_key, parent_key, resolved_type, warnings
         )
 
-        resp, parent_method, attempts = _create_software_issue(base, headers, fields, parent_key)
+        if existing_issue_key:
+            # Existing issue path: update selected Jira issue with the current
+            # card fields (editable rows update Jira in place).
+            resp = _update_software_issue(base, headers, existing_issue_key, fields)
+
+            if not resp.ok and resp.status_code == 400:
+                bad_keys = _unsupported_field_keys(resp, fields)
+                if bad_keys:
+                    stripped_fields = {k: v for k, v in fields.items() if k not in set(bad_keys)}
+                    warnings.append(
+                        "Removed unsupported Jira field(s) and retried update: "
+                        + ", ".join(sorted(set(bad_keys)))
+                    )
+                    resp2 = _update_software_issue(base, headers, existing_issue_key, stripped_fields)
+                    resp = resp2
+
+            if not resp.ok:
+                warnings.append(f"Failed to update issue {existing_issue_key}: {_format_jira_error(resp)}")
+
+            sprint_value = str((item or {}).get("sprint") or "").strip()
+            if sprint_value and existing_issue_key:
+                if issue_type_name.strip().lower() in _NON_SPRINTABLE_TYPES:
+                    warnings.append(
+                        f"Skipped sprint assignment: '{issue_type_name}' issues cannot be placed in a sprint."
+                    )
+                else:
+                    sprint_warning = _assign_issue_to_sprint(base, headers, sprint_value, existing_issue_key)
+                    if sprint_warning:
+                        warnings.append(sprint_warning)
+
+            results.append({
+                "issue_key": existing_issue_key,
+                "issue_id": "<existing>",
+                "summary": summary,
+                "url": f"{base}/browse/{existing_issue_key}",
+                "warnings": warnings,
+                "temp_id": tid,
+            })
+
+            if tid:
+                for child in children_of.get(tid, []):
+                    queue.append(child)
+            continue
+
+        parent_type_name = ""
+        if parent_tid and parent_tid in by_temp_id:
+            parent_type_name = str((by_temp_id[parent_tid] or {}).get("issue_type") or "").strip().lower()
+        child_type_name = issue_type_name.strip().lower()
+
+        # Epic Link fallback is only meaningful for classic Story/Task/Bug -> Epic style links.
+        allow_epic_link = bool(parent_key and parent_type_name == "epic" and child_type_name not in _NON_SPRINTABLE_TYPES)
+
+        resp, parent_method, attempts = _create_software_issue(
+            base,
+            headers,
+            fields,
+            parent_key,
+            allow_epic_link=allow_epic_link,
+        )
+
+        # If Jira rejects unknown/unsettable fields, strip only those keys and retry once.
+        if not resp.ok and resp.status_code == 400:
+            bad_keys = _unsupported_field_keys(resp, fields)
+            if bad_keys:
+                stripped_fields = {k: v for k, v in fields.items() if k not in set(bad_keys)}
+                warnings.append(
+                    "Removed unsupported Jira field(s) and retried: " + ", ".join(sorted(set(bad_keys)))
+                )
+                resp2, parent_method2, attempts2 = _create_software_issue(
+                    base,
+                    headers,
+                    stripped_fields,
+                    parent_key,
+                    allow_epic_link=allow_epic_link,
+                )
+                resp = resp2
+                parent_method = parent_method2
+                attempts.extend([(f"retry/{m}" if m else "retry/no-parent", s) for m, s in attempts2])
 
         if resp.ok and parent_key:
             if parent_method == "epic_link":
@@ -817,9 +1029,21 @@ def push_issues_service_desk(site_url, email, api_key, service_desk_id, items):
                 msg = err_msg or f"HTTP {resp.status_code}"
             except Exception:
                 msg = resp.text[:200] or f"HTTP {resp.status_code}"
+            instrument_http_response(
+                resp,
+                provider="jira",
+                action="push_issues_service_desk.create_request",
+                detail=msg,
+            )
             warnings.append(f"Failed to create request: {msg}")
             results.append({"issue_key": None, "summary": summary, "url": "", "warnings": warnings})
             continue
+
+        instrument_http_response(
+            resp,
+            provider="jira",
+            action="push_issues_service_desk.create_request",
+        )
 
         data = resp.json()
         issue_key = (data.get("issueKey") or data.get("key") or "")
@@ -904,9 +1128,21 @@ def push_issues_business(site_url, email, api_key, project_key, items):
                 msg = (err_msg + " " + err_detail).strip() or f"HTTP {resp.status_code}"
             except Exception:
                 msg = resp.text[:200] or f"HTTP {resp.status_code}"
+            instrument_http_response(
+                resp,
+                provider="jira",
+                action="push_issues_business.create_issue",
+                detail=msg,
+            )
             warnings.append(f"Failed to create issue: {msg}")
             results.append({"issue_key": None, "summary": summary, "url": "", "warnings": warnings})
             continue
+
+        instrument_http_response(
+            resp,
+            provider="jira",
+            action="push_issues_business.create_issue",
+        )
 
         data = resp.json()
         issue_key = data.get("key", "")

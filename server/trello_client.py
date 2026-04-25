@@ -15,7 +15,7 @@ import re
 
 import requests
 
-from agents.tracing import set_payload_attribute
+from core.http_tracing import instrument_http_response
 
 logger = logging.getLogger(__name__)
 
@@ -37,40 +37,14 @@ def _auth_params(api_key, token):
     return {"key": api_key, "token": token}
 
 
-def _current_span():
-    """Return the active OTel span, or None when tracing is unavailable."""
-    try:
-        from opentelemetry import trace
-    except Exception:
-        return None
-    span = trace.get_current_span()
-    return span if span and span.is_recording() else None
-
-
-def _enrich_span(action, resp):
-    """Attach action label + redacted request/response bodies to the active span."""
-    span = _current_span()
-    if span is None:
-        return
-    try:
-        span.set_attribute("trello.action", action)
-        span.set_attribute("http.status_code", resp.status_code)
-        url = _redact_url(getattr(resp.request, "url", "") or "")
-        if url:
-            span.set_attribute("http.url", url)
-    except Exception:
-        pass
-
-    request_body = getattr(getattr(resp, "request", None), "body", None)
-    if request_body:
-        set_payload_attribute(span, "input.value", request_body)
-    if resp.text:
-        set_payload_attribute(span, "output.value", resp.text)
-
-
-def _check(resp, action):
+def _handle_api_response(resp, action):
     """Enrich the active span and raise ValueError on non-2xx responses."""
-    _enrich_span(action, resp)
+    _, detail = instrument_http_response(
+        resp,
+        provider="trello",
+        action=action,
+        redact_url=_redact_url,
+    )
 
     if resp.ok:
         return
@@ -79,7 +53,7 @@ def _check(resp, action):
     url = _redact_url(getattr(resp.request, "url", "") or "")
     elapsed_ms = int(resp.elapsed.total_seconds() * 1000) if resp.elapsed else 0
 
-    detail = resp.text[:200] if resp.text else resp.reason
+    detail = detail or (resp.text[:200] if resp.text else resp.reason)
     logger.error(
         "trello.api.error",
         extra={
@@ -105,7 +79,7 @@ def get_workspaces(api_key, token):
         params={**_auth_params(api_key, token), "fields": "id,displayName"},
         timeout=15,
     )
-    _check(resp, "get_workspaces")
+    _handle_api_response(resp, "get_workspaces")
     return [{"id": w["id"], "displayName": w.get("displayName", "")} for w in resp.json()]
 
 
@@ -124,7 +98,7 @@ def get_boards(api_key, token, workspace_id=None):
         params={**_auth_params(api_key, token), "fields": "id,name,closed", "filter": "open"},
         timeout=15,
     )
-    _check(resp, "get_boards")
+    _handle_api_response(resp, "get_boards")
     return [{"id": b["id"], "name": b.get("name", "")} for b in resp.json() if not b.get("closed")]
 
 
@@ -135,7 +109,7 @@ def get_lists(api_key, token, board_id):
         params={**_auth_params(api_key, token), "filter": "open", "fields": "id,name"},
         timeout=15,
     )
-    _check(resp, "get_lists")
+    _handle_api_response(resp, "get_lists")
     return [{"id": l["id"], "name": l.get("name", "")} for l in resp.json()]
 
 
@@ -149,7 +123,7 @@ def create_board(api_key, token, name, workspace_id=None):
     if workspace_id:
         params["idOrganization"] = workspace_id
     resp = requests.post(f"{TRELLO_API}/boards/", params=params, timeout=15)
-    _check(resp, "create_board")
+    _handle_api_response(resp, "create_board")
     data = resp.json()
     return {"id": data["id"], "name": data.get("name", name)}
 
@@ -158,7 +132,7 @@ def create_list(api_key, token, name, board_id):
     """POST /1/lists → {id, name}"""
     params = {**_auth_params(api_key, token), "name": name, "idBoard": board_id}
     resp = requests.post(f"{TRELLO_API}/lists", params=params, timeout=15)
-    _check(resp, "create_list")
+    _handle_api_response(resp, "create_list")
     data = resp.json()
     return {"id": data["id"], "name": data.get("name", name)}
 
@@ -170,7 +144,7 @@ def _get_list_board(api_key, token, list_id):
         params={**_auth_params(api_key, token), "fields": "id,idBoard,name"},
         timeout=15,
     )
-    _check(resp, "get_list")
+    _handle_api_response(resp, "get_list")
     data = resp.json()
     board_id = data.get("idBoard")
     if not board_id:
@@ -185,7 +159,7 @@ def _get_board_labels(api_key, token, board_id):
         params={**_auth_params(api_key, token), "fields": "id,name,color", "limit": 1000},
         timeout=15,
     )
-    _check(resp, "get_board_labels")
+    _handle_api_response(resp, "get_board_labels")
     return resp.json()
 
 
@@ -196,7 +170,7 @@ def _create_label(api_key, token, board_id, name, color):
         params={**_auth_params(api_key, token), "idBoard": board_id, "name": name, "color": color},
         timeout=15,
     )
-    _check(resp, "create_label")
+    _handle_api_response(resp, "create_label")
     return resp.json()
 
 
@@ -207,7 +181,7 @@ def _attach_label(api_key, token, card_id, label_id):
         params={**_auth_params(api_key, token), "value": label_id},
         timeout=15,
     )
-    _check(resp, "attach_label")
+    _handle_api_response(resp, "attach_label")
 
 
 def _get_board_custom_fields(api_key, token, board_id):
@@ -217,7 +191,7 @@ def _get_board_custom_fields(api_key, token, board_id):
         params={**_auth_params(api_key, token)},
         timeout=15,
     )
-    _check(resp, "get_board_custom_fields")
+    _handle_api_response(resp, "get_board_custom_fields")
     return resp.json()
 
 
@@ -234,7 +208,7 @@ def _create_text_custom_field(api_key, token, board_id, field_name):
         },
         timeout=15,
     )
-    _check(resp, "create_custom_field")
+    _handle_api_response(resp, "create_custom_field")
     return resp.json()
 
 
@@ -246,7 +220,7 @@ def _set_card_custom_field_text(api_key, token, card_id, custom_field_id, value)
         json={"value": {"text": value}},
         timeout=15,
     )
-    _check(resp, "set_custom_field")
+    _handle_api_response(resp, "set_custom_field")
 
 
 # ---------------------------------------------------------------------------
@@ -299,7 +273,7 @@ def push_cards(api_key, token, list_id, items):
             },
             timeout=15,
         )
-        _check(card_resp, "create_card")
+        _handle_api_response(card_resp, "create_card")
         card = card_resp.json()
 
         result = {
@@ -320,7 +294,7 @@ def push_cards(api_key, token, list_id, items):
                 params={**auth, "idCard": card["id"], "name": checklist_name},
                 timeout=15,
             )
-            _check(cl_resp, "create_checklist")
+            _handle_api_response(cl_resp, "create_checklist")
             checklist_id = cl_resp.json()["id"]
             for child in checklist.get("items") or []:
                 if not isinstance(child, dict):
@@ -333,7 +307,7 @@ def push_cards(api_key, token, list_id, items):
                     params={**auth, "name": child_title},
                     timeout=15,
                 )
-                _check(ci_resp, "create_checkItem")
+                _handle_api_response(ci_resp, "create_checkItem")
                 checklist_items.append(ci_resp.json().get("name", ""))
         if checklist_items:
             result["checklist_items"] = checklist_items

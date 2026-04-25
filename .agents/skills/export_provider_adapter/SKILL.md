@@ -21,6 +21,18 @@ or `provider_registry.js`. Every provider is a self-contained adapter file.
    });
    ```
 4. Implement all required backend endpoints (see Endpoint Contract below).
+5. Document the provider JSON schema contract in `README.md` (admin-facing section).
+6. Document full provider contract details in `docs/{provider}_integration.md` (developer-facing sections).
+
+## Documentation Contract (required)
+For every export provider addition or schema change, update documentation in the same PR.
+
+Required updates:
+1. `README.md`: provider section describing required extracted JSON schema and compatibility constraints.
+2. `docs/{provider}_integration.md`: full contract details including field-level schema, payload storage path, endpoint request/response shapes, and validation/fallback behavior.
+3. If no provider doc exists yet, create it under `docs/` and cross-link from `README.md`.
+
+Reference standard: `docs/export_schema_contracts.md`
 
 ## Adapter Interface (all fields required)
 ```js

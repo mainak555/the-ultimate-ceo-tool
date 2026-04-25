@@ -7,7 +7,7 @@ from . import jira_client
 logger = logging.getLogger(__name__)
 
 
-from agents.tracing import traced_function
+from core.tracing import traced_function
 
 
 def fetch_spaces(site_url, email, api_key):

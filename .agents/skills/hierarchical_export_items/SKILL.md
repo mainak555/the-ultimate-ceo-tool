@@ -73,6 +73,13 @@ Push must walk the tree **breadth-first from the roots** so that every parent is
 4. Each result item must echo back its `temp_id` so the client can correlate.
 5. Result list order matches the BFS push order (roots first, then breadth-first by depth).
 
+### Existing-item linkage (Jira Software)
+When a Jira Software row carries `existing_issue_key`:
+1. Do not create a new Jira issue for that row.
+2. Update the selected existing Jira issue with the card's edited fields.
+3. Still map `temp_to_key[temp_id] = existing_issue_key` before processing descendants so child parent-link resolution remains deterministic.
+4. If parent constraints no longer match, the UI should reset that row to `New` and require explicit reselection.
+
 ### Service-specific parent fallback (Jira Software example)
 Jira Cloud team-managed projects accept `fields.parent` for the full hierarchy (Epic → Story → Sub-task). Company-managed projects may require the legacy Epic Link customfield (`customfield_10014`) for Story → Epic. On a `400` containing `parent` or `customfield`, retry once with the customfield form before recording a hard failure.
 

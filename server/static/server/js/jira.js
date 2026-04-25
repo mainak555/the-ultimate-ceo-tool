@@ -67,7 +67,7 @@
   //   `depth_level` is intentionally NOT stored — depth is derived from
   //   `parent_temp_id` chain. See .agents/skills/hierarchical_export_items.
   var SCHEMAS = {
-    software:     ["summary", "description", "issue_type", "priority", "sprint", "labels", "story_points", "components", "acceptance_criteria", "confidence_score", "temp_id", "parent_temp_id"],
+    software:     ["summary", "description", "issue_type", "priority", "sprint", "labels", "story_points", "components", "acceptance_criteria", "confidence_score", "temp_id", "parent_temp_id", "existing_issue_key"],
     service_desk: ["summary", "description", "request_type", "priority", "labels", "impact", "urgency", "confidence_score"],
     business:     ["summary", "description", "issue_type", "priority", "labels", "due_date", "category", "confidence_score"],
   };
@@ -88,6 +88,7 @@
     story_points:         "Story Points",
     components:           "Components",
     acceptance_criteria:  "Acceptance Criteria",
+    existing_issue_key:   "Existing Issue",
     confidence_score:     "Confidence Score",
     impact:               "Impact",
     urgency:              "Urgency",
@@ -103,6 +104,7 @@
       issue_type: ["Epic", "Feature", "Story", "Task", "Sub-task", "Bug"],
       priority: ["Highest", "High", "Medium", "Low", "Lowest"],
       sprint: [{ value: "", label: "Backlog" }],
+      existing_issue_key: [{ value: "", label: "New" }],
     },
     service_desk: {
       request_type: ["Service Request", "Incident", "Problem", "Change"],
@@ -210,16 +212,22 @@
     return { byId: byId, childrenOf: childrenOf, roots: roots };
   }
 
-  function _renderIssueField(issue, field, fieldOptions, isExported) {
+  function _renderIssueField(issue, field, fieldOptions, fieldReadOnly) {
     var label    = FIELD_LABELS[field] || field;
     var value    = issue[field];
-    var disabled = isExported ? " disabled" : "";
+    var disabled = fieldReadOnly ? " disabled" : "";
 
     var html = '<div class="jira-issue-card__field">';
     html += '<label>' + esc(label) + '</label>';
 
-    if (fieldOptions && Array.isArray(fieldOptions[field]) && fieldOptions[field].length) {
-      var options = fieldOptions[field];
+    var optionsForField = null;
+    if (fieldOptions) {
+      if (typeof fieldOptions[field] === "function") optionsForField = fieldOptions[field](issue, field);
+      else optionsForField = fieldOptions[field];
+    }
+
+    if (Array.isArray(optionsForField) && optionsForField.length) {
+      var options = optionsForField;
       var valueStr = String(value || "");
       html += '<select class="input input--sm" data-field="' + field + '"' + disabled + '>';
       options.forEach(function (opt) {
@@ -257,11 +265,60 @@
     return html;
   }
 
+  function _renderSoftwareBody(node, schema, fieldOptions, isExported, reused) {
+    var html = "";
+
+    // Hidden hierarchy bookkeeping fields and non-visual metadata.
+    schema.forEach(function (field) {
+      if (_isHidden(field)) {
+        var hv = (field === "parent_temp_id") ? (node[field] || "") : String(node[field] || "");
+        html += '<input type="hidden" data-field="' + field + '" value="' + esc(String(hv)) + '">';
+      }
+    });
+
+    function renderField(field) {
+      var fieldReadOnly = !!isExported;
+      return _renderIssueField(node, field, fieldOptions, fieldReadOnly);
+    }
+
+    // Single column — keep as-is
+    html += renderField("summary");
+    html += renderField("description");
+
+    // Double column rows
+    html += '<div class="jira-issue-card__grid-two">'
+         + renderField("issue_type")
+         + renderField("existing_issue_key")
+         + '</div>';
+
+    html += '<div class="jira-issue-card__grid-two">'
+         + renderField("sprint")
+         + renderField("priority")
+         + '</div>';
+
+    html += '<div class="jira-issue-card__grid-two">'
+         + renderField("story_points")
+         + renderField("confidence_score")
+         + '</div>';
+
+        // Double column row
+        html += '<div class="jira-issue-card__grid-two">'
+          + renderField("labels")
+          + renderField("components")
+          + '</div>';
+
+        // Single column
+    html += renderField("acceptance_criteria");
+
+    return html;
+  }
+
   // Recursively render a node + descendants. Returns html string and updates
   // the running counter object (for "Issue N" sequential numbering across the
   // tree, depth-first).
   function _renderHierNode(node, ctx, counter) {
     var schema       = ctx.schema;
+    var typeName     = ctx.typeName;
     var fieldOptions = ctx.fieldOptions;
     var isExported   = ctx.isExported;
     var childrenOf   = ctx.childrenOf;
@@ -274,6 +331,7 @@
     var children  = childrenOf[tempId] || [];
     var depthCap  = depth > 4 ? 4 : depth;
     var collapsed = isCardCollapsed(tempId);
+    var reused = !!String(node.existing_issue_key || "").trim();
 
     var typeLabel = String(node.issue_type || "Issue").trim() || "Issue";
     var summary   = String(node.summary || "").trim();
@@ -307,16 +365,21 @@
 
     // Body — fields
     html += '<div class="jira-issue-card__body">';
-    schema.forEach(function (field) {
-      if (_isHidden(field)) {
-        // Hidden hierarchy inputs (live in body so collectIssuesFromEditor
-        // can read them via :scope > .jira-issue-card__body).
-        var hv = (field === "parent_temp_id") ? (node[field] || "") : String(node[field] || "");
-        html += '<input type="hidden" data-field="' + field + '" value="' + esc(String(hv)) + '">';
-        return;
-      }
-      html += _renderIssueField(node, field, fieldOptions, isExported);
-    });
+    if (typeName === "software") {
+      html += _renderSoftwareBody(node, schema, fieldOptions, isExported, reused);
+    } else {
+      schema.forEach(function (field) {
+        if (_isHidden(field)) {
+          // Hidden hierarchy inputs (live in body so collectIssuesFromEditor
+          // can read them via :scope > .jira-issue-card__body).
+          var hv = (field === "parent_temp_id") ? (node[field] || "") : String(node[field] || "");
+          html += '<input type="hidden" data-field="' + field + '" value="' + esc(String(hv)) + '">';
+          return;
+        }
+        var fieldReadOnly = !!isExported || (reused && field !== "existing_issue_key");
+        html += _renderIssueField(node, field, fieldOptions, fieldReadOnly);
+      });
+    }
     html += '</div>';
 
     // Children
@@ -349,6 +412,7 @@
       var tree    = buildIssueTree(issues);
       var counter = { n: 0 };
       var ctx     = {
+        typeName:     typeName,
         schema:       schema,
         fieldOptions: fieldOptions || {},
         isExported:   !!isExported,

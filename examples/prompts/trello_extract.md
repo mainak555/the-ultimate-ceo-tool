@@ -27,7 +27,7 @@ JSON SCHEMA
     "custom_fields": [
       {
         "field_name": "string",
-        "field_type": "text",
+        "field_type": "text|number|date|checkbox|list",
         "value": "string"
       }
     ],
@@ -103,6 +103,9 @@ Rules:
 - If a section is shared across objectives (e.g. global assumptions), include it in every relevant card.
 - If text includes "Deferred", "Later", "Future Phase" — map to custom field named "Future Scope".
 - Deduplicate repeated constraints or notes.
+- `field_type` must be one of Trello-supported values: `text`, `number`, `date`, `checkbox`, `list`.
+- For `list` fields, set `value` to the selected option text.
+- For `checkbox` fields, set `value` to `"true"` or `"false"`.
 
 Format example:
 {

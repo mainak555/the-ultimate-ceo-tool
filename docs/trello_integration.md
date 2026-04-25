@@ -122,24 +122,100 @@ Trello is the baseline implementation for the shared export popup pattern used b
 3. Footer = Extract, Save, Export, Cancel.
 4. Extract and Save are independent actions.
 
-## Mapping Structure
+## Extraction Schema Contract
 
-```
-items: [
+The Trello extraction prompt must return a JSON array (not an object wrapper):
+
+```json
+[
   {
-    title: "Card title",
-    description: "Card description",
-    children: [
-      { title: "Checklist item 1" },
-      { title: "Checklist item 2" }
-    ]
+    "card_title": "string",
+    "card_description": "string",
+    "checklists": [
+      {
+        "name": "string",
+        "items": [
+          {
+            "title": "string",
+            "checked": false
+          }
+        ]
+      }
+    ],
+    "custom_fields": [
+      {
+        "field_name": "string",
+        "field_type": "text|number|date|checkbox|list",
+        "value": "string"
+      }
+    ],
+    "labels": ["string"],
+    "priority": "Low|Medium|High|Critical",
+    "confidence_score": 0.0
   }
 ]
 ```
 
-- `title` → Trello Card name
-- `description` → Trello Card description
-- `children` → Checklist named "Tasks" with check items
+Normalization behavior in `server/trello_service.py`:
+
+- `card_title` is required for authored prompts; empty values normalize to `Untitled`
+- `card_description` defaults to empty string
+- `checklists[].name` defaults to `Tasks`
+- empty checklist item titles are dropped
+- Trello custom field definition types are `text`, `number`, `date`, `checkbox`, and `list` (per Atlassian Trello docs)
+- current exporter normalization stores `custom_fields[].field_type` as `text`
+- labels are case-insensitive deduplicated
+- `confidence_score` is clamped to `0.0-1.0`
+
+Legacy compatibility:
+
+- Legacy keys `title`, `description`, and `children` are still accepted and normalized
+- `children` is converted to a single checklist named `Tasks`
+
+## Saved Export Payload Contract
+
+Saved payload path: `discussions[].exports.trello`
+
+```json
+{
+  "schema_version": "2026-04-21",
+  "updated_at": "ISO datetime",
+  "exported": false,
+  "source": "extract|manual",
+  "cards": [
+    {
+      "card_title": "string",
+      "card_description": "string",
+      "checklists": [
+        {
+          "name": "string",
+          "items": [
+            {
+              "title": "string",
+              "checked": false
+            }
+          ]
+        }
+      ],
+      "custom_fields": [
+        {
+          "field_name": "string",
+          "field_type": "text|number|date|checkbox|list",
+          "value": "string"
+        }
+      ],
+      "labels": ["string"],
+      "priority": "Low|Medium|High|Critical",
+      "confidence_score": 0.0
+    }
+  ],
+  "last_push": {
+    "pushed_at": "ISO datetime",
+    "list_id": "string",
+    "result": []
+  }
+}
+```
 
 ## Security
 

@@ -28,7 +28,7 @@ from .model_catalog import (
 )
 from .schemas import validate_project, validate_chat_session
 
-from agents.tracing import traced_function
+from core.tracing import traced_function
 
 
 class ProjectDeletionBlocked(ValueError):

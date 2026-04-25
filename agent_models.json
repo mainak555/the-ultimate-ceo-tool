@@ -18,6 +18,7 @@
     "api_version": "2024-12-01-preview"
   },
   "gpt-4o": {
+    "disabled": true, 
     "provider": "openai"
   },
   "gpt-5.4-mini": {

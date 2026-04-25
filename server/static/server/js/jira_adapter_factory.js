@@ -36,6 +36,7 @@
         ? window.JiraUtils.getDefaultFieldOptions(cfg.type)
         : {},
       metadataByProject: {},
+      existingIssuesCatalog: [],
       globalSelections: { sprint: "" },
       baseAPI: null,
     };
@@ -127,18 +128,213 @@
     function fallbackSoftwareOptions() {
       var fallback = window.JiraUtils.getDefaultFieldOptions("software");
       fallback.sprint = [{ value: "", label: "Backlog" }];
+      fallback.existing_issue_key = [{ value: "", label: "New" }];
       return fallback;
+    }
+
+    function _normText(v) {
+      return String(v || "")
+        .toLowerCase()
+        .replace(/[^a-z0-9\s]/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+    }
+
+    function _tokens(v) {
+      return _normText(v)
+        .split(" ")
+        .filter(function (t) { return t.length >= 3; });
+    }
+
+    function _fuzzySummaryScore(a, b) {
+      var na = _normText(a);
+      var nb = _normText(b);
+      if (!na || !nb) return 0;
+      if (na === nb) return 1;
+      if (na.indexOf(nb) !== -1 || nb.indexOf(na) !== -1) return 0.8;
+
+      var ta = _tokens(na);
+      var tb = _tokens(nb);
+      if (!ta.length || !tb.length) return 0;
+
+      var setA = {};
+      var setB = {};
+      ta.forEach(function (t) { setA[t] = true; });
+      tb.forEach(function (t) { setB[t] = true; });
+
+      var intersection = 0;
+      var union = 0;
+      var seen = {};
+
+      Object.keys(setA).forEach(function (k) {
+        seen[k] = true;
+        union += 1;
+        if (setB[k]) intersection += 1;
+      });
+      Object.keys(setB).forEach(function (k) {
+        if (!seen[k]) union += 1;
+      });
+
+      return union ? (intersection / union) : 0;
+    }
+
+    function _normalizedSummary(v) {
+      return _normText(v || "");
+    }
+
+    function _issueMapByTempId() {
+      var out = {};
+      (state.issues || []).forEach(function (it) {
+        var tid = String((it && it.temp_id) || "").trim();
+        if (tid) out[tid] = it;
+      });
+      return out;
+    }
+
+    function _candidateExistingRows(issue, opts) {
+      opts = opts || {};
+      var selectedType = String((issue && issue.issue_type) || "").trim().toLowerCase();
+      var selectedSummary = String((issue && issue.summary) || "").trim();
+      var catalog = state.existingIssuesCatalog || [];
+
+      var parentKey = "";
+      var parentTempId = String((issue && issue.parent_temp_id) || "").trim();
+      if (parentTempId) {
+        var byTempId = _issueMapByTempId();
+        var parentIssue = byTempId[parentTempId] || null;
+        parentKey = String((parentIssue && parentIssue.existing_issue_key) || "").trim();
+      }
+
+      var sameType = (catalog || []).filter(function (row) {
+        var rowType = String((row && row.issue_type) || "").trim().toLowerCase();
+        return !!row && !!String(row.key || "").trim() && (!selectedType || rowType === selectedType);
+      });
+
+      if (parentKey) {
+        sameType = sameType.filter(function (row) {
+          var rowParent = String((row && row.parent_key) || "").trim();
+          return !!rowParent && rowParent === parentKey;
+        });
+      }
+
+      var scored = sameType
+        .map(function (row) {
+          var score = _fuzzySummaryScore(selectedSummary, row.summary || "");
+          var exact = !!selectedSummary && _normalizedSummary(selectedSummary) === _normalizedSummary(row.summary || "");
+          return {
+            key: String(row.key || "").trim(),
+            summary: String(row.summary || "").trim(),
+            score: score,
+            exact: exact,
+          };
+        })
+        .sort(function (a, b) {
+          if ((b.exact ? 1 : 0) !== (a.exact ? 1 : 0)) return (b.exact ? 1 : 0) - (a.exact ? 1 : 0);
+          if (b.score !== a.score) return b.score - a.score;
+          return a.key.localeCompare(b.key);
+        });
+
+      var threshold = (typeof opts.threshold === "number") ? opts.threshold : 0.35;
+      var matched = scored.filter(function (row) {
+        return !selectedSummary || row.exact || row.score >= threshold;
+      });
+
+      if (!matched.length && sameType.length) {
+        matched = sameType
+          .map(function (row) {
+            return {
+              key: String(row.key || "").trim(),
+              summary: String(row.summary || "").trim(),
+              score: 0,
+              exact: false,
+            };
+          })
+          .sort(function (a, b) {
+            return a.key.localeCompare(b.key);
+          });
+      }
+
+      return matched;
+    }
+
+    function _autoSelectExistingBySummary(cascadeOnly) {
+      if (!isSoftware() || state.exported) return;
+
+      var changed = false;
+      var byTempId = _issueMapByTempId();
+      var childrenByParent = {};
+      (state.issues || []).forEach(function (it) {
+        var pid = String((it && it.parent_temp_id) || "").trim();
+        if (!pid) return;
+        (childrenByParent[pid] = childrenByParent[pid] || []).push(it);
+      });
+
+      var queue = [];
+      (state.issues || []).forEach(function (it) {
+        var pid = String((it && it.parent_temp_id) || "").trim();
+        if (!pid || !byTempId[pid]) queue.push(it);
+      });
+
+      while (queue.length) {
+        var issue = queue.shift();
+        var current = String((issue && issue.existing_issue_key) || "").trim();
+        var candidates = _candidateExistingRows(issue, { threshold: 0.35 });
+        var allowedKeys = {};
+        candidates.forEach(function (row) { allowedKeys[row.key] = true; });
+
+        if (current && !allowedKeys[current]) {
+          issue.existing_issue_key = "";
+          current = "";
+          changed = true;
+        }
+
+        if (!cascadeOnly && !current) {
+          var exact = candidates.filter(function (row) { return row.exact; });
+          if (exact.length === 1) {
+            issue.existing_issue_key = exact[0].key;
+            changed = true;
+          }
+        }
+
+        var tid = String((issue && issue.temp_id) || "").trim();
+        (childrenByParent[tid] || []).forEach(function (child) { queue.push(child); });
+      }
+
+      if (changed) {
+        renderIssues(false);
+      }
+    }
+
+    function _existingIssueOptionsFor(issue) {
+      var currentKey = String((issue && issue.existing_issue_key) || "").trim();
+      var matched = _candidateExistingRows(issue, { threshold: 0.35 });
+
+      var options = [{ value: "", label: "New" }];
+      matched.forEach(function (row) {
+        var label = row.key + (row.summary ? " - " + row.summary : "");
+        options.push({ value: row.key, label: label });
+      });
+
+      // Preserve currently selected key even if it no longer matches the active filter.
+      if (currentKey && !options.some(function (opt) { return String(opt.value || "") === currentKey; })) {
+        options.push({ value: currentKey, label: currentKey + " - Selected" });
+      }
+
+      return options;
     }
 
     function applyMetadataOptions(meta, useFallback) {
       if (!isSoftware()) return;
 
       if (!meta || useFallback) {
+        state.existingIssuesCatalog = [];
         state.fieldOptions = fallbackSoftwareOptions();
+        state.fieldOptions.existing_issue_key = _existingIssueOptionsFor;
         state.globalSelections.sprint = "";
         renderGlobalDropdownOptions();
         setGlobalDropdowns();
         applyGlobalSelectionsToIssues();
+        _autoSelectExistingBySummary(false);
         syncFooter();
         return;
       }
@@ -150,18 +346,21 @@
         return { value: row.label, label: row.label };
       });
       var sprints = [{ value: "", label: "Backlog" }].concat(toOptionRows(meta.sprints, "Sprint"));
+      state.existingIssuesCatalog = Array.isArray(meta.existing_issues) ? meta.existing_issues : [];
 
       var defaultOptions = window.JiraUtils.getDefaultFieldOptions("software");
       state.fieldOptions = {
         issue_type: issueTypes.length ? issueTypes : defaultOptions.issue_type,
         priority: priorities.length ? priorities : defaultOptions.priority,
         sprint: sprints,
+        existing_issue_key: _existingIssueOptionsFor,
       };
 
       state.globalSelections.sprint = "";
       renderGlobalDropdownOptions();
       setGlobalDropdowns();
       applyGlobalSelectionsToIssues();
+      _autoSelectExistingBySummary(false);
       syncFooter();
     }
 
@@ -279,6 +478,9 @@
               if (next.sprint === undefined || next.sprint === null) next.sprint = "";
               if (!next.temp_id) next.temp_id = window.JiraUtils.genTempId();
               if (next.parent_temp_id === undefined) next.parent_temp_id = null;
+              if (next.existing_issue_key === undefined || next.existing_issue_key === null) {
+                next.existing_issue_key = "";
+              }
               return next;
             });
           }
@@ -319,6 +521,9 @@
               next.sprint = state.globalSelections.sprint || "";
               if (!next.temp_id) next.temp_id = window.JiraUtils.genTempId();
               if (next.parent_temp_id === undefined) next.parent_temp_id = null;
+              if (next.existing_issue_key === undefined || next.existing_issue_key === null) {
+                next.existing_issue_key = "";
+              }
               return next;
             });
           }
@@ -369,15 +574,29 @@
 
       if (!projectKey || !state.issues.length) return;
 
-      setStatus("Pushing to " + cfg.label + "...");
+      setStatus("Saving draft and pushing to " + cfg.label + "...");
       var btn = document.getElementById("export-modal-push-btn");
       if (btn) btn.disabled = true;
 
-      api(ctx, "POST", "/jira/" + ctx.sessionId + "/push/" + cfg.type + "/", {
-        project_key: projectKey,
-        discussion_id: ctx.discussionId,
-        items: state.issues,
-      })
+      // Always persist the latest UI state before push so DB and exported
+      // payload stay in sync even when Save is not clicked explicitly.
+      api(
+        ctx,
+        "POST",
+        "/jira/" + ctx.sessionId + "/export/" + encodeURIComponent(ctx.discussionId) + "/" + cfg.type + "/",
+        {
+          items: state.issues,
+          source: "manual",
+        }
+      )
+        .then(function (saved) {
+          state.issues = (saved && saved.export && saved.export.issues) || state.issues;
+          return api(ctx, "POST", "/jira/" + ctx.sessionId + "/push/" + cfg.type + "/", {
+            project_key: projectKey,
+            discussion_id: ctx.discussionId,
+            items: state.issues,
+          });
+        })
         .then(function (d) {
           var count = (d.result || []).length;
           state.exported = true;
@@ -461,6 +680,7 @@
             empty.sprint = state.globalSelections.sprint || "";
             empty.parent_temp_id = null;
             empty.issue_type = "Epic";
+            empty.existing_issue_key = "";
           }
           state.issues.push(empty);
           renderIssues(false);
@@ -500,6 +720,7 @@
             child.parent_temp_id = parentTempId;
             child.sprint = state.globalSelections.sprint || "";
             child.issue_type = _defaultChildType(parent && parent.issue_type);
+            child.existing_issue_key = "";
             // Ensure parent stays expanded so the new child is visible.
             window.JiraUtils.setCardCollapsed(parentTempId, false);
             state.issues.push(child);
@@ -529,6 +750,7 @@
               seed.parent_temp_id = null;
               seed.issue_type = "Epic";
               seed.sprint = state.globalSelections.sprint || "";
+              seed.existing_issue_key = "";
               state.issues.push(seed);
             }
           } else {
@@ -542,7 +764,25 @@
         });
 
         editorEl.addEventListener("input", syncFooter);
-        editorEl.addEventListener("change", syncFooter);
+        editorEl.addEventListener("change", function (e) {
+          syncFooter();
+
+          if (!isSoftware() || state.exported) return;
+
+          var target = e && e.target;
+          if (!target || !target.getAttribute) return;
+
+          var field = target.getAttribute("data-field") || "";
+          if (field !== "issue_type" && field !== "summary" && field !== "existing_issue_key") return;
+
+          // Re-render so Existing Issue options recompute from current
+          // summary + issue type, and read-only state updates immediately
+          // after selecting an existing Jira key.
+          state.issues = window.JiraUtils.collectIssuesFromEditor(cfg.prefix + "-editor-issues", cfg.type);
+          _autoSelectExistingBySummary(field === "existing_issue_key");
+          renderIssues(false);
+          syncFooter();
+        });
       }
     }
 
@@ -615,6 +855,7 @@
             ? window.JiraUtils.getDefaultFieldOptions(cfg.type)
             : {},
           metadataByProject: {},
+          existingIssuesCatalog: [],
           globalSelections: { sprint: "" },
           baseAPI: baseAPI,
         };

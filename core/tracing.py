@@ -36,7 +36,7 @@ Env vars
       noisy — dev-only). Implicitly enabled when ``LOG_LEVEL=DEBUG``.
 - ``OTEL_INSTRUMENT_HTTP`` — Django + outbound ``requests`` auto-instrumentation
   (app & API spans). Default ``on``; set to ``0``/``false``/``off`` to disable.
-- ``OTEL_INSTRUMENT_PYMONGO`` — pymongo auto-instrumentation (one span per
+- ``OTEL_INSTRUMENT_MONGO`` — pymongo auto-instrumentation (one span per
   Mongo command — high cardinality). Default ``off``; set to ``1``/``true``
   to enable when diagnosing query/connection issues.
 - ``OTEL_INSTRUMENT_AGENTS`` — AutoGen event-log → span bridge (LLM calls,
@@ -483,10 +483,10 @@ def _pymongo_tracing_enabled() -> bool:
     """Pymongo auto-instrumentation (default off).
 
     Mongo spans are emitted per command and inflate trace volume. Enable
-    explicitly via ``OTEL_INSTRUMENT_PYMONGO=1`` when diagnosing query or
+    explicitly via ``OTEL_INSTRUMENT_MONGO=1`` when diagnosing query or
     connection issues.
     """
-    return _flag_enabled("OTEL_INSTRUMENT_PYMONGO", default=False)
+    return _flag_enabled("OTEL_INSTRUMENT_MONGO", default=False)
 
 
 def _agents_tracing_enabled() -> bool:
@@ -502,7 +502,7 @@ def _wire_auto_instrumentation() -> None:
     """Enable OpenTelemetry auto-instrumentation per category toggles.
 
     - HTTP    (Django + requests): ``OTEL_INSTRUMENT_HTTP``    (default on)
-    - PYMONGO (pymongo):           ``OTEL_INSTRUMENT_PYMONGO`` (default off)
+    - PYMONGO (pymongo):           ``OTEL_INSTRUMENT_MONGO`` (default off)
     """
     targets: list[tuple[str, str, str]] = []
     if _http_tracing_enabled():

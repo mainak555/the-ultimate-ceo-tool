@@ -13,7 +13,7 @@ from bson.errors import InvalidId
 from .db import get_collection, CHAT_SESSIONS_COLLECTION
 from . import services
 from . import trello_client
-from agents.tracing import traced_function
+from core.tracing import traced_function
 
 logger = logging.getLogger(__name__)
 
