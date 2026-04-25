@@ -49,7 +49,7 @@ HIERARCHY MAPPING TABLE
 | SUB-TASK prefix / Finer Breakdown / Step within Task     | Sub-task        |
 | BUG prefix / Defect / Fix / Error / Failure / Regression | Bug             |
 
-NEVER output "Story" as an issue_type. Map any detected "Story" to Feature.
+Story is a valid Jira Software issue_type when present in project metadata.
 
 ---
 
@@ -65,7 +65,6 @@ JSON SCHEMA (per issue)
   "temp_id":             "string (unique within this array, e.g. E1, F1, F2, T1, T2, S1, B1)",
   "parent_temp_id":      "string | null",
   "issue_type":          "Epic | Feature | Task | Sub-task | Bug",
-  "depth_level":         number,
   "summary":             "string (unique, max 100 chars)",
   "description":         "string",
   "acceptance_criteria": "string (plain text, \n separated, never an array)",
@@ -119,48 +118,6 @@ Rules:
 
 ---
 
-FIELD: depth_level
-
-Represents the item's distance from its root in its own subtree.
-
-  depth_level = 0  →  Root item (parent_temp_id = null)
-  depth_level = 1  →  Direct child of a root
-  depth_level = 2  →  Grandchild
-  depth_level = 3  →  Great-grandchild
-
-depth_level is relative to the actual root present in the input, not to Epic specifically.
-
-Examples:
-
-  Full hierarchy:
-    Epic      E1   depth_level: 0   parent_temp_id: null
-    Feature   F1   depth_level: 1   parent_temp_id: "E1"
-    Feature   F2   depth_level: 1   parent_temp_id: "E1"
-    Task      T1   depth_level: 2   parent_temp_id: "F1"
-    Task      T2   depth_level: 2   parent_temp_id: "F2"   ← correctly linked to F2, not F1
-    Sub-task  S1   depth_level: 3   parent_temp_id: "T1"
-    Sub-task  S2   depth_level: 3   parent_temp_id: "T2"
-
-  Multiple Epics:
-    Epic      E1   depth_level: 0   parent_temp_id: null
-    Epic      E2   depth_level: 0   parent_temp_id: null
-    Feature   F1   depth_level: 1   parent_temp_id: "E1"
-    Feature   F2   depth_level: 1   parent_temp_id: "E1"
-    Feature   F3   depth_level: 1   parent_temp_id: "E2"   ← belongs to E2, not E1
-    Task      T1   depth_level: 2   parent_temp_id: "F1"
-    Task      T2   depth_level: 2   parent_temp_id: "F3"   ← belongs to F3 under E2
-
-  Partial hierarchy (Feature is root):
-    Feature   F1   depth_level: 0   parent_temp_id: null
-    Task      T1   depth_level: 1   parent_temp_id: "F1"
-    Sub-task  S1   depth_level: 2   parent_temp_id: "T1"
-
-  Bugs:
-    Bug       B1   depth_level: 0   parent_temp_id: null       ← standalone
-    Bug       B2   depth_level: 1   parent_temp_id: "F2"       ← explicitly under Feature F2
-
----
-
 TWO-PASS RESOLUTION PROCESS
 
 PASS 1 — EXTRACTION
@@ -170,8 +127,7 @@ PASS 1 — EXTRACTION
     c. Determine its logical parent from the document structure (indentation, headings,
        "Parent Feature / Parent Epic / Parent Task" fields, or contextual proximity)
     d. Record the parent's temp_id as parent_temp_id (resolve in Pass 2 if needed)
-    e. Assign depth_level based on distance from the root of its subtree
-    f. Extract all other fields (summary, description, AC, priority, labels, components,
+    e. Extract all other fields (summary, description, AC, priority, labels, components,
        story_points, confidence_score)
 
 PASS 2 — PARENT RESOLUTION & ORPHAN PREVENTION
@@ -186,10 +142,10 @@ PASS 2 — PARENT RESOLUTION & ORPHAN PREVENTION
 
 PASS 3 — ARRAY ORDERING
   Sort the final array so that:
-    - Items are ordered by depth_level ascending (0 first, then 1, then 2, then 3)
-    - Within the same depth_level, preserve the source document order
-    - Within the same depth_level, group siblings under the same parent together
-    - Parentless Bugs (depth_level 0) are appended at the very end
+    - Parent issues always appear before their children
+    - Preserve source document order where possible
+    - Group siblings under the same parent together
+    - Parentless Bugs are appended at the very end
   This guarantees every parent physically precedes all of its children in the array.
 
 ---
@@ -283,7 +239,6 @@ EXAMPLE OUTPUT STRUCTURE (for reference — do not copy verbatim)
     "temp_id": "E1",
     "parent_temp_id": null,
     "issue_type": "Epic",
-    "depth_level": 0,
     "summary": "Student Engagement Platform",
     ...
   },
@@ -291,7 +246,6 @@ EXAMPLE OUTPUT STRUCTURE (for reference — do not copy verbatim)
     "temp_id": "E2",
     "parent_temp_id": null,
     "issue_type": "Epic",
-    "depth_level": 0,
     "summary": "Academic Administration System",
     ...
   },
@@ -299,7 +253,6 @@ EXAMPLE OUTPUT STRUCTURE (for reference — do not copy verbatim)
     "temp_id": "F1",
     "parent_temp_id": "E1",
     "issue_type": "Feature",
-    "depth_level": 1,
     "summary": "Notice Board Management",
     ...
   },
@@ -307,7 +260,6 @@ EXAMPLE OUTPUT STRUCTURE (for reference — do not copy verbatim)
     "temp_id": "F2",
     "parent_temp_id": "E1",
     "issue_type": "Feature",
-    "depth_level": 1,
     "summary": "Faculty Directory",
     ...
   },
@@ -315,7 +267,6 @@ EXAMPLE OUTPUT STRUCTURE (for reference — do not copy verbatim)
     "temp_id": "F3",
     "parent_temp_id": "E2",
     "issue_type": "Feature",
-    "depth_level": 1,
     "summary": "Examination Schedule Management",
     ...
   },
@@ -323,7 +274,6 @@ EXAMPLE OUTPUT STRUCTURE (for reference — do not copy verbatim)
     "temp_id": "T1",
     "parent_temp_id": "F1",
     "issue_type": "Task",
-    "depth_level": 2,
     "summary": "Create Notice CRUD API",
     ...
   },
@@ -331,7 +281,6 @@ EXAMPLE OUTPUT STRUCTURE (for reference — do not copy verbatim)
     "temp_id": "T2",
     "parent_temp_id": "F1",
     "issue_type": "Task",
-    "depth_level": 2,
     "summary": "Build Admin UI for Notice Management",
     ...
   },
@@ -339,7 +288,6 @@ EXAMPLE OUTPUT STRUCTURE (for reference — do not copy verbatim)
     "temp_id": "T3",
     "parent_temp_id": "F3",
     "issue_type": "Task",
-    "depth_level": 2,
     "summary": "Implement Exam Schedule Upload",
     ...
   },
@@ -347,7 +295,6 @@ EXAMPLE OUTPUT STRUCTURE (for reference — do not copy verbatim)
     "temp_id": "S1",
     "parent_temp_id": "T2",
     "issue_type": "Sub-task",
-    "depth_level": 3,
     "summary": "T2: Implement Rich Text Editor for Notice Body",
     ...
   },
@@ -355,7 +302,6 @@ EXAMPLE OUTPUT STRUCTURE (for reference — do not copy verbatim)
     "temp_id": "B1",
     "parent_temp_id": null,
     "issue_type": "Bug",
-    "depth_level": 0,
     "summary": "Notice list fails to load when category filter is empty",
     ...
   },
@@ -363,7 +309,6 @@ EXAMPLE OUTPUT STRUCTURE (for reference — do not copy verbatim)
     "temp_id": "B2",
     "parent_temp_id": "F1",
     "issue_type": "Bug",
-    "depth_level": 1,
     "summary": "Notice attachment not saved when file size exceeds 2MB",
     ...
   }
@@ -379,20 +324,20 @@ Input is unstructured notes only:
   → Still assign temp_id and resolve parent_temp_id for all non-root items
 
 Input has Tasks but no Feature or Epic:
-  → Tasks become roots (depth_level: 0, parent_temp_id: null)
+  → Tasks become roots (parent_temp_id: null)
   → Only infer a Feature parent if context strongly implies one
   → If inferred: confidence_score < 0.7, note inference in description
 
 Input has only Bugs:
-  → Each Bug: depth_level: 0, parent_temp_id: null unless a parent is named
+  → Each Bug: parent_temp_id: null unless a parent is named
 
 Partial hierarchy (e.g., Feature → Task, no Epic):
-  → Feature is root (depth_level: 0, parent_temp_id: null)
+  → Feature is root (parent_temp_id: null)
   → Do NOT fabricate an Epic
-  → Tasks: depth_level: 1, parent_temp_id = Feature's temp_id
+  → Tasks: parent_temp_id = Feature's temp_id
 
 Mixed roots (disconnected subtrees):
-  → Each subtree root gets depth_level: 0, parent_temp_id: null
+  → Each subtree root gets parent_temp_id: null
   → Items within each subtree link only within their own subtree
 
 ---
@@ -408,7 +353,6 @@ QUALITY RULES
 - Descriptions self-contained — developer must understand without reading the source doc
 - acceptance_criteria always a plain string, never a JSON array
 - After Pass 2: zero non-root Features, Tasks, or Sub-tasks with parent_temp_id = null
-- depth_level always reflects actual resolved hierarchy depth, not assumed Epic-relative depth
 
 ---
 

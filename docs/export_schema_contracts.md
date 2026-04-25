@@ -45,4 +45,4 @@ Code and documentation changes must land in the same PR.
 ## Current Scope
 
 - Trello: documented in `README.md` and `docs/trello_integration.md`
-- Jira: schema contract expansion in README is work in progress; see `docs/jira_integration.md` for current implementation details
+- Jira Software: documented in `README.md` and `docs/jira_integration.md`

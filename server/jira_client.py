@@ -24,6 +24,7 @@ project_type_key values used in Jira API:
 
 import base64
 import logging
+import re
 
 import requests
 
@@ -296,6 +297,37 @@ def get_project_epics(site_url, email, api_key, project_key):
     return out
 
 
+def get_project_existing_issues(site_url, email, api_key, project_key):
+    """Return existing Jira issues for a project.
+
+    Uses ``/rest/api/3/search/jql`` and returns rows shaped as:
+    ``[{key, summary, issue_type}]``.
+    """
+    project_key = (project_key or "").strip()
+    if not project_key:
+        return []
+
+    jql = f'project = "{project_key}" ORDER BY created DESC'
+    url = f"{_base_url(site_url)}/rest/api/3/search/jql"
+    resp = requests.post(
+        url,
+        headers=_auth_headers(email, api_key),
+        json={"jql": jql, "fields": ["summary", "issuetype"], "maxResults": 500},
+        timeout=20,
+    )
+    _check(resp, "get_project_existing_issues")
+
+    out = []
+    for issue in resp.json().get("issues") or []:
+        key = str(issue.get("key") or "").strip()
+        summary = str(((issue.get("fields") or {}).get("summary") or "")).strip()
+        issue_type = str((((issue.get("fields") or {}).get("issuetype") or {}).get("name") or "")).strip()
+        if not key:
+            continue
+        out.append({"key": key, "summary": summary, "issue_type": issue_type})
+    return out
+
+
 def get_service_desks(site_url, email, api_key):
     """
     GET /rest/servicedeskapi/servicedesk — list service desk projects.
@@ -417,8 +449,9 @@ _ISSUE_TYPE_ALIASES = {
     "task": ["task", "story"],
     "bug": ["bug", "defect", "task"],
     "epic": ["epic"],
-    "sub-task": ["sub-task", "subtask"],
-    "subtask": ["subtask", "sub-task"],
+    # Some projects disable Sub-task issue types; gracefully degrade to Task.
+    "sub-task": ["sub-task", "subtask", "task"],
+    "subtask": ["subtask", "sub-task", "task"],
 }
 
 
@@ -438,10 +471,6 @@ def _build_type_resolver(project_types):
         for alias in _ISSUE_TYPE_ALIASES.get(key, []):
             if alias in available:
                 return available[alias]
-        # As a last resort, try the first available type so the create
-        # does not fail solely because of a missing custom type name.
-        if available:
-            return next(iter(available.values()))
         return None
 
     return resolve
@@ -477,8 +506,9 @@ def _build_software_fields(item, project_key, parent_key, resolved_type_name, wa
     if story_points is not None:
         try:
             sp = float(story_points)
-            fields["story_points"] = sp
-            # Also try the standard story points custom field name
+            # Keep internal `story_points` as a logical field only.
+            # Jira REST accepts custom fields (for example customfield_10016),
+            # not a top-level `story_points` field.
             fields["customfield_10016"] = sp
         except (TypeError, ValueError):
             warnings.append(f"Invalid story_points value: {story_points}")
@@ -515,7 +545,51 @@ def _format_jira_error(resp):
     return (resp.text or "")[:300] or f"HTTP {resp.status_code}"
 
 
-def _create_software_issue(base, headers, fields, parent_key):
+def _extract_jira_error_details(resp):
+    """Return (message, errors_dict) parsed from a Jira error response."""
+    message = ""
+    errors = {}
+    try:
+        body = resp.json()
+        msg = " ".join(body.get("errorMessages") or []).strip()
+        errs = body.get("errors") or {}
+        details = "; ".join(f"{k}: {v}" for k, v in errs.items())
+        message = (msg + " " + details).strip()
+        errors = errs
+    except Exception:
+        message = (resp.text or "").strip()
+        errors = {}
+    if not message:
+        message = f"HTTP {resp.status_code}"
+    return message, errors
+
+
+def _unsupported_field_keys(resp, attempted_fields):
+    """Best-effort detection of field keys Jira says are unknown/unsettable."""
+    message, errors = _extract_jira_error_details(resp)
+    keys = set()
+
+    for key, val in (errors or {}).items():
+        txt = str(val or "").lower()
+        if any(
+            token in txt
+            for token in (
+                "cannot be set",
+                "unknown",
+                "not on the appropriate screen",
+                "field was not found",
+            )
+        ):
+            keys.add(str(key))
+
+    # Some Jira errors only appear in `errorMessages`.
+    for match in re.findall(r"[Ff]ield\s+'([^']+)'", message or ""):
+        keys.add(match)
+
+    return [k for k in keys if k in (attempted_fields or {})]
+
+
+def _create_software_issue(base, headers, fields, parent_key, allow_epic_link=True):
     """POST /rest/api/3/issue with progressive parent-link fallbacks.
 
     Strategy when ``parent_key`` is set and the first attempt returns 400:
@@ -541,15 +615,16 @@ def _create_software_issue(base, headers, fields, parent_key):
     if resp.status_code != 400:
         return resp, "parent", attempts
 
-    # Attempt 2: Epic Link customfield (classic Story->Epic).
-    retry_fields = {k: v for k, v in fields.items() if k != "parent"}
-    retry_fields["customfield_10014"] = parent_key
-    resp2 = requests.post(url, headers=headers, json={"fields": retry_fields}, timeout=20)
-    attempts.append(("epic_link", resp2.status_code))
-    if resp2.ok:
-        return resp2, "epic_link", attempts
-    if resp2.status_code != 400:
-        return resp2, "epic_link", attempts
+    if allow_epic_link:
+        # Attempt 2: Epic Link customfield (classic Story->Epic).
+        retry_fields = {k: v for k, v in fields.items() if k != "parent"}
+        retry_fields["customfield_10014"] = parent_key
+        resp2 = requests.post(url, headers=headers, json={"fields": retry_fields}, timeout=20)
+        attempts.append(("epic_link", resp2.status_code))
+        if resp2.ok:
+            return resp2, "epic_link", attempts
+        if resp2.status_code != 400:
+            return resp2, "epic_link", attempts
 
     # Attempt 3: drop the parent linkage entirely so the issue is at
     # least created. The caller appends a warning describing this.
@@ -588,7 +663,7 @@ def push_issues_software(site_url, email, api_key, project_key, items):
     items — flat list of normalized issues. Each item carries:
       summary, description, issue_type, priority, sprint, labels,
       story_points, components, acceptance_criteria, confidence_score,
-      temp_id, parent_temp_id
+            temp_id, parent_temp_id, existing_issue_key
 
     Strategy
     --------
@@ -608,6 +683,9 @@ def push_issues_software(site_url, email, api_key, project_key, items):
     5. After issue create, assign Sprint via the Agile API only when the
        issue carries a non-empty numeric sprint id and is sprintable.
        Empty sprint == Backlog == skip the call entirely.
+     6. If ``existing_issue_key`` is present, skip create, map
+         ``temp_to_key[temp_id] = existing_issue_key``, emit a success-style
+         result row, and continue BFS so descendants can attach to that key.
 
     Returns [{issue_key, issue_id, summary, url, warnings, temp_id}].
     Order matches the BFS push order (roots first, then breadth-first).
@@ -653,6 +731,29 @@ def push_issues_software(site_url, email, api_key, project_key, items):
         parent_tid = (item or {}).get("parent_temp_id")
         parent_tid = str(parent_tid).strip() if parent_tid else ""
 
+        existing_issue_key = str((item or {}).get("existing_issue_key") or "").strip()
+        if existing_issue_key:
+            summary = str(item.get("summary") or item.get("card_title") or existing_issue_key).strip() or existing_issue_key
+            if parent_tid:
+                warnings.append(
+                    "Existing issue reuse does not modify the issue's parent in Jira; "
+                    "the selected issue is reused as-is."
+                )
+            if tid:
+                temp_to_key[tid] = existing_issue_key
+            results.append({
+                "issue_key": existing_issue_key,
+                "issue_id": "<existing>",
+                "summary": summary,
+                "url": f"{base}/browse/{existing_issue_key}",
+                "warnings": warnings,
+                "temp_id": tid,
+            })
+            if tid:
+                for child in children_of.get(tid, []):
+                    queue.append(child)
+            continue
+
         parent_key = ""
         if parent_tid:
             parent_key = temp_to_key.get(parent_tid, "")
@@ -662,7 +763,18 @@ def push_issues_software(site_url, email, api_key, project_key, items):
                 )
 
         requested_type = str((item or {}).get("issue_type") or "Task").strip() or "Task"
-        resolved_type = resolve_type(requested_type) or requested_type
+        if not parent_key and requested_type.strip().lower() in {"sub-task", "subtask"}:
+            warnings.append(
+                "Parent issue is unavailable; converting Sub-task to Task so creation can continue."
+            )
+            requested_type = "Task"
+        resolved_type = resolve_type(requested_type)
+        if not resolved_type:
+            resolved_type = requested_type
+            warnings.append(
+                f"Issue type '{requested_type}' is not recognized for this project; "
+                f"attempting Jira create with '{requested_type}'."
+            )
         if resolved_type.lower() != requested_type.lower():
             warnings.append(
                 f"Issue type '{requested_type}' is not available in this project; "
@@ -673,7 +785,40 @@ def push_issues_software(site_url, email, api_key, project_key, items):
             item, project_key, parent_key, resolved_type, warnings
         )
 
-        resp, parent_method, attempts = _create_software_issue(base, headers, fields, parent_key)
+        parent_type_name = ""
+        if parent_tid and parent_tid in by_temp_id:
+            parent_type_name = str((by_temp_id[parent_tid] or {}).get("issue_type") or "").strip().lower()
+        child_type_name = issue_type_name.strip().lower()
+
+        # Epic Link fallback is only meaningful for classic Story/Task/Bug -> Epic style links.
+        allow_epic_link = bool(parent_key and parent_type_name == "epic" and child_type_name not in _NON_SPRINTABLE_TYPES)
+
+        resp, parent_method, attempts = _create_software_issue(
+            base,
+            headers,
+            fields,
+            parent_key,
+            allow_epic_link=allow_epic_link,
+        )
+
+        # If Jira rejects unknown/unsettable fields, strip only those keys and retry once.
+        if not resp.ok and resp.status_code == 400:
+            bad_keys = _unsupported_field_keys(resp, fields)
+            if bad_keys:
+                stripped_fields = {k: v for k, v in fields.items() if k not in set(bad_keys)}
+                warnings.append(
+                    "Removed unsupported Jira field(s) and retried: " + ", ".join(sorted(set(bad_keys)))
+                )
+                resp2, parent_method2, attempts2 = _create_software_issue(
+                    base,
+                    headers,
+                    stripped_fields,
+                    parent_key,
+                    allow_epic_link=allow_epic_link,
+                )
+                resp = resp2
+                parent_method = parent_method2
+                attempts.extend([(f"retry/{m}" if m else "retry/no-parent", s) for m, s in attempts2])
 
         if resp.ok and parent_key:
             if parent_method == "epic_link":

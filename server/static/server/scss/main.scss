@@ -2098,6 +2098,18 @@ select.input {
   }
 }
 
+.jira-issue-card__body {
+  display: flex;
+  flex-direction: column;
+  gap: $space-sm;
+}
+
+.jira-issue-card__grid-two {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: $space-sm;
+}
+
 // ---------------------------------------------------------------------------
 // Hierarchical accordion (Jira Software). Pattern is shared — see
 // .agents/skills/hierarchical_export_items/SKILL.md before reusing.
@@ -2375,6 +2387,10 @@ select.input {
 
   .jira-issue-card__children {
     padding-left: $space-sm;
+  }
+
+  .jira-issue-card__grid-two {
+    grid-template-columns: 1fr;
   }
 }
 

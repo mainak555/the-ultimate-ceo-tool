@@ -237,3 +237,59 @@ The Trello export popup supports project-specific extraction prompts, but the ex
 4. Additional fields may be present, but Trello exporter behavior is defined only for the contract fields above.
 
 For implementation details, endpoint flow, and mapping behavior, see [docs/trello_integration.md](docs/trello_integration.md). For the cross-provider documentation standard used by all export popups, see [docs/export_schema_contracts.md](docs/export_schema_contracts.md).
+
+---
+
+## Export Schema Contract (Jira Software)
+
+Jira Software export supports hierarchical issue trees. The extracted or edited payload must follow a stable schema so parent linking (`temp_id` / `parent_temp_id`) and push correlation remain deterministic.
+
+### Required extracted/edited JSON shape
+
+```json
+[
+	{
+		"temp_id": "T1",
+		"parent_temp_id": null,
+		"existing_issue_key": "",
+		"summary": "string",
+		"description": "string",
+		"issue_type": "Epic|Feature|Story|Task|Sub-task|Bug",
+		"priority": "Highest|High|Medium|Low|Lowest",
+		"sprint": "",
+		"labels": ["string"],
+		"story_points": 5,
+		"components": ["string"],
+		"acceptance_criteria": "string",
+		"confidence_score": 0.0
+	}
+]
+```
+
+### Field contract
+
+| Path | Type | Required | Notes |
+|---|---|---|---|
+| `<root>` | array | Yes | Root list of Jira Software issue objects. |
+| `[].temp_id` | string | Yes | Client-stable id used only for batch parent mapping. Auto-generated when missing. |
+| `[].parent_temp_id` | string\|null | No | Parent item id. `null` means root. |
+| `[].existing_issue_key` | string | No | Empty string means create new issue. Non-empty value means reuse existing Jira issue and skip create for that row. |
+| `[].summary` | string | Yes | Jira issue summary. Empty values normalize to `Untitled`. |
+| `[].description` | string | No | Plain text; wrapped to ADF at push time. |
+| `[].issue_type` | string | Yes | Intended issue type. Resolved against destination project issue-type scheme. |
+| `[].priority` | string | No | Jira priority label. |
+| `[].sprint` | string | No | Sprint id string. Empty string means Backlog (skip Agile sprint assignment API). |
+| `[].labels` | array | No | Label strings. |
+| `[].story_points` | number\|null | No | Mapped to Jira story-points custom field when available. |
+| `[].components` | array | No | Jira component names. |
+| `[].acceptance_criteria` | string | No | Appended into Description under an "Acceptance Criteria" section (Jira has no native acceptance-criteria field). |
+| `[].confidence_score` | number | No | Clamped to `0.0`–`1.0`. |
+
+### Compatibility rules
+
+1. Hierarchy contract is `temp_id` + `parent_temp_id` only; do not store `depth_level`.
+2. Push runs BFS and returns result rows echoing `temp_id` for correlation.
+3. If `existing_issue_key` is set, push reuses the Jira issue (no create), maps `temp_id` to that key, and still allows descendants to link through `temp_to_key`.
+4. Unknown extra fields may be present in payloads, but exporter behavior is defined only for the schema above.
+
+For full endpoint and behavior details, see [docs/jira_integration.md](docs/jira_integration.md).

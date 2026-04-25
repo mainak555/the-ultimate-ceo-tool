@@ -25,7 +25,7 @@ def fetch_project_metadata(site_url, email, api_key, project_key):
     issue_types = []
     priorities = []
     sprints = []
-    epics = []
+    existing_issues = []
 
     try:
         issue_types = jira_client.get_project_issue_types(site_url, email, api_key, project_key)
@@ -57,6 +57,16 @@ def fetch_project_metadata(site_url, email, api_key, project_key):
         )
         sprints = []
 
+    try:
+        existing_issues = jira_client.get_project_existing_issues(site_url, email, api_key, project_key)
+    except ValueError:
+        logger.warning(
+            "jira.software.metadata.fallback",
+            extra={"field": "existing_issues", "project_key": project_key},
+            exc_info=True,
+        )
+        existing_issues = []
+
     # NOTE: Epics are intentionally not fetched here. The export modal no
     # longer exposes a global Epic selector — parent linkage is expressed
     # via the issue tree (`temp_id` / `parent_temp_id`). Avoiding this call
@@ -65,6 +75,7 @@ def fetch_project_metadata(site_url, email, api_key, project_key):
         "issue_types": issue_types,
         "priorities": priorities,
         "sprints": sprints,
+        "existing_issues": existing_issues,
     }
 
 
@@ -92,6 +103,7 @@ def normalize_item(item, normalize_labels, coerce_confidence):
     components = [str(c).strip() for c in (item.get("components") or []) if str(c).strip()]
     acceptance_criteria = str(item.get("acceptance_criteria") or "").strip()
     sprint = str(item.get("sprint") or "").strip()
+    existing_issue_key = str(item.get("existing_issue_key") or "").strip() or None
 
     temp_id = str(item.get("temp_id") or "").strip() or _gen_temp_id()
     raw_parent = item.get("parent_temp_id")
@@ -113,6 +125,7 @@ def normalize_item(item, normalize_labels, coerce_confidence):
         "story_points": story_points,
         "components": components,
         "acceptance_criteria": acceptance_criteria,
+        "existing_issue_key": existing_issue_key,
         "confidence_score": coerce_confidence(item.get("confidence_score", 0.0)),
         "temp_id": temp_id,
         "parent_temp_id": parent_temp_id,
