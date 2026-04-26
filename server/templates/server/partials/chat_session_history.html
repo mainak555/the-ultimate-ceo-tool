@@ -10,7 +10,7 @@
 
 <div class="chat-history-header">
   <span class="chat-history-header__description">{{ session.description }}</span>
-  <span class="chat-history-header__date">{{ session.created_at }}</span>
+  <span class="chat-history-header__date"><time class="local-time" data-utc="{{ session.created_at }}">{{ session.created_at }}</time></span>
 </div>
 
 {% if session.discussions %}
@@ -20,7 +20,7 @@
         <div class="chat-bubble chat-bubble--human">
           <div class="chat-bubble__meta">
             <span class="chat-bubble__name">You</span>
-            <span class="chat-bubble__time">{{ msg.timestamp }}</span>
+            <span class="chat-bubble__time"><time class="local-time" data-utc="{{ msg.timestamp }}">{{ msg.timestamp }}</time></span>
           </div>
           <div class="chat-bubble__content">{{ msg.content|markdownify }}</div>
         </div>
@@ -30,7 +30,7 @@
           <div class="chat-bubble__body">
             <div class="chat-bubble__meta">
               <span class="chat-bubble__name">{{ msg.agent_name|default:"Agent" }}</span>
-              <span class="chat-bubble__time">{{ msg.timestamp }}</span>
+              <span class="chat-bubble__time"><time class="local-time" data-utc="{{ msg.timestamp }}">{{ msg.timestamp }}</time></span>
             </div>
             <div class="chat-bubble__content">{{ msg.content|markdownify }}</div>
             {% if msg.visible_export_providers %}

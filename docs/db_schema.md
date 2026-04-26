@@ -26,6 +26,8 @@ Cross-references: [docs/API.md](API.md) (form fields + HTTP schema), [AGENTS.md]
   // ── Top-level ─────────────────────────────────────────────────────────────
   "project_name": "string (unique, used as URL slug)",
   "objective":    "string — injected into every agent system prompt and selector system prompt at runtime",
+  "created_at":   "datetime (UTC BSON Date — set on insert, never overwritten)",
+  "updated_at":   "datetime (UTC BSON Date — stamped on every replace_one)",
 
   // ── Assistant agents ──────────────────────────────────────────────────────
   "agents": [
@@ -73,7 +75,7 @@ Cross-references: [docs/API.md](API.md) (form fields + HTTP schema), [AGENTS.md]
       "app_name": "string",     // required when enabled
       "api_key": "string",      // required when enabled — stored encrypted at rest
       "token": "string",        // Trello token (expiration=never), masked in UI via SECRET_MASK
-      "token_generated_at": "string",  // ISO 8601 UTC datetime when token was generated
+      "token_generated_at": "datetime (UTC BSON Date — coerced to ISO string on read)",
       "default_workspace_id": "",  // Trello workspace/organization ID
       "default_workspace_name": "", // display name (for readonly view)
       "default_board_id": "",      // Trello board ID
@@ -131,7 +133,7 @@ Cross-references: [docs/API.md](API.md) (form fields + HTTP schema), [AGENTS.md]
       "agent_name": "string",
       "role": "user | assistant",
       "content": "string",
-      "timestamp": "HH:MM",
+      "timestamp": "datetime (UTC BSON Date)",
       "exports": {
         "trello": {
           "schema_version": "string",
@@ -174,8 +176,8 @@ Cross-references: [docs/API.md](API.md) (form fields + HTTP schema), [AGENTS.md]
   "agent_state": {
     "source": "string",
     "version": "string",
-    "saved_at": "ISO datetime",
-    "state": {}
+    "saved_at": "datetime (UTC BSON Date — coerced to ISO string on read)",
+    "state": {}  // AutoGen TeamState JSON — do not modify structure
   }
 }
 ```

@@ -716,7 +716,7 @@ async def chat_session_run(request, session_id):
                 "agent_name": human_name,
                 "role": "user",
                 "content": task,
-                "timestamp": datetime.now(timezone.utc).strftime("%H:%M"),
+                "timestamp": datetime.now(timezone.utc),  # BSON Date in MongoDB
             })
 
         try:
@@ -755,16 +755,18 @@ async def chat_session_run(request, session_id):
                         yield _sse("done", done_data)
 
                 elif isinstance(msg, TextMessage) and msg.source != "user":
-                    ts = datetime.now(timezone.utc).strftime("%H:%M")
+                    ts_dt = datetime.now(timezone.utc)  # BSON Date for MongoDB
+                    ts_iso = ts_dt.isoformat()           # ISO string for SSE JSON
                     record = {
                         "id": str(uuid4()),
                         "agent_name": msg.source,
                         "role": "assistant",
                         "content": msg.content,
-                        "timestamp": ts,
+                        "timestamp": ts_dt,
                     }
                     pending_messages.append(record)
                     sse_record = dict(record)
+                    sse_record["timestamp"] = ts_iso
                     # Attach export info for the client to decide button rendering
                     if export_meta:
                         sse_record["export"] = export_meta

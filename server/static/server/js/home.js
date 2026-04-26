@@ -242,17 +242,18 @@ document.addEventListener("DOMContentLoaded", function () {
   }
 
   function appendHumanBubble(text) {
-    var ts = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    var ts = new Date().toISOString();
     var contentHtml = renderMarkdown(text);
     appendBubble(
       '<div class="chat-bubble chat-bubble--human">'
       + '<div class="chat-bubble__meta">'
       + '<span class="chat-bubble__name">You</span>'
-      + '<span class="chat-bubble__time">' + ts + '</span>'
+      + '<span class="chat-bubble__time"><time class="local-time" data-utc="' + ts + '">' + ts + '</time></span>'
       + '</div>'
       + '<div class="chat-bubble__content">' + contentHtml + '</div>'
       + '</div>'
     );
+    window.renderLocalTimes();
   }
 
   function appendStatusBadge(type) {
@@ -506,12 +507,13 @@ document.addEventListener("DOMContentLoaded", function () {
         + '<div class="chat-bubble__body">'
         + '<div class="chat-bubble__meta">'
         + '<span class="chat-bubble__name">' + (data.agent_name || "Agent") + '</span>'
-        + '<span class="chat-bubble__time">' + ts + '</span>'
+        + '<span class="chat-bubble__time"><time class="local-time" data-utc="' + ts + '">' + ts + '</time></span>'
         + '</div>'
         + '<div class="chat-bubble__content">' + contentHtml + '</div>'
         + exportHtml
         + '</div></div>'
       );
+      window.renderLocalTimes();
     } else if (eventName === "gate") {
       setRunningState(false);
       appendGatePanel(data);
@@ -657,18 +659,19 @@ document.addEventListener("DOMContentLoaded", function () {
       var ta = panel.querySelector(".human-gate-panel__textarea");
       var text = ta ? ta.value.trim() : "";
       panel.remove();
-      var fbTs = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      var fbTs = new Date().toISOString();
       if (text) {
         var fbHtml = renderMarkdown(text);
         appendBubble(
           '<div class="chat-bubble chat-bubble--human">'
           + '<div class="chat-bubble__meta">'
           + '<span class="chat-bubble__name">You</span>'
-          + '<span class="chat-bubble__time">' + fbTs + '</span>'
+          + '<span class="chat-bubble__time"><time class="local-time" data-utc="' + fbTs + '">' + fbTs + '</time></span>'
           + '</div>'
           + '<div class="chat-bubble__content">' + fbHtml + '</div>'
           + '</div>'
         );
+        window.renderLocalTimes();
       }
       sendRespond("continue", text).then(function (d) {
         if (d.status === "ok") startRun(d.task || "");

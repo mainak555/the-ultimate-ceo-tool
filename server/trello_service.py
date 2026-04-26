@@ -68,17 +68,18 @@ def store_project_token(project_id, token):
         raise ValueError(f"Invalid project ID '{project_id}'.")
 
     col = get_collection("project_settings")
-    now = datetime.now(timezone.utc).isoformat()
+    now_dt = datetime.now(timezone.utc)  # BSON Date stored in MongoDB
+    now_iso = now_dt.isoformat()          # ISO string returned to caller / JSON
     result = col.update_one(
         {"_id": oid},
         {"$set": {
             "integrations.trello.token": token,
-            "integrations.trello.token_generated_at": now,
+            "integrations.trello.token_generated_at": now_dt,
         }},
     )
     if result.matched_count == 0:
         raise ValueError("Project not found.")
-    return {"token_generated_at": now}
+    return {"token_generated_at": now_iso}
 
 
 def get_project_token(project_id):
@@ -97,7 +98,12 @@ def get_project_token(project_id):
     token = trello.get("token")
     if not token:
         return None
-    return {"token": token, "token_generated_at": trello.get("token_generated_at", "")}
+    tga = trello.get("token_generated_at", "")
+    if hasattr(tga, "isoformat"):
+        if tga.tzinfo is None:
+            tga = tga.replace(tzinfo=timezone.utc)
+        tga = tga.isoformat()
+    return {"token": token, "token_generated_at": tga}
 
 
 def is_project_token_valid(project_id):

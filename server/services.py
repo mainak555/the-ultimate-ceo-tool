@@ -28,6 +28,28 @@ from .model_catalog import (
 )
 from .schemas import validate_project, validate_chat_session
 
+
+def _utc_now() -> datetime:
+    """Return current UTC datetime (timezone-aware). Used for all BSON Date writes."""
+    return datetime.now(timezone.utc)
+
+
+def _coerce_dt_to_iso(value) -> str:
+    """Convert a BSON datetime (or already-string value) to an ISO 8601 string.
+
+    Handles:
+    - datetime objects (from PyMongo, aware or naive-UTC)
+    - strings (already ISO or legacy bare 'HH:MM' — returned unchanged)
+    - None / missing → empty string
+    """
+    if value is None:
+        return ""
+    if hasattr(value, "isoformat"):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.isoformat()
+    return str(value) if value else ""
+
 from core.tracing import traced_function
 
 
@@ -210,7 +232,7 @@ def normalize_project(project):
         trello["app_name"] = (raw_trello.get("app_name") or "").strip()
         trello["api_key"] = _mask_secret(raw_trello.get("api_key"))
         trello["token"] = _mask_secret(raw_trello.get("token"))
-        trello["token_generated_at"] = (raw_trello.get("token_generated_at") or "").strip()
+        trello["token_generated_at"] = _coerce_dt_to_iso(raw_trello.get("token_generated_at") or "")
         trello["default_workspace_id"] = (raw_trello.get("default_workspace_id") or "").strip()
         trello["default_workspace_name"] = (raw_trello.get("default_workspace_name") or raw_trello.get("default_workspace") or "").strip()
         trello["default_board_id"] = (raw_trello.get("default_board_id") or "").strip()
@@ -263,6 +285,8 @@ def normalize_project(project):
         "project_id": str(project["_id"]) if project.get("_id") else "",
         "project_name": project.get("project_name", ""),
         "objective": project.get("objective", ""),
+        "created_at": _coerce_dt_to_iso(project.get("created_at")),
+        "updated_at": _coerce_dt_to_iso(project.get("updated_at")),
         "agents": assistants,
         "human_gate": human_gate,
         "team": team,
@@ -346,6 +370,9 @@ def create_project(data):
     ensure_indexes()
     col = get_collection("project_settings")
     doc = cleaned.copy()
+    now = _utc_now()
+    doc["created_at"] = now
+    doc["updated_at"] = now
     try:
         col.insert_one(doc)
     except DuplicateKeyError:
@@ -393,6 +420,10 @@ def update_project(project_id, data):
     _restore_masked_secrets(data, existing)
 
     cleaned = validate_project(data)
+
+    # Preserve original created_at; stamp updated_at as BSON Date
+    cleaned["created_at"] = existing.get("created_at") or _utc_now()
+    cleaned["updated_at"] = _utc_now()
 
     try:
         result = col.replace_one({"_id": oid}, cleaned)
@@ -522,27 +553,45 @@ def clone_project(project_id):
 # Chat Session CRUD
 # ---------------------------------------------------------------------------
 
+def _normalize_discussion(msg):
+    """Return a copy of a discussion dict with timestamp coerced to ISO string.
+
+    Handles both new BSON Date values (datetime objects returned by PyMongo)
+    and old bare "HH:MM" string values already stored in MongoDB.
+    """
+    if not isinstance(msg, dict):
+        return msg
+    ts = msg.get("timestamp", "")
+    if hasattr(ts, "isoformat"):
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        ts = ts.isoformat()
+    return dict(msg, timestamp=ts)
+
+
 def normalize_chat_session(doc):
     """Convert a MongoDB chat_sessions document for display."""
     if not doc:
         return None
     created_at = doc.get("created_at", "")
     if hasattr(created_at, "strftime"):
-        created_at = created_at.strftime("%Y-%m-%d %H:%M")
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=timezone.utc)
+        created_at = created_at.isoformat()
     agent_state = doc.get("agent_state")
     state_meta = {}
     if isinstance(agent_state, dict):
         state_meta = {
             "source": agent_state.get("source", ""),
             "version": agent_state.get("version", ""),
-            "saved_at": agent_state.get("saved_at", ""),
+            "saved_at": _coerce_dt_to_iso(agent_state.get("saved_at", "")),
         }
     return {
         "session_id": str(doc["_id"]),
         "project_id": doc.get("project_id", ""),
         "description": doc.get("description", ""),
         "created_at": created_at,
-        "discussions": doc.get("discussions", []),
+        "discussions": [_normalize_discussion(m) for m in doc.get("discussions", [])],
         "status": doc.get("status", "idle"),
         "current_round": doc.get("current_round", 0),
         "has_agent_state": isinstance(agent_state, dict) and isinstance(agent_state.get("state"), dict),
@@ -757,7 +806,7 @@ def save_agent_state(session_id, state):
     payload = {
         "source": "autogen_team_state",
         "version": str(state.get("version") or ""),
-        "saved_at": datetime.now(timezone.utc).isoformat(),
+        "saved_at": _utc_now(),  # BSON Date — coerced to ISO string on read
         "state": state,
     }
     payload_size = len(json.dumps(payload, ensure_ascii=True).encode("utf-8"))
