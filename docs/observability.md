@@ -119,6 +119,38 @@ LOG_LEVEL=DEBUG
 | Service-layer mutations | Manual `@traced_function` (always on) | `service.project.create`, `service.chat.create`, `service.trello.export.push`, `service.jira.<type>.push_issues` |
 | AutoGen agent runs | Event-log bridge — gated by `OTEL_INSTRUMENT_AGENTS` | `autogen.event.LLMCall`, `autogen.event.ToolCall` with full payloads |
 
+### Trace Hierarchy
+
+A single user action produces one trace, with spans nested by call stack so
+parent/child timing in Langfuse mirrors what actually happened. Typical chat
+turn that triggers an MCP-enabled agent:
+
+```
+Django request span                              [auto · OTEL_INSTRUMENT_HTTP]
+└─ @traced_function on view / service entry      [always on]
+   └─ service.* mutation                         [always on]
+      └─ AutoGen agent run                       [bridge · OTEL_INSTRUMENT_AGENTS]
+         ├─ chat <model>            (LLM call)   [autogen-core]
+         │  └─ HTTP POST <provider> (LLM API)    [auto · OTEL_INSTRUMENT_HTTP]
+         └─ execute_tool <name>     (MCP tool)   [autogen-core]
+            └─ HTTP POST <mcp-gateway>           [auto · only for streamable HTTP transport]
+                                                  (stdio MCP runs in a child process — no HTTP span)
+
+Sibling spans on the same trace:
+└─ mongo.<op>                                    [auto · OTEL_INSTRUMENT_MONGO, off by default]
+└─ HTTP <verb> <trello|jira>                     [auto + core/http_tracing.py]
+```
+
+Context flow:
+
+- The `X-Request-ID` header (or one we generate in `RequestIdMiddleware`) is
+  attached to every log line and forwarded on outbound HTTP, tying logs and
+  spans across hops.
+- AutoGen calls `trace.get_tracer("autogen-core")` (no explicit provider), so
+  it picks up our globally installed TracerProvider automatically — no extra
+  wiring is needed for LLM, tool, or MCP `execute_tool` spans to nest under
+  the calling agent's run.
+
 ---
 
 ## Console Behavior

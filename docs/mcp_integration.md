@@ -119,6 +119,18 @@ Order of operations in `agents/team_builder.py::build_team()`:
 - Tracing: `build_mcp_workbenches()` is decorated with
   `@traced_function("agents.mcp.workbench_built")`. Span attributes follow the
   same redaction rule (server names + fingerprint only).
+- **Per-tool-call spans**: `autogen_ext.tools.mcp.McpWorkbench.call_tool()`
+  emits an OpenTelemetry `execute_tool <tool_name>` span per invocation,
+  using the GenAI semantic conventions:
+  `gen_ai.operation.name=execute_tool`, `gen_ai.system=autogen`,
+  `gen_ai.tool.name`, `gen_ai.tool.call.id`,
+  `gen_ai.tool.description` (when available). Exceptions are recorded with
+  `span.record_exception()` and `ERROR` status.
+  These spans are produced by AutoGen via `trace.get_tracer("autogen-core")`
+  and automatically picked up by our global TracerProvider, so they nest as
+  children of the calling agent's run span and ship to the OTLP backend
+  alongside Django/HTTP/LLM spans in the same trace. The toggle is
+  `OTEL_INSTRUMENT_AGENTS` (default on).
 
 ## Security
 

@@ -83,6 +83,17 @@ For the standalone deployment, the app image bundles Node so stdio MCP
 servers can run in-process. For compose / k8s, a separate `mcp-gateway`
 container hosts MCP servers and exposes them over streamable HTTP.
 
+**Tracing** — every MCP tool call is automatically traced as a child span of
+the calling agent's run. AutoGen's `McpWorkbench` wraps each invocation in an
+OpenTelemetry `execute_tool <tool_name>` span (GenAI semantic conventions:
+`gen_ai.operation.name=execute_tool`, `gen_ai.system=autogen`,
+`gen_ai.tool.name`, `gen_ai.tool.call.id`), and our global tracer provider
+ships those spans to the configured OTLP backend (Langfuse) alongside the
+Django request, agent, and LLM spans — all stitched into a single trace via
+the `X-Request-ID` header. No extra wiring is required; the toggle is
+`OTEL_INSTRUMENT_AGENTS` (default `on`). Server `args` / `env` / `headers`
+are never logged or set as span attributes (see AGENTS rule 52).
+
 Full documentation: [docs/mcp_integration.md](docs/mcp_integration.md).
 
 ---
@@ -129,6 +140,11 @@ propagated `X-Request-ID` header. Logs and traces are intentionally split:
 
 - **Logs** — JSON to stderr, every line carries `request_id`, `trace_id`, `span_id`. Lifecycle events + `WARNING`+ only; per-call HTTP success detail lives on spans.
 - **Traces** — full request/response payloads (redacted, truncated at 32 KB) shipped to the configured OTLP backend (Langfuse today; pluggable). `OTEL_CONSOLE_EXPORTER=error` additionally dumps any failed span to stderr with its full attribute set + stacktrace.
+
+A single chat turn produces one trace; spans nest by call stack — Django
+request → service mutation → agent run → LLM call / `execute_tool` (MCP) →
+outbound HTTP. See the trace-hierarchy diagram in
+[docs/observability.md#trace-hierarchy](docs/observability.md#trace-hierarchy).
 
 Outbound integration clients (Trello, Jira, and future providers) must use the
 shared helper `core/http_tracing.py` (`instrument_http_response`) so request,
