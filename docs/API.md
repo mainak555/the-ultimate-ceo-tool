@@ -19,7 +19,7 @@ All routes are under the `server` app namespace.
 | `POST` | `/chat/sessions/create/` | `chat_session_create` | Create a chat session |
 | `POST` | `/chat/sessions/<session_id>/run/` | `chat_session_run` | Start or continue a run (SSE stream) |
 | `POST` | `/chat/sessions/<session_id>/restart/` | `chat_session_restart` | Restart from persisted AutoGen team state |
-| `POST` | `/chat/sessions/<session_id>/respond/` | `chat_session_respond` | Human gate decision (approve/feedback/stop) |
+| `POST` | `/chat/sessions/<session_id>/respond/` | `chat_session_respond` | Human gate decision (continue/stop with optional notes) |
 | `POST` | `/chat/sessions/<session_id>/stop/` | `chat_session_stop` | Stop an in-progress run |
 | `GET` | `/chat/sessions/<session_id>/` | `chat_session_detail` | Load chat history panel for one session |
 | `POST` | `/chat/sessions/<session_id>/delete/` | `chat_session_delete` | Delete a chat session |
@@ -101,7 +101,6 @@ This keeps provider behavior consistent while allowing provider-specific payload
 - `agents[0][temperature]` — float string
 - `human_gate[enabled]` — `"on"` if checked
 - `human_gate[name]` — string
-- `human_gate[interaction_mode]` — `approve_reject | feedback`
 - `team[type]` — `round_robin` | `selector`
 - `team[max_iterations]` — integer string
 - `team[model]` — model name (required when `team[type]=selector`)
@@ -152,8 +151,7 @@ Model runtime notes:
   ],
   "human_gate": {
     "enabled": true,
-    "name": "Architect",
-    "interaction_mode": "approve_reject"
+    "name": "Architect"
   },
   "team": {
     "type": "round_robin | selector",
@@ -196,3 +194,13 @@ Restart endpoint contract:
   - Requires a persisted `agent_state`
   - Session must be `completed` or `stopped`
   - If `load_state()` fails due to schema/version drift, restart stops with an explicit version mismatch error
+
+Human gate response endpoint contract:
+
+- `POST /chat/sessions/<session_id>/respond/`
+- Body fields:
+  - `action`: `continue` or `stop`
+  - `text`: optional note/context (used when `action=continue`)
+- Behavior:
+  - `continue`: sets session status to `idle` and returns `{status:"ok", task:"<text>"}`
+  - `stop`: sets session status to `stopped`, evicts the runtime team, returns `{status:"stopped"}`

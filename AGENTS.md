@@ -64,7 +64,7 @@ See [docs/agent_teams.md](docs/agent_teams.md) for:
 - `RoundRobinGroupChat` vs `SelectorGroupChat` — when to use each
 - Selector prompt placeholders (`{roles}`, `{history}`, `{participants}`)
 - How project `objective` is injected into agent prompts and the selector prompt
-- Human gate state machine and approve/feedback resume flow
+- Human gate state machine and unified approve/reject + continue/stop resume flow
 - Runtime team cache lifecycle (`runtime.py`)
 - How to add a new team type end-to-end
 

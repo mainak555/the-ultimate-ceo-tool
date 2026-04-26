@@ -48,10 +48,7 @@
   <div class="config-readonly__section">
     <h3>Human Gate</h3>
     {% if project.human_gate.enabled %}
-      <p>
-        <strong>Name:</strong> {{ project.human_gate.name }} &nbsp;|&nbsp;
-        <strong>Mode:</strong> {{ project.human_gate.interaction_mode }}
-      </p>
+      <p><strong>Name:</strong> {{ project.human_gate.name }}</p>
     {% else %}
       <p>Human gate disabled.</p>
     {% endif %}

@@ -155,10 +155,6 @@ def _build_project_data(post_data, existing_project=None):
         "human_gate": {
             "enabled": human_gate_enabled,
             "name": post_data.get("human_gate[name]", "").strip(),
-            "interaction_mode": post_data.get(
-                "human_gate[interaction_mode]",
-                "approve_reject",
-            ).strip(),
         },
         "team": {
             "type": post_data.get("team[type]", "round_robin").strip(),
@@ -636,7 +632,7 @@ async def chat_session_run(request, session_id):
     Returns a text/event-stream SSE response.
 
     Body fields:
-      task  — the user message / feedback text (empty string = resume approve)
+            task  — the user message / optional gate notes (empty string = resume)
     """
     if not _has_valid_secret(request):
         return _json_error("Unauthorized", 403)
@@ -661,7 +657,7 @@ async def chat_session_run(request, session_id):
 
     task = request.POST.get("task", "").strip()
 
-    # First run must have a task; resume (approve) may send empty string
+    # First run must have a task; gate resume may send empty string
     is_first_run = session["status"] == "idle" and not session.get("discussions")
     if is_first_run and not task:
         return _json_error("'task' is required to start a conversation.", 400)
@@ -712,7 +708,7 @@ async def chat_session_run(request, session_id):
             state = await save_team_state(team)
             await asyncio.to_thread(services.save_agent_state, session_id, state)
 
-        # Persist the human's message (initial task or gate feedback) to discussions.
+        # Persist the human's message (initial task or gate notes) to discussions.
         if task:
             human_name = project.get("human_gate", {}).get("name") or "You"
             pending_messages.append({
@@ -743,7 +739,6 @@ async def chat_session_run(request, session_id):
                     if has_gate and current_round < max_iter:
                         await asyncio.to_thread(services.set_session_status, session_id, "awaiting_input")
                         gate_data = {
-                            "mode": project["human_gate"]["interaction_mode"],
                             "round": current_round + 1,
                             "max_rounds": max_iter,
                             "human_name": project["human_gate"]["name"],
@@ -822,8 +817,8 @@ def chat_session_respond(request, session_id):
     Human gate decision endpoint.
 
     Body:
-      action — "approve" | "feedback" | "stop"
-      text   — feedback text (only for action=feedback)
+            action — "continue" | "stop"
+            text   — optional user context to inject before continuing
     """
     if not _has_valid_secret(request):
         return _json_error("Unauthorized", 403)
@@ -844,11 +839,10 @@ def chat_session_respond(request, session_id):
         evict_team(session_id)
         return HttpResponse(json.dumps({"status": "stopped"}), content_type="application/json")
 
-    if action in ("approve", "feedback"):
+    if action == "continue":
         services.set_session_status(session_id, "idle")
-        task = text if action == "feedback" else ""
         return HttpResponse(
-            json.dumps({"status": "ok", "task": task}),
+            json.dumps({"status": "ok", "task": text}),
             content_type="application/json",
         )
 

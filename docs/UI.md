@@ -110,6 +110,7 @@ Shared markdown rendering for Home and export reference panes must go through `s
 `home.js` also handles (home chat page only):
 - Restart controls for sessions with persisted agent state.
 - Two restart modes: continue from last state, or add context and continue.
+- Human gate pause panel with decision-first controls (Approve/Reject), optional notes, and Continue/Stop actions.
 
 ## Chat Restart Discoverability
 
@@ -122,7 +123,7 @@ Shared markdown rendering for Home and export reference panes must go through `s
 ## Configuration Surface
 
 - **Assistant agents**: each card stores `name`, `model`, `system_prompt`, and `temperature`. The project `objective` is automatically appended to each agent's resolved system prompt at runtime.
-- **Human gate**: single optional section with enable toggle, `name`, and `interaction_mode` (`approve_reject` or `feedback`). `approve_reject` pauses after each round and lets the user approve (continue) or reject (provide feedback). `feedback` always collects free-text feedback before continuing.
+- **Human gate**: single optional section with enable toggle and `name`. When paused, the chat panel shows top decision buttons (`Approve` / `Reject`) as optional shortcuts. Clicking either prefixes the notes textarea with `APPROVED` or `REJECTED` followed by a blank line. Users may also skip those buttons and press `Continue` directly with or without notes, or choose `Stop`.
 - **Team**: nested config with `type` and `max_iterations`. Supported types:
   - `round_robin` — agents take turns in fixed order.
   - `selector` — a dedicated model client routes between agents each turn. Requires `model`, `system_prompt` (supports `{roles}`, `{history}`, `{participants}`), `temperature` (default `0.0`), and `allow_repeated_speaker`. Selector fields are wrapped in an `.agent-card` container (edit) / `.agent-card--readonly` card (readonly) with header "Selector Agent" / "Selector", matching assistant agent cards.

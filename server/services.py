@@ -149,9 +149,6 @@ def normalize_project(project):
                 raw_human_gate = {
                     "enabled": True,
                     "name": raw_agent.get("name") or "Architect",
-                    "interaction_mode": "feedback"
-                    if (raw_agent.get("interaction_mode") or "").strip() == "feedback"
-                    else "approve_reject",
                 }
             continue
 
@@ -184,15 +181,11 @@ def normalize_project(project):
     human_gate = {
         "enabled": False,
         "name": "",
-        "interaction_mode": "approve_reject",
     }
     if isinstance(raw_human_gate, dict):
         human_gate = {
             "enabled": bool(raw_human_gate.get("enabled", True)),
             "name": (raw_human_gate.get("name") or "").strip(),
-            "interaction_mode": (
-                raw_human_gate.get("interaction_mode") or "approve_reject"
-            ).strip() or "approve_reject",
         }
 
     raw_team = project.get("team") or {}

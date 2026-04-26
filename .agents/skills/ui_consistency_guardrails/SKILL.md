@@ -14,6 +14,7 @@ Preserve a consistent visual language across Config, Home, and export modals.
 3. Card/modal spacing: preserve established padding, border radius, and hierarchy rhythm.
 4. Typography: keep existing text scale and label hierarchy unless design system change is intentional.
 5. **Textarea hint text is mandatory**: every `<textarea>` in a config form must be followed by `<small class="form-hint">` with a plain-language description of the field's purpose. The hint must name the integration and type (e.g. "Prompt used by the extraction agent to parse the discussion into Jira Service Desk requests."). No textarea may be left without a hint.
+6. **Human gate control order is fixed**: top row = optional decision shortcuts (`Approve`, `Reject`), middle = optional notes textarea (shortcut click prefill uses `APPROVED`/`REJECTED` + blank line), bottom row = execution (`Continue`, `Stop`). Do not reintroduce interaction-mode branching.
 
 ## Export Modal Guardrails
 1. Keep baseline split layout and action order consistent across providers.

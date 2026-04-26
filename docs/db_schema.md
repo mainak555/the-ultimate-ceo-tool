@@ -45,9 +45,8 @@ Cross-references: [docs/API.md](API.md) (form fields + HTTP schema), [AGENTS.md]
 
   // ── Human gate (optional) ─────────────────────────────────────────────────
   "human_gate": {
-    "enabled":          true,           // bool
-    "name":             "string",       // required when enabled=true
-    "interaction_mode": "approve_reject" // "approve_reject" | "feedback"
+    "enabled":          true,      // bool
+    "name":             "string"  // required when enabled=true
   },
 
   // ── Team ──────────────────────────────────────────────────────────────────
@@ -242,7 +241,6 @@ The `integrations` root never holds an `export_agent` field in new documents.
 | `agents[].model` | str | must be in `agent_models.json` |
 | `agents[].system_prompt` | str | non-empty |
 | `agents[].temperature` | float | 0.0 ≤ value ≤ 2.0 |
-| `human_gate.interaction_mode` | str | `"approve_reject"` or `"feedback"` |
 | `human_gate.name` | str | required when `enabled=true` |
 | `team.type` | str | `"round_robin"` or `"selector"` |
 | `team.max_iterations` | int | ≥ 1; ≤ 10 when `human_gate.enabled=false` |

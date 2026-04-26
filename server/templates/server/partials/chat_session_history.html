@@ -82,20 +82,17 @@
       &#x1F464; <strong>{{ project.human_gate.name }}</strong> &mdash; Round {{ session.current_round }} of {{ project.team.max_iterations }} complete.
       What would you like to do?
     </div>
-    {% if project.human_gate.interaction_mode == "feedback" %}
-      <textarea class="input input--textarea human-gate-panel__textarea"
-                rows="3"
-                placeholder="Type your feedback for the agents…"></textarea>
-      <div class="human-gate-panel__actions">
-        <button class="btn btn--primary human-gate-btn human-gate-btn--feedback">&#x1F4E4; Send Feedback</button>
-        <button class="btn btn--danger human-gate-btn human-gate-btn--stop">&#x1F6D1; Stop</button>
-      </div>
-    {% else %}
-      <div class="human-gate-panel__actions">
-        <button class="btn btn--success human-gate-btn human-gate-btn--approve">&#x2705; Approve &amp; Continue</button>
-        <button class="btn btn--danger human-gate-btn human-gate-btn--stop">&#x1F6D1; Stop</button>
-      </div>
-    {% endif %}
+    <div class="human-gate-panel__decision-row">
+      <button class="btn btn--success human-gate-btn human-gate-btn--approve">&#x2705; Approve</button>
+      <button class="btn btn--warning human-gate-btn human-gate-btn--reject">&#x26A0; Reject</button>
+    </div>
+    <textarea class="input input--textarea human-gate-panel__textarea"
+              rows="3"
+              placeholder="Optional details to send to agents..."></textarea>
+    <div class="human-gate-panel__actions">
+      <button class="btn btn--primary human-gate-btn human-gate-btn--continue">&#x27A1; Continue</button>
+      <button class="btn btn--danger human-gate-btn human-gate-btn--stop">&#x1F6D1; Stop</button>
+    </div>
   </div>
 {% endif %}
 {% endif %}
@@ -179,9 +176,7 @@
           </div>
           <div class="project-ctx__agent-info">
             <span class="project-ctx__agent-name">{{ project.human_gate.name }}</span>
-            <span class="project-ctx__agent-model">
-              Human &middot; {{ project.human_gate.interaction_mode|title }}
-            </span>
+            <span class="project-ctx__agent-model">Human reviewer</span>
           </div>
         </div>
       {% endif %}

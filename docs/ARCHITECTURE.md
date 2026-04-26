@@ -56,7 +56,7 @@ product-discovery/
 ### `schemas.py` — Validation
 - `validate_project(data)` — validates and cleans project configuration data.
 - `validate_agent(data)` — validates a single assistant agent entry.
-- `validate_human_gate(data)` — validates the optional approval/feedback gate.
+- `validate_human_gate(data)` — validates the optional human approval gate.
 - `validate_team(data, human_gate_enabled)` — validates team type and max iterations.
 - Returns cleaned `dict` or raises `ValueError` with a descriptive message.
 - No database or request coupling.

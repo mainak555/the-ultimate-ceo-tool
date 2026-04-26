@@ -52,6 +52,18 @@ _PLACEHOLDER_RE = re.compile(r"\{([A-Z][A-Z0-9_]*)\}")
 _SESSION_WORKBENCHES: dict[str, list[Any]] = {}
 
 
+def _mcp_stop_timeout_seconds() -> float:
+    """Return per-workbench stop timeout in seconds (default 5)."""
+    raw = (os.getenv("MCP_STOP_TIMEOUT_SECONDS", "") or "").strip()
+    if not raw:
+        return 5.0
+    try:
+        value = float(raw)
+        return value if value > 0 else 5.0
+    except ValueError:
+        return 5.0
+
+
 def _server_fingerprint(servers: dict) -> str:
     """Stable hash of a normalized mcpServers dict (used for de-dup/caching)."""
     blob = json.dumps(servers, sort_keys=True, separators=(",", ":"))
@@ -215,9 +227,15 @@ def close_session_workbenches(session_id: str) -> None:
         return
 
     async def _stop_all():
+        timeout_s = _mcp_stop_timeout_seconds()
         for wb in workbenches:
             try:
-                await wb.stop()
+                await asyncio.wait_for(wb.stop(), timeout=timeout_s)
+            except asyncio.TimeoutError:
+                logger.exception(
+                    "agents.mcp.failed",
+                    extra={"session_id": session_id, "phase": "stop_timeout"},
+                )
             except Exception:  # noqa: BLE001
                 logger.exception(
                     "agents.mcp.failed",
@@ -238,3 +256,9 @@ def close_session_workbenches(session_id: str) -> None:
         "agents.mcp.closed",
         extra={"session_id": session_id, "workbench_count": len(workbenches)},
     )
+
+
+def close_all_workbenches() -> None:
+    """Stop and discard all tracked MCP workbenches across every session."""
+    for session_id in list(_SESSION_WORKBENCHES.keys()):
+        close_session_workbenches(session_id)

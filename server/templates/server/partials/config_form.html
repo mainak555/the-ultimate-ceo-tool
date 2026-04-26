@@ -95,18 +95,8 @@
                  value="{{ project.human_gate.name|default:'Architect' }}"
                  placeholder="Architect">
         </div>
-
-        <div class="form-group">
-          <label for="human_gate_interaction_mode">Interaction Mode</label>
-          <select id="human_gate_interaction_mode"
-                  name="human_gate[interaction_mode]"
-                  class="input">
-            <option value="approve_reject" {% if project.human_gate.interaction_mode|default:'approve_reject' == 'approve_reject' %}selected{% endif %}>Approve / Reject</option>
-            <option value="feedback" {% if project.human_gate.interaction_mode == 'feedback' %}selected{% endif %}>Feedback</option>
-          </select>
-        </div>
       </div>
-      <small class="form-hint">If disabled, team max iterations cannot exceed 10.</small>
+      <small class="form-hint">During chat pause, the reviewer selects Approve or Reject, can add optional notes, then chooses Continue or Stop. If disabled, team max iterations cannot exceed 10.</small>
     </div>
   </fieldset>
 

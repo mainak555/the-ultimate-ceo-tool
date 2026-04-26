@@ -96,3 +96,10 @@ def evict_team(session_id: str) -> None:
         close_session_workbenches(session_id)
     except Exception:  # noqa: BLE001
         logger.exception("agents.mcp.failed", extra={"session_id": session_id, "phase": "evict"})
+
+
+def evict_all_teams() -> None:
+    """Evict all cached teams and trigger MCP teardown for each session."""
+    session_ids = set(_TEAM_CACHE.keys()) | set(_CANCEL_TOKENS.keys())
+    for session_id in list(session_ids):
+        evict_team(session_id)

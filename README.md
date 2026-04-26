@@ -34,6 +34,22 @@ Open **http://127.0.0.1:8000** in your browser.
 
 ---
 
+## Human-In-The-Loop (HITL) Gate
+
+When Human Gate is enabled for a project, the run pauses after each round and
+shows a unified decision panel:
+
+- Top decision buttons: `Approve` or `Reject`
+- Notes textarea: `Approve`/`Reject` are optional shortcuts that auto-prefix
+  `APPROVED` or `REJECTED` followed by a blank line; you can add
+	optional extra context for the agents
+- Bottom actions: `Continue` (resume with optional notes) or `Stop`
+
+There is no interaction-mode toggle in project configuration; this single flow
+is used for every gated pause.
+
+---
+
 ## Docker
 
 The repository ships three deployment topologies under `deployments/`:

@@ -180,8 +180,9 @@ idle ──► running ──► awaiting_input ──► running ──► ... 
                          └──── (resume) ────┘
 ```
 
-- **Approve / Resume**: POST `/chat/sessions/<id>/run/` with an empty `task`. The view passes `task=None` to `run_stream()` so AutoGen continues from its current state.
-- **Feedback**: POST with non-empty `task`. The message is persisted as a `user` role entry in `discussions` and passed to `run_stream(task=...)` as a new instruction.
+- **Continue**: POST `/chat/sessions/<id>/respond/` with `action=continue` and optional `text`. The server returns `{status:"ok", task:"..."}` and the UI calls `/run/` with that task.
+- **Decision + Notes**: `Approve` / `Reject` are optional shortcuts. If clicked, the UI prepends `APPROVED` or `REJECTED` followed by a blank line in the notes textarea. Continue can still be sent without selecting either shortcut. Any non-empty continue text is persisted as a `user` role entry in `discussions` and passed to `run_stream(task=...)`.
+- **Stop**: POST `/chat/sessions/<id>/respond/` with `action=stop` transitions session to `stopped` and evicts the cached team.
 - **First run**: `task` must be non-empty — a 400 is returned if `discussions` is empty and no task was provided.
 
 ---

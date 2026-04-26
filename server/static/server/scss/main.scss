@@ -1642,11 +1642,22 @@ select.input {
     font-size: $font-size-base;
   }
 
+  &__decision-row {
+    display: flex;
+    gap: $space-sm;
+    flex-wrap: wrap;
+    margin-bottom: $space-sm;
+  }
+
   &__actions {
     display: flex;
     gap: $space-sm;
     flex-wrap: wrap;
   }
+}
+
+.human-gate-btn.is-active {
+  box-shadow: 0 0 0 2px rgba($color-primary, 0.22);
 }
 
 // ---------------------------------------------------------------------------

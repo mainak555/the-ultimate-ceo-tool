@@ -6,7 +6,6 @@ import re
 from .model_catalog import get_agent_model_names
 
 TEAM_TYPES = ("round_robin", "selector")
-HUMAN_GATE_INTERACTION_MODES = ("approve_reject", "feedback")
 JIRA_TYPES = ("software", "service_desk", "business")
 MCP_TOOL_SCOPES = ("none", "shared", "dedicated")
 MCP_HTTP_TRANSPORT = "http"
@@ -272,29 +271,20 @@ def validate_human_gate(data):
         return {
             "enabled": False,
             "name": "",
-            "interaction_mode": "approve_reject",
         }
 
     enabled = bool(data.get("enabled", False))
     name = (data.get("name") or "").strip()
-    interaction_mode = (data.get("interaction_mode") or "approve_reject").strip()
-
-    if interaction_mode not in HUMAN_GATE_INTERACTION_MODES:
-        raise ValueError(
-            "'human_gate.interaction_mode' must be 'approve_reject' or 'feedback'."
-        )
 
     if enabled and not name:
         raise ValueError("'human_gate.name' is required when human gate is enabled.")
 
     if not enabled:
         name = ""
-        interaction_mode = "approve_reject"
 
     return {
         "enabled": enabled,
         "name": name,
-        "interaction_mode": interaction_mode,
     }
 
 

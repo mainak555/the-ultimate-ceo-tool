@@ -325,17 +325,6 @@ document.addEventListener("DOMContentLoaded", function () {
 
   function appendGatePanel(data) {
     var sessionId = activeSessionIdInput ? activeSessionIdInput.value : "";
-    var modeHtml = data.mode === "feedback"
-      ? '<textarea class="input input--textarea human-gate-panel__textarea" rows="3" placeholder="Type your feedback for the agents..."></textarea>'
-        + '<div class="human-gate-panel__actions">'
-        + '<button class="btn btn--primary human-gate-btn human-gate-btn--feedback">Send Feedback</button>'
-        + '<button class="btn btn--danger human-gate-btn human-gate-btn--stop">Stop</button>'
-        + '</div>'
-      : '<div class="human-gate-panel__actions">'
-        + '<button class="btn btn--success human-gate-btn human-gate-btn--approve">Approve and Continue</button>'
-        + '<button class="btn btn--danger human-gate-btn human-gate-btn--stop">Stop</button>'
-        + '</div>';
-
     chatMessages.insertAdjacentHTML(
       "beforeend",
       '<div class="human-gate-panel" data-session-id="' + sessionId + '">'
@@ -343,10 +332,41 @@ document.addEventListener("DOMContentLoaded", function () {
       + '<strong>' + (data.human_name || "You") + '</strong>'
       + ' - Round ' + data.round + ' of ' + data.max_rounds + ' complete. What would you like to do?'
       + '</div>'
-      + modeHtml
+      + '<div class="human-gate-panel__decision-row">'
+      + '<button class="btn btn--success human-gate-btn human-gate-btn--approve">Approve</button>'
+      + '<button class="btn btn--warning human-gate-btn human-gate-btn--reject">Reject</button>'
+      + '</div>'
+      + '<textarea class="input input--textarea human-gate-panel__textarea" rows="3" placeholder="Optional details to send to agents..."></textarea>'
+      + '<div class="human-gate-panel__actions">'
+      + '<button class="btn btn--primary human-gate-btn human-gate-btn--continue">Continue</button>'
+      + '<button class="btn btn--danger human-gate-btn human-gate-btn--stop">Stop</button>'
+      + '</div>'
       + '</div>'
     );
     chatMessages.scrollTop = chatMessages.scrollHeight;
+  }
+
+  function setGateDecision(panel, decision) {
+    if (!panel || !decision) return;
+
+    panel.dataset.decision = decision;
+    panel.querySelectorAll(".human-gate-btn--approve, .human-gate-btn--reject").forEach(function (btn) {
+      btn.classList.remove("is-active");
+    });
+
+    var activeBtn = panel.querySelector(
+      decision === "APPROVED" ? ".human-gate-btn--approve" : ".human-gate-btn--reject"
+    );
+    if (activeBtn) activeBtn.classList.add("is-active");
+
+    var ta = panel.querySelector(".human-gate-panel__textarea");
+    if (!ta) return;
+
+    var value = ta.value || "";
+    var body = value.replace(/^(APPROVED|REJECTED)\s*\n\n?/i, "");
+    ta.value = decision + "\n\n" + body;
+    ta.focus();
+    ta.selectionStart = ta.selectionEnd = ta.value.length;
   }
 
   function startRun(task) {
@@ -621,37 +641,46 @@ document.addEventListener("DOMContentLoaded", function () {
           "Content-Type": "application/x-www-form-urlencoded",
         },
         body: body.toString(),
-      }).then(function (r) { return r.json(); });
+      }).then(function (r) {
+        return r.json().then(function (data) {
+          if (!r.ok) throw new Error(data.error || "Action failed");
+          return data;
+        });
+      });
     }
 
     if (e.target.closest(".human-gate-btn--approve")) {
-      panel.remove();
-      sendRespond("approve", "").then(function (d) {
-        if (d.status === "ok") startRun("");
-      });
-    } else if (e.target.closest(".human-gate-btn--feedback")) {
+      setGateDecision(panel, "APPROVED");
+    } else if (e.target.closest(".human-gate-btn--reject")) {
+      setGateDecision(panel, "REJECTED");
+    } else if (e.target.closest(".human-gate-btn--continue")) {
       var ta = panel.querySelector(".human-gate-panel__textarea");
       var text = ta ? ta.value.trim() : "";
-      if (!text) { ta && ta.focus(); return; }
       panel.remove();
       var fbTs = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-      var fbHtml = renderMarkdown(text);
-      appendBubble(
-        '<div class="chat-bubble chat-bubble--human">'
-        + '<div class="chat-bubble__meta">'
-        + '<span class="chat-bubble__name">You</span>'
-        + '<span class="chat-bubble__time">' + fbTs + '</span>'
-        + '</div>'
-        + '<div class="chat-bubble__content">' + fbHtml + '</div>'
-        + '</div>'
-      );
-      sendRespond("feedback", text).then(function (d) {
-        if (d.status === "ok") startRun(d.task || text);
+      if (text) {
+        var fbHtml = renderMarkdown(text);
+        appendBubble(
+          '<div class="chat-bubble chat-bubble--human">'
+          + '<div class="chat-bubble__meta">'
+          + '<span class="chat-bubble__name">You</span>'
+          + '<span class="chat-bubble__time">' + fbTs + '</span>'
+          + '</div>'
+          + '<div class="chat-bubble__content">' + fbHtml + '</div>'
+          + '</div>'
+        );
+      }
+      sendRespond("continue", text).then(function (d) {
+        if (d.status === "ok") startRun(d.task || "");
+      }).catch(function (err) {
+        appendBubble('<div class="chat-bubble chat-bubble--error">Error: ' + err.message + '</div>');
       });
     } else if (e.target.closest(".human-gate-btn--stop")) {
       panel.remove();
       sendRespond("stop", "").then(function () {
         appendStatusBadge("stopped");
+      }).catch(function (err) {
+        appendBubble('<div class="chat-bubble chat-bubble--error">Error: ' + err.message + '</div>');
       });
     }
   });
