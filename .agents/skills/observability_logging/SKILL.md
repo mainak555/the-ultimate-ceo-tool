@@ -86,6 +86,93 @@ instead of implementing provider-local span helpers.
 3. `RequestIdFilter` (in `server/logging_utils.py`) injects the current request id onto every `LogRecord` as `record.request_id`. Default value is `"-"` when no request is active.
 4. Async tasks awaited within a request inherit the contextvar automatically. Do not pass request ids manually.
 
+## SSE Streaming Views — Mandatory request_id + trace_id Pattern
+
+Django SSE views return a `StreamingHttpResponse` synchronously. Middleware
+`finally` blocks (including OTel context teardown and `_request_id` clear)
+run **before** the ASGI server begins iterating the generator body. Without
+special handling, every log line inside the generator shows
+`request_id: "-"` and `trace_id: "-"`.
+
+### Required pattern for every SSE view that logs inside the generator body
+
+```python
+# 1. Capture request_id BEFORE event_stream() is defined.
+_captured_request_id = get_request_id()
+
+# 2. Create a fresh root OTel span for this run (empty context → new trace_id
+#    per call) and store its W3C traceparent in Redis for reattachment.
+from core.tracing import context_from_traceparent, start_root_span
+from agents.session_coordination import clear_run_traceparent, store_run_traceparent
+
+_run_span, _run_traceparent = start_root_span(
+    "agents.session.run", {"session_id": session_id}
+)
+if _run_traceparent:
+    await asyncio.to_thread(store_run_traceparent, session_id, _run_traceparent)
+
+async def event_stream():
+    # 3. Re-bind request_id (middleware cleared it before the body is consumed).
+    _rid_token = bind_request_id(_captured_request_id)
+
+    # 4. Reattach the root OTel span so all agents.* spans and log lines share
+    #    the same trace_id.  Two attach tokens are used in LIFO order on exit.
+    _otel_parent_token = None
+    _otel_span_token = None
+    if _run_span is not None and _run_traceparent:
+        try:
+            from opentelemetry import context as otel_context, trace
+            _parent_ctx = context_from_traceparent(_run_traceparent)
+            if _parent_ctx is not None:
+                _otel_parent_token = otel_context.attach(_parent_ctx)
+            _otel_span_token = otel_context.attach(
+                trace.set_span_in_context(_run_span)
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
+    try:
+        ...  # actual streaming logic
+    finally:
+        # 5. Detach OTel tokens (LIFO), end the span, clear Redis key,
+        #    restore request_id.
+        if _otel_span_token is not None:
+            try:
+                from opentelemetry import context as otel_context
+                otel_context.detach(_otel_span_token)
+            except Exception:  # noqa: BLE001
+                pass
+        if _otel_parent_token is not None:
+            try:
+                from opentelemetry import context as otel_context
+                otel_context.detach(_otel_parent_token)
+            except Exception:  # noqa: BLE001
+                pass
+        if _run_span is not None:
+            try:
+                _run_span.end()
+            except Exception:  # noqa: BLE001
+                pass
+        try:
+            await asyncio.to_thread(clear_run_traceparent, session_id)
+        except Exception:  # noqa: BLE001
+            pass
+        clear_request_id(_rid_token)
+```
+
+Key rules:
+- `start_root_span` uses `Context()` (empty) — guarantees a **fresh
+  trace_id** per call, not a child of the Django request span.
+- Redis storage is best-effort (silent on Redis failure). When tracing is
+  disabled or Redis is down, `_run_span` and `_run_traceparent` are `None`;
+  all guards skip and the run continues normally with `trace_id: "-"`.
+- Detach tokens **must** be applied in reverse attach order.
+- `_run_span.end()` must be called only once, in `finally`.
+- `clear_run_traceparent` cleans the Redis key (TTL also expires it
+  automatically on process death so no manual cleanup is strictly needed).
+
+Full details: `docs/observability.md` § "Session Run Tracing (SSE event_stream)".
+
 ## Tracing Architecture
 1. `core/tracing.py` owns all OpenTelemetry wiring. Integration clients should use `core/http_tracing.py` (`instrument_http_response`) rather than importing OpenTelemetry directly.
 2. `init_tracing()` runs exactly once from `server/apps.py` `ServerConfig.ready()`. Idempotent across reloads. Never raises on tracing-setup failure — logs `EXCEPTION` and continues.

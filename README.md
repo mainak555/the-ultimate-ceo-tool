@@ -347,6 +347,35 @@ propagated `X-Request-ID` header. Logs and traces are intentionally split:
 - **Logs** — JSON to stderr, every line carries `request_id`, `trace_id`, `span_id`. Lifecycle events + `WARNING`+ only; per-call HTTP success detail lives on spans.
 - **Traces** — full request/response payloads (redacted, truncated at 32 KB) shipped to the configured OTLP backend (Langfuse today; pluggable). `OTEL_CONSOLE_EXPORTER=error` additionally dumps any failed span to stderr with its full attribute set + stacktrace.
 
+### Trace model for agent runs
+
+Each `POST /chat/sessions/<id>/run/` (a single agent round) produces its own
+**root trace** (`agents.session.run`). This trace is intentionally severed
+from the Django HTTP request span so every round is independently queryable in
+Langfuse with a distinct `trace_id`. The root span's W3C traceparent string is
+stored in Redis (alongside the run lease) and reattached inside the SSE
+generator body, so all `agents.*` log lines and child spans (`autogen.event.*`,
+`mcp.tool.*`, `@traced_function` service calls) share the same `trace_id`.
+
+A human-gate resume starts a fresh `/run/` call and therefore a new
+`agents.session.run` trace — each round of a multi-round conversation appears
+as a separate trace. You can filter Langfuse by `session_id` attribute to see
+all rounds for a session.
+
+```
+agents.session.run                              [root — fresh trace_id per round]
+├─ @traced_function on service entry            [always on]
+│   └─ service.* mutation
+└─ AutoGen agent run                            [bridge · OTEL_INSTRUMENT_AGENTS]
+   ├─ autogen.event.<type>    (LLM call)
+   │  └─ HTTP POST <provider> (LLM API)         [auto · OTEL_INSTRUMENT_HTTP]
+   ├─ mcp.tool.request <name>                   [ToolCallRequestEvent]
+   └─ mcp.tool.result <name>                    [ToolCallResultEvent]
+```
+
+When Redis or OTel is unavailable the run continues normally; log lines show
+`trace_id: "-"` (same as the pre-feature default) and no error is raised.
+
 A single chat turn produces one trace; spans nest by call stack — Django
 request → service mutation → agent run → LLM call / `execute_tool` (MCP) →
 outbound HTTP. See the trace-hierarchy diagram in

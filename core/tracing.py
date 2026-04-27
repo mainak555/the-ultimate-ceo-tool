@@ -443,6 +443,88 @@ def traced_function(
     return decorator
 
 
+def start_root_span(
+    name: str,
+    attributes: dict[str, Any] | None = None,
+) -> tuple[Any, str | None]:
+    """Start a new OTel root span (no parent) and return ``(span, traceparent)``.
+
+    The span is created with an empty context — intentionally severing the
+    active Django request span as parent — so every call produces a fresh
+    ``trace_id``. This is the correct model for agent session runs: each
+    ``/run/`` round is its own trace, independently queryable in Langfuse.
+
+    The returned ``traceparent`` is the W3C header string
+    (``00-<trace_id>-<span_id>-01``) extracted from the span's context via
+    ``propagate.inject``. It can be stored in Redis (see
+    ``agents/session_coordination.py``) and reattached inside the SSE
+    ``event_stream()`` generator after the Django middleware ``finally`` block
+    clears the request span context.
+
+    The caller is responsible for calling ``span.end()`` after the run
+    completes. ``@traced_function`` spans created while the span is attached
+    (via ``otel_context.attach(trace.set_span_in_context(span))``) will
+    automatically nest as children.
+
+    Returns ``(None, None)`` when OTel is unavailable or tracing is disabled
+    (no ``LANGFUSE_*`` / OTLP exporter configured).
+    """
+    try:
+        from opentelemetry import propagate, trace
+        from opentelemetry.context import Context
+    except Exception:
+        return None, None
+
+    tracer = trace.get_tracer("product-discovery")
+    # Context() is an empty immutable context — no active span — so the new
+    # span becomes a root with a fresh trace_id (no Django request parent).
+    span = tracer.start_span(name, context=Context())
+
+    if not span.is_recording():
+        # TracerProvider not configured (tracing disabled).
+        try:
+            span.end()
+        except Exception:  # noqa: BLE001
+            pass
+        return None, None
+
+    if attributes:
+        for k, v in (attributes or {}).items():
+            try:
+                span.set_attribute(k, v)
+            except Exception:  # noqa: BLE001
+                pass
+
+    # Extract W3C traceparent from the span so it can be stored externally.
+    carrier: dict[str, str] = {}
+    try:
+        propagate.inject(carrier, context=trace.set_span_in_context(span))
+    except Exception:  # noqa: BLE001
+        pass
+
+    return span, carrier.get("traceparent") or None
+
+
+def context_from_traceparent(traceparent: str) -> Any | None:
+    """Reconstruct an OTel context from a W3C ``traceparent`` string.
+
+    Returns a context containing the remote span described by ``traceparent``.
+    Attaching this context and then making ``span`` current via
+    ``trace.set_span_in_context`` restores the full parent chain so child
+    spans nest correctly in the OTLP backend.
+
+    Returns ``None`` when ``traceparent`` is empty/malformed or OTel is
+    unavailable.
+    """
+    if not traceparent:
+        return None
+    try:
+        from opentelemetry import propagate
+        return propagate.extract({"traceparent": traceparent})
+    except Exception:  # noqa: BLE001
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Exporter wiring (Langfuse currently; pluggable by replacing _build_exporter)
 # ---------------------------------------------------------------------------

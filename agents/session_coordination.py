@@ -81,6 +81,10 @@ def _cancel_key(session_id: str) -> str:
     return _session_key(session_id, "cancel")
 
 
+def _run_trace_key(session_id: str) -> str:
+    return _session_key(session_id, "run_trace")
+
+
 def _get_client():
     """Return a cached Redis client configured from Django settings."""
     global _REDIS_CLIENT
@@ -196,15 +200,59 @@ def is_cancel_signaled(session_id: str) -> bool:
         raise SessionCoordinationError("Unable to check cancel signal.") from exc
 
 
+# ---------------------------------------------------------------------------
+# Per-run trace context (Redis-backed OTel traceparent storage)
+# ---------------------------------------------------------------------------
+
+def store_run_traceparent(session_id: str, traceparent: str) -> None:
+    """Store the W3C traceparent for the current run's root span.
+
+    TTL matches the run lease so the key expires automatically if the process
+    dies without calling ``clear_run_traceparent``. Silent on Redis failure —
+    never blocks a run.
+    """
+    if not traceparent:
+        return
+    try:
+        _get_client().set(_run_trace_key(session_id), traceparent, ex=_lease_ttl_seconds())
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def get_run_traceparent(session_id: str) -> str | None:
+    """Return the stored W3C traceparent for the current run, or None.
+
+    Silent on Redis failure — callers fall back to no OTel context.
+    """
+    try:
+        return _get_client().get(_run_trace_key(session_id)) or None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def clear_run_traceparent(session_id: str) -> None:
+    """Delete the run traceparent key on normal run end.
+
+    Silent on Redis failure — key expires automatically via TTL.
+    """
+    try:
+        _get_client().delete(_run_trace_key(session_id))
+    except Exception:  # noqa: BLE001
+        pass
+
+
 __all__ = [
     "SessionCoordinationError",
     "acquire_run_lease",
     "clear_cancel_signal",
+    "clear_run_traceparent",
     "ensure_redis_available",
     "get_heartbeat_interval_seconds",
     "get_instance_id",
+    "get_run_traceparent",
     "is_cancel_signaled",
     "release_run_lease",
     "renew_run_lease",
     "signal_cancel",
+    "store_run_traceparent",
 ]

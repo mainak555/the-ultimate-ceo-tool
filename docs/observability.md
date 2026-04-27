@@ -189,6 +189,84 @@ Wiring lives only in `_build_console_span_processor()` in
 
 ---
 
+## Session Run Tracing (SSE event_stream)
+
+### The Problem
+
+Django's SSE `StreamingHttpResponse` returns the view synchronously.
+Middleware `finally` blocks (including OTel context teardown) execute
+*immediately after the view function returns* — before the ASGI server begins
+iterating the async generator body. By the time `event_stream()` actually
+runs, the Django request span context and all ContextVars are gone. Without
+special handling, every `agents.*` log line emitted inside the generator
+shows `trace_id: "-"` and `span_id: "-"`.
+
+### Solution: Redis-backed root span per run
+
+Each `POST /chat/sessions/<id>/run/` call:
+
+1. **Creates a new root OTel span** (`agents.session.run`) via
+   `core.tracing.start_root_span` using an **empty context** (no Django
+   request parent). An empty context guarantees a fresh `trace_id` for every
+   round — each run is independently queryable in Langfuse.
+2. **Stores the W3C traceparent string** in Redis under the key
+   `{namespace}:chat_session:{session_id}:run_trace` (TTL = run lease TTL)
+   via `agents.session_coordination.store_run_traceparent`. The key has the
+   same lifetime as the run lease and expires automatically on process death.
+3. Inside `event_stream()`, **reattaches the OTel context** in two steps:
+   - `context_from_traceparent(traceparent)` → reconstruct a remote parent
+     context (establishes the trace_id chain).
+   - `otel_context.attach(trace.set_span_in_context(span))` → make the
+     recording `agents.session.run` span the active span so all child spans
+     (`@traced_function`, `autogen.event.*`) nest under it.
+4. In the outermost `finally`, **ends the span**, detaches both OTel tokens
+   (in LIFO order), and calls `clear_run_traceparent` to delete the Redis
+   key.
+
+### Helper APIs
+
+| Location | Function | Purpose |
+|---|---|---|
+| `core/tracing.py` | `start_root_span(name, attrs)` | Returns `(span, traceparent_str \| None)`. Uses `Context()` to guarantee no parent. |
+| `core/tracing.py` | `context_from_traceparent(tp)` | Calls `propagate.extract({"traceparent": tp})`. Returns `None` on failure. |
+| `agents/session_coordination.py` | `store_run_traceparent(session_id, tp)` | `SET … EX lease_ttl`. Silent on Redis failure. |
+| `agents/session_coordination.py` | `get_run_traceparent(session_id)` | `GET`. Returns `None` on failure. |
+| `agents/session_coordination.py` | `clear_run_traceparent(session_id)` | `DEL`. Silent on failure. |
+
+### Failure behaviour
+
+Redis unavailability or OTel misconfiguration must never block a run:
+
+- `start_root_span` returns `(None, None)` → span and traceparent variables
+  are `None`; all downstream guards skip silently.
+- `store_run_traceparent` catches `Exception` and does nothing.
+- The OTel attach block inside `event_stream()` is wrapped in `try/except`.
+- Result: run continues normally; log lines show `trace_id: "-"` (same as
+  pre-feature behaviour).
+
+### Trace shape
+
+```
+agents.session.run                              [root — fresh trace_id per /run/]
+├─ @traced_function on service entry            [always on — child of run span]
+│   └─ service.* mutation                       [always on]
+└─ AutoGen agent run                            [bridge · OTEL_INSTRUMENT_AGENTS]
+   ├─ autogen.event.<type>    (LLM call)        [bridge]
+   │  └─ HTTP POST <provider> (LLM API)         [auto · OTEL_INSTRUMENT_HTTP]
+   ├─ mcp.tool.request <name>                   [bridge]
+   └─ mcp.tool.result <name>                    [bridge]
+```
+
+### request_id propagation
+
+`request_id` is captured into a closure variable *before* `event_stream()` is
+defined (while `RequestIdMiddleware` is still active), then rebound via
+`bind_request_id()` at the very start of the generator body and cleared in
+the outermost `finally`. This pattern is required for any SSE view that logs
+inside the generator body.
+
+---
+
 ## Pluggable OTLP Backend
 
 Langfuse is the currently-wired exporter, but the architecture supports any

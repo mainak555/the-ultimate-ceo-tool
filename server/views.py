@@ -23,6 +23,8 @@ from django.views.decorators.http import require_GET, require_POST, require_http
 
 from . import services
 from . import attachment_service
+from .logging_utils import bind_request_id, clear_request_id, get_request_id
+from core.tracing import context_from_traceparent, start_root_span
 
 
 logger = logging.getLogger(__name__)
@@ -770,8 +772,45 @@ async def chat_session_run(request, session_id):
         )
         return _json_error("Active session coordinator is unavailable.", 503)
 
+    # Capture request_id now — middleware clears it before event_stream() runs.
+    _captured_request_id = get_request_id()
+
+    # Create a fresh root OTel span for this run.  Empty context → no parent →
+    # fresh trace_id every round, so each /run/ call is independently queryable.
+    # Store the W3C traceparent in Redis so event_stream() can reattach it after
+    # the Django middleware finally-block clears the request span context.
+    from agents.session_coordination import (
+        clear_run_traceparent,
+        store_run_traceparent,
+    )
+    _run_span, _run_traceparent = start_root_span(
+        "agents.session.run", {"session_id": session_id}
+    )
+    if _run_traceparent:
+        await asyncio.to_thread(store_run_traceparent, session_id, _run_traceparent)
+
     async def event_stream():
         nonlocal task
+        # Re-bind request_id (cleared by middleware before the body is consumed).
+        _rid_token = bind_request_id(_captured_request_id)
+        # Reattach the run's root OTel span as the active span so every
+        # agents.* log line and every @traced_function span inherits the same
+        # trace_id.  context_from_traceparent reconstructs the parent context
+        # from the stored Redis value; set_span_in_context then makes the
+        # recording span current so child spans nest under it.
+        _otel_parent_token = None
+        _otel_span_token = None
+        if _run_span is not None and _run_traceparent:
+            try:
+                from opentelemetry import context as otel_context, trace
+                _parent_ctx = context_from_traceparent(_run_traceparent)
+                if _parent_ctx is not None:
+                    _otel_parent_token = otel_context.attach(_parent_ctx)
+                _otel_span_token = otel_context.attach(
+                    trace.set_span_in_context(_run_span)
+                )
+            except Exception:  # noqa: BLE001
+                pass
         from autogen_agentchat.base import TaskResult
         from autogen_agentchat.messages import TextMessage
         from agents.runtime import (
@@ -985,6 +1024,31 @@ async def chat_session_run(request, session_id):
                     "agents.session.redis_unavailable",
                     extra={"session_id": session_id, "phase": "clear_cancel"},
                 )
+            # Detach OTel contexts (reverse order), end the root span, clear
+            # the Redis traceparent key, and restore request_id.
+            if _otel_span_token is not None:
+                try:
+                    from opentelemetry import context as otel_context
+                    otel_context.detach(_otel_span_token)
+                except Exception:  # noqa: BLE001
+                    pass
+            if _otel_parent_token is not None:
+                try:
+                    from opentelemetry import context as otel_context
+                    otel_context.detach(_otel_parent_token)
+                except Exception:  # noqa: BLE001
+                    pass
+            if _run_span is not None:
+                try:
+                    _run_span.end()
+                except Exception:  # noqa: BLE001
+                    pass
+            try:
+                await asyncio.to_thread(clear_run_traceparent, session_id)
+            except Exception:  # noqa: BLE001
+                pass
+            # Restore request_id ContextVar to pre-generator default.
+            clear_request_id(_rid_token)
 
     response = StreamingHttpResponse(
         event_stream(),
