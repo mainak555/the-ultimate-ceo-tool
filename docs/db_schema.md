@@ -134,6 +134,19 @@ Cross-references: [docs/API.md](API.md) (form fields + HTTP schema), [AGENTS.md]
       "role": "user | assistant",
       "content": "string",
       "timestamp": "datetime (UTC BSON Date)",
+      "attachments": [
+        {
+          "id": "uuid string",
+          "filename": "string",
+          "mime_type": "string",
+          "extension": "string",
+          "size_bytes": 0,
+          "is_image": true,
+          "content_url": "string (session-scoped endpoint)",
+          "thumbnail_url": "string (image only)",
+          "uploaded_at": "datetime (UTC BSON Date)"
+        }
+      ],
       "exports": {
         "trello": {
           "schema_version": "string",
@@ -181,6 +194,34 @@ Cross-references: [docs/API.md](API.md) (form fields + HTTP schema), [AGENTS.md]
   }
 }
 ```
+
+## Collection: `chat_attachments`
+
+```jsonc
+{
+  "_id": "ObjectId",
+  "attachment_id": "uuid string",
+  "project_id": "string (project ObjectId hex)",
+  "session_id": "string (chat session ObjectId hex)",
+  "message_id": "string | null (bound discussion message id)",
+  "staging_message_id": "string",
+  "filename": "string",
+  "extension": "string",
+  "mime_type": "string",
+  "size_bytes": 0,
+  "is_image": true,
+  "blob_key": "sessions/<session_id>/messages/<message_id>/attachments/<attachment_id>/<filename>",
+  "uploaded_at": "datetime (UTC BSON Date)",
+  "bound_at": "datetime (UTC BSON Date)",
+  "extracted_text": "string",
+  "extraction_status": "none | available"
+}
+```
+
+Attachment storage/delete contract:
+
+- Blob/object keys are strictly session-scoped by prefix `sessions/<session_id>/...`.
+- On chat session delete, all blobs under `sessions/<session_id>/` and all `chat_attachments` metadata rows for that session are deleted together.
 
 `exports.trello.exported` lifecycle:
 - `false` after Extract Items or Save (editable mode).

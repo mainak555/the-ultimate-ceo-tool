@@ -20,6 +20,8 @@ All routes are under the `server` app namespace.
 | `POST` | `/chat/sessions/<session_id>/run/` | `chat_session_run` | Start or continue a run (SSE stream; Redis-coordinated active lease) |
 | `POST` | `/chat/sessions/<session_id>/restart/` | `chat_session_restart` | Restart from persisted AutoGen team state |
 | `POST` | `/chat/sessions/<session_id>/respond/` | `chat_session_respond` | Human gate decision (continue/stop with optional notes) |
+| `POST` | `/chat/sessions/<session_id>/attachments/` | `chat_session_upload_attachments` | Upload chat attachments for a session (multipart) |
+| `GET` | `/chat/sessions/<session_id>/attachments/<attachment_id>/content/` | `chat_session_attachment_content` | Inline/download attachment content (used for thumbnails) |
 | `POST` | `/chat/sessions/<session_id>/stop/` | `chat_session_stop` | Stop an in-progress run |
 | `GET` | `/chat/sessions/<session_id>/` | `chat_session_detail` | Load chat history panel for one session |
 | `POST` | `/chat/sessions/<session_id>/delete/` | `chat_session_delete` | Delete a chat session |
@@ -201,9 +203,33 @@ Human gate response endpoint contract:
 - Body fields:
   - `action`: `continue` or `stop`
   - `text`: optional note/context (used when `action=continue`)
+  - `attachment_ids`: optional repeated values bound to the next resumed user message
 - Behavior:
-  - `continue`: sets session status to `idle` and returns `{status:"ok", task:"<text>"}`
+  - `continue`: sets session status to `idle` and returns `{status:"ok", task:"<text>", attachment_ids:[...]}`
   - `stop`: sets session status to `stopped`, evicts the runtime team, returns `{status:"stopped"}`
+
+Run endpoint attachment contract:
+
+- `POST /chat/sessions/<session_id>/run/`
+- Body fields:
+  - `task`: optional text (required on first run unless attachments are provided)
+  - `attachment_ids`: optional repeated values
+- Behavior:
+  - If attachment IDs are supplied, the server binds them to the new user message and appends an attachment context block (including extracted-text previews when available) before invoking the agent run.
+
+Attachment upload/content contract:
+
+- `POST /chat/sessions/<session_id>/attachments/`
+  - Content-Type: `multipart/form-data`
+  - File field: repeated `files`
+  - Response: `{status:"ok", attachments:[{id, filename, mime_type, size_bytes, is_image, extension, content_url, thumbnail_url?}]}`
+- `GET /chat/sessions/<session_id>/attachments/<attachment_id>/content/`
+  - Returns raw file content for inline rendering (image thumbnails) and download/open in a new tab.
+
+Azure storage auth note:
+
+- Attachment blob access uses `AZURE_STORAGE_CONTAINER_SAS_URL` (container SAS URL including query token).
+- SAS permissions must cover upload/read/list/delete operations used by the attachment pipeline.
 
 Active run coordination contract:
 

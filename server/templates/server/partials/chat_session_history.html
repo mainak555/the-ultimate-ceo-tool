@@ -23,6 +23,18 @@
             <span class="chat-bubble__time"><time class="local-time" data-utc="{{ msg.timestamp }}">{{ msg.timestamp }}</time></span>
           </div>
           <div class="chat-bubble__content">{{ msg.content|markdownify }}</div>
+          {% if msg.attachments %}
+            <div class="chat-message-attachments">
+              {% for att in msg.attachments %}
+                <a class="chat-message-attachment" href="{{ att.content_url }}" target="_blank" rel="noopener noreferrer">
+                  {% if att.is_image and att.thumbnail_url %}
+                    <img class="chat-message-attachment__thumb" src="{{ att.thumbnail_url }}" alt="{{ att.filename }}">
+                  {% endif %}
+                  <span class="chat-message-attachment__name">{{ att.filename }}</span>
+                </a>
+              {% endfor %}
+            </div>
+          {% endif %}
         </div>
       {% else %}
         <div class="chat-bubble chat-bubble--ai">
@@ -33,6 +45,18 @@
               <span class="chat-bubble__time"><time class="local-time" data-utc="{{ msg.timestamp }}">{{ msg.timestamp }}</time></span>
             </div>
             <div class="chat-bubble__content">{{ msg.content|markdownify }}</div>
+            {% if msg.attachments %}
+              <div class="chat-message-attachments">
+                {% for att in msg.attachments %}
+                  <a class="chat-message-attachment" href="{{ att.content_url }}" target="_blank" rel="noopener noreferrer">
+                    {% if att.is_image and att.thumbnail_url %}
+                      <img class="chat-message-attachment__thumb" src="{{ att.thumbnail_url }}" alt="{{ att.filename }}">
+                    {% endif %}
+                    <span class="chat-message-attachment__name">{{ att.filename }}</span>
+                  </a>
+                {% endfor %}
+              </div>
+            {% endif %}
             {% if msg.visible_export_providers %}
               <div class="chat-bubble__actions">
                 <div class="export-dropdown" data-export-dropdown>
@@ -89,6 +113,11 @@
     <textarea class="input input--textarea human-gate-panel__textarea"
               rows="3"
               placeholder="Optional details to send to agents..."></textarea>
+    <div class="human-gate-panel__attachment-row">
+      <button class="btn btn--secondary human-gate-btn human-gate-btn--attach" type="button">Attach files</button>
+      <input class="human-gate-panel__file-input" type="file" hidden multiple>
+    </div>
+    <div class="chat-attachment-list human-gate-panel__attachment-list" hidden></div>
     <div class="human-gate-panel__actions">
       <button class="btn btn--primary human-gate-btn human-gate-btn--continue">&#x27A1; Continue</button>
       <button class="btn btn--danger human-gate-btn human-gate-btn--stop">&#x1F6D1; Stop</button>

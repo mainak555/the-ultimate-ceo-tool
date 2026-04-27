@@ -117,6 +117,7 @@ LOG_LEVEL=DEBUG
 | Outbound HTTP (Trello, Jira, future providers) | Auto (`RequestsInstrumentor`) + shared `core/http_tracing.py` helper (`instrument_http_response`) in client `_handle_api_response()`/fallback branches — gated by `OTEL_INSTRUMENT_HTTP` | `HTTP POST` with `<provider>.action`, `http.url` (redacted when needed), `http.status_code`, `input.value`, `output.value`, and `<provider>.error.*` on non-2xx |
 | MongoDB ops | Auto (`PymongoInstrumentor`) — gated by `OTEL_INSTRUMENT_MONGO` (default off) | `mongo.find`, `mongo.insert_one` |
 | Service-layer mutations | Manual `@traced_function` (always on) | `service.project.create`, `service.chat.create`, `service.trello.export.push`, `service.jira.<type>.push_issues` |
+| Attachment pipeline | Manual `@traced_function` on attachment service operations | `service.attachments.upload`, `service.attachments.bind_to_message`, `service.attachments.delete_session` |
 | AutoGen agent runs | Event-log bridge — gated by `OTEL_INSTRUMENT_AGENTS` | `autogen.event.<type>` (LLM calls, thought events); `mcp.tool.request <name>` (tool requested — `gen_ai.tool.name`, `gen_ai.tool.call.id`, `gen_ai.tool.arguments`); `mcp.tool.result <name>` (tool result — `gen_ai.tool.result`, `gen_ai.tool.is_error`; ERROR status on `is_error=true`). Every span carries `autogen.agent.id` from the event `source` field. |
 
 ### Trace Hierarchy

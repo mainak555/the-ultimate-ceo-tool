@@ -778,6 +778,13 @@ select.input {
   line-height: 1;
 }
 
+.chat-welcome__logo {
+  display: block;
+  width: 96px;
+  height: 96px;
+  object-fit: contain;
+}
+
 .chat-welcome__title {
   font-size: 1.5rem;
   font-weight: 700;
@@ -934,6 +941,117 @@ select.input {
   justify-content: center;
   font-size: 1rem;
   line-height: 1;
+}
+
+.chat-attach-btn {
+  flex-shrink: 0;
+  width: 2.25rem;
+  height: 2.25rem;
+  min-width: 2.25rem;
+  border-radius: 50%;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.chat-attachment-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: $space-xs;
+}
+
+.chat-attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: $space-xs;
+  background: lighten($color-bg, 1.5%);
+  border: 1px solid $color-border;
+  border-radius: $radius;
+  padding: 0.25rem 0.4rem;
+}
+
+.chat-attachment-chip__thumb {
+  width: 1.35rem;
+  height: 1.35rem;
+  object-fit: cover;
+  border-radius: $radius;
+  border: 1px solid $color-border;
+}
+
+.chat-attachment-chip__file {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.3rem;
+  color: $color-text;
+  text-decoration: none;
+}
+
+.chat-attachment-chip__name {
+  font-size: $font-size-sm;
+  font-weight: 600;
+}
+
+.chat-attachment-chip__meta {
+  font-size: $font-size-sm;
+  color: $color-text-muted;
+}
+
+.chat-attachment-chip__remove {
+  border: none;
+  background: transparent;
+  color: $color-text-muted;
+  cursor: pointer;
+  padding: 0;
+  width: 1rem;
+  height: 1rem;
+  line-height: 1rem;
+  text-align: center;
+
+  &:hover {
+    color: $color-error;
+  }
+}
+
+.chat-message-attachments {
+  margin-top: $space-sm;
+  display: flex;
+  flex-wrap: wrap;
+  gap: $space-sm;
+}
+
+.chat-message-attachment {
+  display: inline-flex;
+  align-items: center;
+  gap: $space-xs;
+  text-decoration: none;
+  color: $color-text;
+  background: lighten($color-bg, 1.5%);
+  border: 1px solid $color-border;
+  border-radius: $radius;
+  padding: 0.3rem 0.5rem;
+
+  &:hover {
+    border-color: $color-primary;
+  }
+}
+
+.chat-message-attachment__thumb {
+  width: 3.2rem;
+  height: 2.2rem;
+  object-fit: cover;
+  border-radius: $radius;
+  border: 1px solid $color-border;
+}
+
+.chat-message-attachment__name {
+  font-size: $font-size-sm;
+  max-width: 14rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 // ---------------------------------------------------------------------------
@@ -1646,6 +1764,17 @@ select.input {
     display: flex;
     gap: $space-sm;
     flex-wrap: wrap;
+    margin-bottom: $space-sm;
+  }
+
+  &__attachment-row {
+    display: flex;
+    align-items: center;
+    gap: $space-sm;
+    margin-bottom: $space-sm;
+  }
+
+  &__attachment-list {
     margin-bottom: $space-sm;
   }
 

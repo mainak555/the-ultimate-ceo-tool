@@ -5,6 +5,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Discovery — Chat</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E🤖%3C/text%3E%3C/svg%3E">
 
   {% compress css %}
   <link rel="stylesheet" type="text/x-scss" href="{% static 'server/scss/main.scss' %}">
@@ -37,7 +38,9 @@
       <div class="chat-messages" id="chat-messages">
         <!-- Welcome message -->
         <div class="chat-welcome">
-          <div class="chat-welcome__icon">🤖</div>
+          <div class="chat-welcome__icon">
+            <img src="{% static 'assets/logo.png' %}" alt="Logo" class="chat-welcome__logo">
+          </div>
           <h2 class="chat-welcome__title">Implement Your Idea</h2>
           <p class="chat-welcome__subtitle">Select a project and start a conversation with your AI agents.</p>
         </div>
@@ -77,6 +80,9 @@
 
         <!-- Text input row -->
         <div class="chat-input-row">
+          <button class="btn btn--secondary chat-attach-btn" id="chat-attach-btn" type="button" title="Attach files">
+            +
+          </button>
           <textarea id="chat-input"
                     class="chat-input__textarea"
                     placeholder="Send a message"
@@ -86,7 +92,10 @@
             ↑
           </button>          <button class="btn btn--danger chat-stop-btn" id="chat-stop-btn" title="Stop" hidden>
             &#x25A0;
-          </button>        </div>
+          </button>
+          <input id="chat-attachment-input" type="file" hidden multiple>
+        </div>
+        <div class="chat-attachment-list" id="chat-compose-attachments" hidden></div>
 
       </div>
     </div>

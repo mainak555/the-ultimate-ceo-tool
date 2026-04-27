@@ -8,18 +8,21 @@ Each view:
 """
 
 import asyncio
+import io
 import json
 import logging
+from urllib.parse import quote
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from django.http import HttpResponse, StreamingHttpResponse
+from django.http import FileResponse, HttpResponse, StreamingHttpResponse
 from django.shortcuts import render
 from django.template.loader import render_to_string
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST, require_http_methods
 
 from . import services
+from . import attachment_service
 
 
 logger = logging.getLogger(__name__)
@@ -204,6 +207,40 @@ def _normalize_export_agents(raw_agents):
     return [name.strip() for name in raw_agents if isinstance(name, str) and name.strip()]
 
 
+def _parse_attachment_ids(post_data):
+    """Return de-duplicated attachment IDs from form POST data."""
+    values = []
+    values.extend(post_data.getlist("attachment_ids"))
+    values.extend(post_data.getlist("attachment_ids[]"))
+    clean = []
+    seen = set()
+    for raw in values:
+        aid = (raw or "").strip()
+        if not aid or aid in seen:
+            continue
+        clean.append(aid)
+        seen.add(aid)
+    return clean
+
+
+def _enrich_attachments_for_display(session_id, attachments):
+    """Attach session-scoped URLs for attachment previews/downloads."""
+    out = []
+    for item in attachments or []:
+        if not isinstance(item, dict):
+            continue
+        row = dict(item)
+        aid = (row.get("id") or "").strip()
+        if not aid:
+            continue
+        url = f"/chat/sessions/{session_id}/attachments/{aid}/content/"
+        row["content_url"] = url
+        if row.get("is_image"):
+            row["thumbnail_url"] = url
+        out.append(row)
+    return out
+
+
 def _build_export_meta(project):
     """Build provider metadata for export actions from project integrations."""
     integrations = project.get("integrations") if isinstance(project, dict) else {}
@@ -265,8 +302,10 @@ def _filter_export_providers(export_meta, agent_name):
 def _build_history_messages(session, export_meta):
     """Attach visible export providers to assistant messages for history rendering."""
     history_messages = []
+    session_id = session.get("session_id", "") if isinstance(session, dict) else ""
     for msg in (session.get("discussions") if isinstance(session, dict) else []) or []:
         row = dict(msg)
+        row["attachments"] = _enrich_attachments_for_display(session_id, row.get("attachments") or [])
         if row.get("role") != "user":
             if row.get("id"):
                 row["visible_export_providers"] = _filter_export_providers(
@@ -637,6 +676,7 @@ async def chat_session_run(request, session_id):
 
     Body fields:
             task  — the user message / optional gate notes (empty string = resume)
+            attachment_ids — optional repeated form field values
     """
     if not _has_valid_secret(request):
         return _json_error("Unauthorized", 403)
@@ -660,10 +700,11 @@ async def chat_session_run(request, session_id):
         project["mcp_secrets"] = raw_project.get("mcp_secrets") or {}
 
     task = request.POST.get("task", "").strip()
+    attachment_ids = _parse_attachment_ids(request.POST)
 
     # First run must have a task; gate resume may send empty string
     is_first_run = session["status"] == "idle" and not session.get("discussions")
-    if is_first_run and not task:
+    if is_first_run and not task and not attachment_ids:
         return _json_error("'task' is required to start a conversation.", 400)
 
     from agents.session_coordination import (
@@ -788,15 +829,30 @@ async def chat_session_run(request, session_id):
                 await asyncio.to_thread(services.save_agent_state, session_id, state)
 
             # Persist the human's message (initial task or gate notes) to discussions.
-            if task:
+            if task or attachment_ids:
                 human_name = project.get("human_gate", {}).get("name") or "You"
+                human_message_id = str(uuid4())
+                attachments = await asyncio.to_thread(
+                    attachment_service.bind_attachments_to_message,
+                    session_id=session_id,
+                    message_id=human_message_id,
+                    attachment_ids=attachment_ids,
+                )
+                task_with_context = task + await asyncio.to_thread(
+                    attachment_service.build_attachment_context_block,
+                    session_id=session_id,
+                    attachment_ids=attachment_ids,
+                )
+                attachments_for_display = _enrich_attachments_for_display(session_id, attachments)
                 pending_messages.append({
-                    "id": str(uuid4()),
+                    "id": human_message_id,
                     "agent_name": human_name,
                     "role": "user",
-                    "content": task,
+                    "content": task_with_context,
+                    "attachments": attachments_for_display,
                     "timestamp": datetime.now(timezone.utc),  # BSON Date in MongoDB
                 })
+                task = task_with_context
 
             heartbeat_task = asyncio.create_task(_lease_heartbeat(cancel_token))
 
@@ -947,6 +1003,7 @@ def chat_session_respond(request, session_id):
 
     action = request.POST.get("action", "").strip()
     text = request.POST.get("text", "").strip()
+    attachment_ids = _parse_attachment_ids(request.POST)
 
     if action == "stop":
         from agents.runtime import evict_team
@@ -957,7 +1014,7 @@ def chat_session_respond(request, session_id):
     if action == "continue":
         services.set_session_status(session_id, "idle")
         return HttpResponse(
-            json.dumps({"status": "ok", "task": text}),
+            json.dumps({"status": "ok", "task": text, "attachment_ids": attachment_ids}),
             content_type="application/json",
         )
 
@@ -1036,3 +1093,56 @@ def chat_session_stop(request, session_id):
     from agents.runtime import cancel_team
     cancel_team(session_id)
     return HttpResponse(json.dumps({"status": "cancelling"}), content_type="application/json")
+
+
+@csrf_exempt
+@require_POST
+def chat_session_upload_attachments(request, session_id):
+    """Upload one or more files for a session and return attachment descriptors."""
+    if not _has_valid_secret(request):
+        return _json_error("Unauthorized", 403)
+
+    session = services.get_chat_session(session_id)
+    if session is None:
+        return _json_error("Session not found", 404)
+
+    files = list(request.FILES.getlist("files"))
+    try:
+        uploaded = attachment_service.upload_session_attachments(session=session, files=files)
+    except ValueError as exc:
+        return _json_error(str(exc), 400)
+    except Exception:
+        logger.exception("attachments.upload_failed", extra={"session_id": session_id})
+        return _json_error("Attachment upload failed.", 500)
+
+    enriched = _enrich_attachments_for_display(session_id, uploaded)
+    return HttpResponse(json.dumps({"status": "ok", "attachments": enriched}), content_type="application/json")
+
+
+@require_GET
+def chat_session_attachment_content(request, session_id, attachment_id):
+    """Return raw attachment bytes for inline image thumbnails and download links."""
+    session = services.get_chat_session(session_id)
+    if session is None:
+        return HttpResponse("Session not found.", status=404)
+
+    try:
+        raw, mime_type, filename = attachment_service.get_attachment_content(
+            session_id=session_id,
+            attachment_id=attachment_id,
+        )
+    except ValueError:
+        return HttpResponse("Attachment not found.", status=404)
+    except Exception:
+        logger.exception(
+            "attachments.content_failed",
+            extra={"session_id": session_id, "attachment_id": attachment_id},
+        )
+        return HttpResponse("Attachment retrieval failed.", status=500)
+
+    response = FileResponse(
+        io.BytesIO(raw),
+        content_type=(mime_type or "application/octet-stream"),
+    )
+    response["Content-Disposition"] = f"inline; filename=\"{quote(filename)}\""
+    return response

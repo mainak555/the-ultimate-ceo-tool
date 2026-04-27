@@ -45,6 +45,29 @@ shows a unified decision panel:
 	optional extra context for the agents
 - Bottom actions: `Continue` (resume with optional notes) or `Stop`
 
+HITL notes sent with `Continue` are rendered as markdown in both live chat
+and persisted session history.
+
+---
+
+## Chat Attachments
+
+Home chat composer and HITL gate textarea support:
+
+- attach button file picker
+- drag and drop
+- paste from clipboard
+
+Supported files are uploaded to Azure Blob and linked to the session via
+MongoDB metadata. Image attachments render thumbnails in session history.
+Non-image attachments render as filename links under each message.
+
+Storage abstraction pattern:
+
+- **Strategy**: provider-specific byte operations (`StorageStrategy`)
+- **Factory**: runtime provider selection (`build_storage_strategy()`)
+- **Repository-style metadata access**: attachment metadata queries scoped by `session_id`
+
 There is no interaction-mode toggle in project configuration; this single flow
 is used for every gated pause.
 
@@ -284,6 +307,14 @@ Full documentation: [docs/mcp_integration.md](docs/mcp_integration.md).
 | `AZURE_OPENAI_API_URL` | Endpoint fallback for `azure_openai` models when `endpoint` is omitted in `agent_models.json` | *(required if JSON `endpoint` is missing)* |
 | `AZURE_ANTHROPIC_API_KEY` | API key for Azure AI Foundry Anthropic deployments | *(required for `azure_anthropic` models)* |
 | `AZURE_ANTHROPIC_API_URL` | Endpoint fallback for `azure_anthropic` models when `endpoint` is omitted in `agent_models.json` | *(required if JSON `endpoint` is missing)* |
+| `ATTACHMENT_STORAGE_PROVIDER` | Attachment storage backend selector | `azure` |
+| `AZURE_STORAGE_CONTAINER_SAS_URL` | Azure Blob container SAS URL (includes token in query string) used for chat attachments | *(required when attachments are enabled)* |
+
+Attachment SAS guidance:
+
+- Use a container-scoped SAS URL (not account-level keys).
+- Include permissions required by the attachment pipeline: create/write/read/list/delete.
+- Prefer short TTL and rotation for operational safety.
 
 Redis URI examples:
 

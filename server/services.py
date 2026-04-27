@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 from pymongo.errors import DuplicateKeyError
 
 from .db import get_collection, ensure_indexes, CHAT_SESSIONS_COLLECTION
+from . import attachment_service
 from .model_catalog import (
     get_agent_model_names,
     default_system_prompt_hint,
@@ -566,7 +567,21 @@ def _normalize_discussion(msg):
         if ts.tzinfo is None:
             ts = ts.replace(tzinfo=timezone.utc)
         ts = ts.isoformat()
-    return dict(msg, timestamp=ts)
+    row = dict(msg, timestamp=ts)
+    attachments = []
+    for item in row.get("attachments", []) or []:
+        if not isinstance(item, dict):
+            continue
+        att = dict(item)
+        uploaded_at = att.get("uploaded_at")
+        if hasattr(uploaded_at, "isoformat"):
+            if uploaded_at.tzinfo is None:
+                uploaded_at = uploaded_at.replace(tzinfo=timezone.utc)
+            att["uploaded_at"] = uploaded_at.isoformat()
+        attachments.append(att)
+    if attachments:
+        row["attachments"] = attachments
+    return row
 
 
 def normalize_chat_session(doc):
@@ -892,6 +907,7 @@ def delete_chat_session(session_id):
         oid = ObjectId(session_id)
     except (InvalidId, TypeError):
         raise ValueError(f"Invalid session ID '{session_id}'.")
+    attachment_service.delete_session_attachments(session_id)
     col = get_collection(CHAT_SESSIONS_COLLECTION)
     result = col.delete_one({"_id": oid})
     if result.deleted_count == 0:
