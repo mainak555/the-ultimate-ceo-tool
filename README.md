@@ -1,4 +1,4 @@
-# Product Discovery
+# The Ultimate CEO Tool
 
 Agent-based product roadmap planning tool — OKR to Product Backlog.  
 Django SPA with HTMX, SCSS, and MongoDB (PyMongo).
