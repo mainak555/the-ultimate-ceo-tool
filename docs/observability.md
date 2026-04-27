@@ -85,7 +85,7 @@ verbosity per concern without code changes. All toggles accept
 |---|---|---|---|---|
 | **HTTP / API** (Django + outbound `requests`) | `OTEL_INSTRUMENT_HTTP` | `on` | One span per Django request; one span per outbound HTTP call (Trello, Jira, Langfuse export, etc.) | Disable in narrow load tests where you only care about agent latency. |
 | **Database** (pymongo) | `OTEL_INSTRUMENT_MONGO` | `off` | One span per Mongo command (`find`, `update_one`, etc.) | Enable when diagnosing slow queries, connection storms, or unexpected reads. Off by default because trace volume balloons quickly. |
-| **LLM / Agents** (AutoGen event bridge) | `OTEL_INSTRUMENT_AGENTS` | `on` | `autogen.event.<type>` (LLM calls, thought events, streaming chunks); `mcp.tool.request <name>` (one span per tool call requested, with `gen_ai.tool.arguments`); `mcp.tool.result <name>` (one span per tool result, with `gen_ai.tool.result`; `StatusCode.ERROR` when `is_error=true`); token usage on LLM spans | Disable when running purely-deterministic flows (Trello/Jira pushes without an agent run) and you want to suppress LLM payloads from the OTLP backend. |
+| **LLM / Agents** (AutoGen event bridge) | `OTEL_INSTRUMENT_AGENTS` | `on` | `autogen.event.<type>` (LLM calls, thought events, streaming chunks); `mcp.tool.request <name>` (one span per tool call requested, with `gen_ai.tool.arguments`); `mcp.tool.result <name>` (one span per tool execution result, with `gen_ai.tool.result`; `StatusCode.ERROR` when `is_error=true`); token usage on LLM spans. Note: `ToolCallRequestEvent` and `ToolCallExecutionEvent` are emitted at DEBUG by autogen_agentchat — the bridge and event loggers run at DEBUG to capture them. | Disable when running purely-deterministic flows (Trello/Jira pushes without an agent run) and you want to suppress LLM payloads from the OTLP backend. |
 | **Service mutations** (manual `@traced_function`) | *(none — always on)* | n/a | `service.project.create`, `service.chat.create`, `service.trello.export.push`, `service.jira.<type>.push_issues`, etc. | Always emitted because each callsite is explicitly chosen by the developer; spans are cheap and namespaced. |
 
 ### Common combinations
@@ -118,7 +118,7 @@ LOG_LEVEL=DEBUG
 | MongoDB ops | Auto (`PymongoInstrumentor`) — gated by `OTEL_INSTRUMENT_MONGO` (default off) | `mongo.find`, `mongo.insert_one` |
 | Service-layer mutations | Manual `@traced_function` (always on) | `service.project.create`, `service.chat.create`, `service.trello.export.push`, `service.jira.<type>.push_issues` |
 | Attachment pipeline | Manual `@traced_function` on attachment service operations | `service.attachments.upload`, `service.attachments.bind_to_message`, `service.attachments.delete_session` |
-| AutoGen agent runs | Event-log bridge — gated by `OTEL_INSTRUMENT_AGENTS` | `autogen.event.<type>` (LLM calls, thought events); `mcp.tool.request <name>` (tool requested — `gen_ai.tool.name`, `gen_ai.tool.call.id`, `gen_ai.tool.arguments`); `mcp.tool.result <name>` (tool result — `gen_ai.tool.result`, `gen_ai.tool.is_error`; ERROR status on `is_error=true`). Every span carries `autogen.agent.id` from the event `source` field. |
+| AutoGen agent runs | Event-log bridge — gated by `OTEL_INSTRUMENT_AGENTS` | `autogen.event.<type>` (LLM calls, thought events); `mcp.tool.request <name>` (ToolCallRequestEvent — `gen_ai.tool.name`, `gen_ai.tool.call.id`, `gen_ai.tool.arguments`); `mcp.tool.result <name>` (ToolCallExecutionEvent — `gen_ai.tool.result`, `gen_ai.tool.is_error`; ERROR status on `is_error=true`). Every span carries `autogen.agent.id` from the event `source` field. Both tool event types are emitted at DEBUG by autogen_agentchat; the bridge operates at DEBUG to capture them. |
 
 ### Trace Hierarchy
 
@@ -133,12 +133,12 @@ Django request span                              [auto · OTEL_INSTRUMENT_HTTP]
       └─ AutoGen agent run                       [bridge · OTEL_INSTRUMENT_AGENTS]
          ├─ autogen.event.<type>    (LLM call)   [bridge — gen_ai.usage.* token counts]
          │  └─ HTTP POST <provider> (LLM API)    [auto · OTEL_INSTRUMENT_HTTP]
-         ├─ mcp.tool.request <name>              [bridge — ToolCallRequestEvent]
+         ├─ mcp.tool.request <name>              [bridge — ToolCallRequestEvent · DEBUG]
          │    gen_ai.tool.name, gen_ai.tool.call.id, gen_ai.tool.arguments
          ├─ execute_tool <name>     (MCP tool)   [autogen-core McpWorkbench]
          │  └─ HTTP POST <mcp-gateway>           [auto · streamable HTTP only]
          │                                        (stdio runs in child process — no HTTP span)
-         └─ mcp.tool.result <name>              [bridge — ToolCallResultEvent]
+         └─ mcp.tool.result <name>              [bridge — ToolCallExecutionEvent · DEBUG]
               gen_ai.tool.name, gen_ai.tool.call.id, gen_ai.tool.result
               gen_ai.tool.is_error  [StatusCode.ERROR when true]
 
@@ -170,7 +170,7 @@ Context flow:
   - `RequestIdFilter` — injects `request_id` from the `contextvars` set by `RequestIdMiddleware`.
   - `TraceContextFilter` — reads the active span and injects `trace_id` / `span_id`.
   - `EventOnlyConsoleFilter` — drops INFO records ending in `.api.call`. Per-call HTTP success detail lives on spans, not console.
-- AutoGen payload loggers (`autogen_core.events`, `autogen_agentchat.events`) are **owned by `core.tracing._install_autogen_event_bridge()`**, not by `config/settings.py` LOGGING. The bridge strips the shared `console` handler from those loggers and attaches `AutoGenEventSpanBridgeHandler` instead, so INFO payload events flow to spans (with redaction + truncation) and never reach console. ERROR records on those loggers set `Span.status = ERROR`, which is then surfaced through `OTEL_CONSOLE_EXPORTER=error` (if enabled) and through Django request logging at the outer layer.
+- AutoGen payload loggers (`autogen_core.events`, `autogen_agentchat.events`) are **owned by `core.tracing._install_autogen_event_bridge()`**, not by `config/settings.py` LOGGING. The bridge strips the shared `console` handler from those loggers and attaches `AutoGenEventSpanBridgeHandler` instead, so payload events flow to spans (with redaction + truncation) and never reach console. Both loggers are set to **DEBUG** so that `ToolCallRequestEvent` and `ToolCallExecutionEvent` (emitted at `DEBUG` by `autogen_agentchat`) are captured; `autogen_core.events` records (`LLMCallEvent`) are INFO and remain unaffected. `propagate=False` prevents these DEBUG records from flooding the root logger / console. ERROR records on those loggers set `Span.status = ERROR`, which is surfaced through `OTEL_CONSOLE_EXPORTER=error` (if enabled) and through Django request logging at the outer layer.
 
 ### Span dumps (opt-in)
 

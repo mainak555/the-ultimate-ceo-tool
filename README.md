@@ -369,8 +369,8 @@ agents.session.run                              [root — fresh trace_id per rou
 └─ AutoGen agent run                            [bridge · OTEL_INSTRUMENT_AGENTS]
    ├─ autogen.event.<type>    (LLM call)
    │  └─ HTTP POST <provider> (LLM API)         [auto · OTEL_INSTRUMENT_HTTP]
-   ├─ mcp.tool.request <name>                   [ToolCallRequestEvent]
-   └─ mcp.tool.result <name>                    [ToolCallResultEvent]
+   ├─ mcp.tool.request <name>                   [ToolCallRequestEvent · DEBUG]
+   └─ mcp.tool.result <name>                    [ToolCallExecutionEvent · DEBUG]
 ```
 
 When Redis or OTel is unavailable the run continues normally; log lines show

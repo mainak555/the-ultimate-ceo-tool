@@ -205,10 +205,16 @@ def set_payload_attribute(span: Any, key: str, value: Any) -> None:
 # AutoGen event-log → span bridge (kept from previous implementation)
 # ---------------------------------------------------------------------------
 class AutoGenEventSpanBridgeHandler(logging.Handler):
-    """Convert AutoGen structured event logs into OTel spans."""
+    """Convert AutoGen structured event logs into OTel spans.
+
+    Accepts DEBUG-level records so that ``ToolCallRequestEvent`` and
+    ``ToolCallExecutionEvent`` — which AutoGen emits at DEBUG — are captured
+    alongside the INFO-level ``LLMCallEvent`` records from the model client.
+    """
 
     def __init__(self) -> None:
-        super().__init__(level=logging.INFO)
+        # Must be DEBUG: autogen_agentchat.events logs tool events at DEBUG.
+        super().__init__(level=logging.DEBUG)
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
@@ -218,14 +224,31 @@ class AutoGenEventSpanBridgeHandler(logging.Handler):
             return
 
         tracer = trace.get_tracer("autogen.events.bridge")
-        raw_message = record.getMessage()
 
+        # autogen_agentchat.events records carry Pydantic BaseAgentEvent
+        # instances as record.msg; their __str__ is a Pydantic repr, NOT JSON.
+        # autogen_core.events records (LLMCallEvent etc.) define __str__ to
+        # return json.dumps(...) — use getMessage() for those.
         event_data: dict[str, Any]
+        original_msg = record.msg
+        if hasattr(original_msg, "model_dump"):
+            try:
+                event_data = original_msg.model_dump()
+            except Exception:
+                event_data = {"message": str(original_msg)}
+        else:
+            raw_message = record.getMessage()
+            try:
+                parsed = json.loads(raw_message)
+                event_data = parsed if isinstance(parsed, dict) else {"message": raw_message}
+            except Exception:
+                event_data = {"message": raw_message}
+
+        # Canonical raw representation for the span metadata attribute.
         try:
-            parsed = json.loads(raw_message)
-            event_data = parsed if isinstance(parsed, dict) else {"message": raw_message}
+            raw_message = json.dumps(event_data)
         except Exception:
-            event_data = {"message": raw_message}
+            raw_message = str(event_data)
 
         event_type_raw = str(event_data.get("type", "event"))
         event_type = event_type_raw.lower()
@@ -259,10 +282,11 @@ class AutoGenEventSpanBridgeHandler(logging.Handler):
 
         # ------------------------------------------------------------------
         # ToolCallRequestEvent — LLM requested one or more tool calls.
-        # AutoGen shape:
+        # AutoGen shape (ToolCallRequestEvent.content: List[FunctionCall]):
         #   {"type": "ToolCallRequestEvent", "source": "<agent>",
         #    "content": [{"id": "call_xxx", "name": "<tool>", "arguments": "..."}]}
         # One span per item so each tool call is independently visible.
+        # Logged at DEBUG by autogen_agentchat — bridge is set to DEBUG.
         # ------------------------------------------------------------------
         if event_type == "toolcallrequestevent":
             content = event_data.get("content") or [{}]
@@ -285,14 +309,15 @@ class AutoGenEventSpanBridgeHandler(logging.Handler):
             return
 
         # ------------------------------------------------------------------
-        # ToolCallResultEvent — tool returned a response to the agent.
-        # AutoGen shape:
-        #   {"type": "ToolCallResultEvent", "source": "<agent>",
+        # ToolCallExecutionEvent — tool returned a response to the agent.
+        # AutoGen shape (ToolCallExecutionEvent.content: List[FunctionExecutionResult]):
+        #   {"type": "ToolCallExecutionEvent", "source": "<agent>",
         #    "content": [{"call_id": "call_xxx", "name": "<tool>",
         #                 "content": "<result>", "is_error": false}]}
+        # Logged at DEBUG by autogen_agentchat — bridge is set to DEBUG.
         # is_error=True marks the span ERROR so failures surface immediately.
         # ------------------------------------------------------------------
-        if event_type == "toolcallresultevent":
+        if event_type == "toolcallexecutionevent":
             content = event_data.get("content") or [{}]
             for item in content:
                 tool_name = str(item.get("name") or "unknown_tool")
@@ -356,15 +381,12 @@ def _install_autogen_event_bridge() -> None:
 
     for logger_name in ("autogen_core.events", "autogen_agentchat.events"):
         event_logger = logging.getLogger(logger_name)
-        # We need INFO records to reach the bridge handler (which converts
-        # them to spans) but we DO NOT want them on console. Logger-level
-        # filtering happens before per-handler filtering, so the logger must
-        # be at INFO. To keep console quiet we drop any pre-attached stream
-        # handlers (config wires the shared console handler here for ERROR
-        # propagation; the bridge replaces that — ERROR records are still
-        # surfaced because the bridge sets span status to ERROR and Django's
-        # error middleware logs at the request layer).
-        event_logger.setLevel(logging.INFO)
+        # Must be DEBUG: autogen_agentchat.events logs ToolCallRequestEvent
+        # and ToolCallExecutionEvent at DEBUG level. Lowering to DEBUG here
+        # does not affect other namespaces because propagate=False below
+        # prevents these records from reaching the root logger / console.
+        # autogen_core.events records (LLMCallEvent) are INFO — unaffected.
+        event_logger.setLevel(logging.DEBUG)
         event_logger.propagate = False
         # Strip any non-bridge handlers (notably the shared console handler
         # added by Django LOGGING) so AutoGen INFO payload events do not
