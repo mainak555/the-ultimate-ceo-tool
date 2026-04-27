@@ -55,7 +55,17 @@
   </div>
 
   <div class="config-readonly__section">
+    {% if project.agents|length == 1 %}
+    <h3>Mode</h3>
+    {% else %}
     <h3>Team</h3>
+    {% endif %}
+    {% if project.agents|length == 1 %}
+    <p>
+      <strong>Mode:</strong> Chat Mode (single assistant) &nbsp;|&nbsp;
+      <strong>Runtime:</strong> Round Robin with Human Gate continuation until Stop
+    </p>
+    {% else %}
     <p>
       <strong>Type:</strong> {{ project.team.type }} &nbsp;|&nbsp;
       <strong>Max Iterations:</strong> {{ project.team.max_iterations }}
@@ -74,6 +84,7 @@
           <div class="agent-card__prompt agent-card__prompt--markdown markdown-prose" data-markdown>{{ project.team.system_prompt }}</div>
         </div>
       </div>
+    {% endif %}
     {% endif %}
   </div>
 

@@ -102,10 +102,17 @@
 {% if session.status == "awaiting_input" %}
 {% if project %}
   <div class="human-gate-panel" data-session-id="{{ session.session_id }}">
+    {% if project.agents|length == 1 %}
+    <div class="human-gate-panel__prompt">
+      &#x1F464; <strong>{{ project.human_gate.name }}</strong> &mdash; Round {{ session.current_round }} complete.
+      Continue or Stop?
+    </div>
+    {% else %}
     <div class="human-gate-panel__prompt">
       &#x1F464; <strong>{{ project.human_gate.name }}</strong> &mdash; Round {{ session.current_round }} of {{ project.team.max_iterations }} complete.
       What would you like to do?
     </div>
+    {% endif %}
     <div class="human-gate-panel__decision-row">
       <button class="btn btn--success human-gate-btn human-gate-btn--approve">&#x2705; Approve</button>
       <button class="btn btn--warning human-gate-btn human-gate-btn--reject">&#x26A0; Reject</button>
@@ -166,11 +173,19 @@
     <div class="project-ctx__icon">&#x1F3AF;</div>
     <div>
       <h2 class="project-ctx__name">{{ project.project_name }}</h2>
+      {% if project.agents|length == 1 %}
+      <span class="project-ctx__tag">
+        Chat Mode
+        &middot;
+        Human-controlled stop
+      </span>
+      {% else %}
       <span class="project-ctx__tag">
         {{ project.team.type|title }}
         &middot;
         {{ project.team.max_iterations }} iteration{{ project.team.max_iterations|pluralize }}
       </span>
+      {% endif %}
     </div>
   </div>
 

@@ -260,6 +260,10 @@ naming across agent and team layers.
 Stored on `team`, not at the top level. `normalize_project()` falls back to the legacy
 top-level `max_iterations` for backward compatibility with old documents.
 
+When assistant count is exactly 1 (single-assistant chat mode), the persisted
+`team` object may be omitted entirely. Runtime falls back to Round Robin behavior
+and human-gated `Continue`/`Stop` controls loop progression and termination.
+
 ### `integrations.trello.export_agents`
 Stored as a list of agent name strings. An empty list means all agents' messages will show
 the Trello Export button. Legacy documents may have `integrations.export_agent` (a single
@@ -287,6 +291,7 @@ The `integrations` root never holds an `export_agent` field in new documents.
 | `human_gate.name` | str | required when `enabled=true` |
 | `team.type` | str | `"round_robin"` or `"selector"` |
 | `team.max_iterations` | int | ≥ 1; ≤ 10 when `human_gate.enabled=false` |
+| `single-assistant rule` | logical | if `len(agents)==1`, then `human_gate.enabled=true` and `team.type != "selector"` |
 | `team.model` | str | required for selector; must be in `agent_models.json` |
 | `team.system_prompt` | str | required for selector; non-empty |
 | `team.temperature` | float | 0.0 ≤ value ≤ 2.0 (default `0.0`) |

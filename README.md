@@ -49,6 +49,16 @@ shows a unified decision panel:
 HITL notes sent with `Continue` are rendered as markdown in both live chat
 and persisted session history.
 
+Single-assistant contract:
+
+- With exactly one assistant, the project runs in **chat mode**.
+- Team Setup is hidden in configuration for this mode.
+- Human Gate is mandatory.
+- The run pauses after each assistant turn and continues only when the human
+	selects `Continue`; conversation ends when the human selects `Stop`.
+- `max_iterations` is not used as an auto-completion condition in
+	single-assistant chat mode.
+
 ---
 
 ## Chat Attachments

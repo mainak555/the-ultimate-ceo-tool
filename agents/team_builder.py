@@ -100,6 +100,11 @@ def build_team(project: dict):
     if team_type == "selector":
         from autogen_agentchat.teams import SelectorGroupChat
 
+        if n_agents < 2:
+            raise ValueError(
+                "Selector team type requires at least 2 assistant agents."
+            )
+
         selector_model_name = team_cfg.get("model", "")
         selector_model_client = build_model_client(
             selector_model_name, temperature=team_cfg.get("temperature", 0.0)

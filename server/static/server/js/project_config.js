@@ -227,6 +227,64 @@ document.addEventListener("DOMContentLoaded", function () {
     return names;
   }
 
+  function getAssistantCount() {
+    var container = document.getElementById("agents-container");
+    if (!container) return 0;
+    return container.querySelectorAll(".agent-card").length;
+  }
+
+  function syncSingleAssistantMode() {
+    var assistantCount = getAssistantCount();
+    var isSingleAssistant = assistantCount === 1;
+
+    var humanGateEnabled = document.getElementById("human-gate-enabled");
+    var humanGateDefaultHint = document.getElementById("human-gate-default-hint");
+    var humanGateSingleHint = document.getElementById("human-gate-single-assistant-hint");
+    var teamFieldset = document.getElementById("team-settings-fieldset");
+    var teamDisabledHint = document.getElementById("team-settings-disabled-hint");
+    var teamTypeSelect = document.getElementById("team_type");
+
+    if (humanGateEnabled) {
+      if (isSingleAssistant) {
+        humanGateEnabled.checked = true;
+      }
+      humanGateEnabled.disabled = isSingleAssistant;
+
+      var forcedInput = document.getElementById("human-gate-enabled-forced");
+      if (isSingleAssistant && !forcedInput) {
+        forcedInput = document.createElement("input");
+        forcedInput.type = "hidden";
+        forcedInput.id = "human-gate-enabled-forced";
+        forcedInput.name = "human_gate[enabled]";
+        forcedInput.value = "on";
+        humanGateEnabled.insertAdjacentElement("afterend", forcedInput);
+      } else if (!isSingleAssistant && forcedInput) {
+        forcedInput.remove();
+      }
+    }
+
+    if (humanGateDefaultHint) {
+      humanGateDefaultHint.hidden = isSingleAssistant;
+    }
+    if (humanGateSingleHint) {
+      humanGateSingleHint.hidden = !isSingleAssistant;
+    }
+
+    if (teamFieldset) {
+      teamFieldset.hidden = isSingleAssistant;
+      teamFieldset.querySelectorAll("input, select, textarea").forEach(function (field) {
+        field.disabled = isSingleAssistant;
+      });
+    }
+    if (teamDisabledHint) {
+      teamDisabledHint.hidden = !isSingleAssistant;
+    }
+
+    if (isSingleAssistant && teamTypeSelect && teamTypeSelect.value === "selector") {
+      teamTypeSelect.value = "round_robin";
+    }
+  }
+
   function syncExportAgentCheckboxes() {
     var wrapper = document.getElementById("integrations-export-agents");
     if (!wrapper) return;
@@ -257,6 +315,7 @@ document.addEventListener("DOMContentLoaded", function () {
       return;
     }
 
+    syncSingleAssistantMode();
     syncHumanGateFields();
     syncMaxIterationsLimit();
     syncTeamTypeFields();

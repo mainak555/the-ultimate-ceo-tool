@@ -288,7 +288,7 @@ def validate_human_gate(data):
     }
 
 
-def validate_team(data, human_gate_enabled):
+def validate_team(data, human_gate_enabled, assistant_count=None):
     """Validate and clean team configuration."""
     if not isinstance(data, dict):
         data = {}
@@ -296,6 +296,12 @@ def validate_team(data, human_gate_enabled):
     team_type = (data.get("type") or "round_robin").strip()
     if team_type not in TEAM_TYPES:
         raise ValueError(f"'team.type' must be one of {TEAM_TYPES}.")
+
+    if assistant_count == 1 and team_type == "selector":
+        raise ValueError(
+            "Single-assistant chat mode does not support Selector team type. "
+            "Use Round Robin."
+        )
 
     max_iterations = data.get("max_iterations", 5)
     try:
@@ -573,12 +579,22 @@ def validate_project(data):
         raise ValueError("At least one assistant agent is required.")
 
     agents = [validate_agent(agent) for agent in raw_agents]
+    assistant_count = len(agents)
     agent_names = [agent["name"].lower() for agent in agents]
     if len(agent_names) != len(set(agent_names)):
         raise ValueError("Assistant agent names must be unique.")
 
     human_gate = validate_human_gate(data.get("human_gate") or {})
-    team = validate_team(data.get("team") or {}, human_gate["enabled"])
+    if assistant_count == 1 and not human_gate["enabled"]:
+        raise ValueError(
+            "Single-assistant chat mode requires Human Gate to be enabled."
+        )
+
+    team = validate_team(
+        data.get("team") or {},
+        human_gate["enabled"],
+        assistant_count=assistant_count,
+    )
     integrations = validate_integrations(
         data.get("integrations") or {},
         [a["name"] for a in agents],
@@ -609,13 +625,19 @@ def validate_project(data):
             + ". Add them under 'MCP Secrets' or remove the placeholder."
         )
 
-    return {
+    cleaned = {
         "project_name": project_name,
         "objective": objective,
         "agents": agents,
         "human_gate": human_gate,
-        "team": team,
         "integrations": integrations,
         "shared_mcp_tools": shared_mcp_tools,
         "mcp_secrets": mcp_secrets,
     }
+
+    # In single-assistant chat mode, Team Setup is not a persisted contract.
+    # Runtime falls back to Round Robin defaults when team config is absent.
+    if assistant_count >= 2:
+        cleaned["team"] = team
+
+    return cleaned

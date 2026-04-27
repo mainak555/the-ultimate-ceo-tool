@@ -53,12 +53,13 @@ Converts a single saved agent dict into a runtime spec:
 
 Reads `project["team"]["type"]` and builds the appropriate AutoGen team.
 
-#### Termination strategy (both team types)
+#### Termination strategy
 
 | `human_gate.enabled` | Termination |
 |----------------------|-------------|
 | `false` | `MaxMessageTermination(n_agents × max_iterations)` — runs all rounds automatically |
-| `true` | `MaxMessageTermination(n_agents)` — stops after one full round; caller resumes per round |
+| `true` and `n_agents >= 2` | `MaxMessageTermination(n_agents)` — stops after one full round; caller resumes per round |
+| `true` and `n_agents == 1` | `MaxMessageTermination(1)` — stops after each assistant turn; caller resumes until human stops |
 
 ---
 
@@ -72,11 +73,15 @@ Uses `RoundRobinGroupChat`. Agents speak in the fixed order they are listed in t
 - `team.max_iterations`
 - `human_gate.enabled`
 
+For single-assistant projects, `RoundRobinGroupChat` is the only valid team runtime.
+
 ---
 
 ### `selector`
 
 Uses `SelectorGroupChat`. A dedicated model client selects the next speaker each turn based on the selector prompt, conversation history, and agent descriptions.
+
+`SelectorGroupChat` requires at least two participants.
 
 **Config fields used:**
 
@@ -182,7 +187,7 @@ Durable resume data always comes from MongoDB `chat_sessions.agent_state`.
 
 ## Human Gate Flow
 
-The human gate pauses execution after each full round (`n_agents` messages). The `views.chat_session_run` SSE handler manages the state machine:
+The `views.chat_session_run` SSE handler manages the state machine:
 
 ```
 idle ──► running ──► awaiting_input ──► running ──► ... ──► completed
@@ -194,6 +199,11 @@ idle ──► running ──► awaiting_input ──► running ──► ... 
 - **Decision + Notes**: `Approve` / `Reject` are optional shortcuts. If clicked, the UI prepends `APPROVED` or `REJECTED` followed by a blank line in the notes textarea. Continue can still be sent without selecting either shortcut. Any non-empty continue text is persisted as a `user` role entry in `discussions` and passed to `run_stream(task=...)`.
 - **Stop**: POST `/chat/sessions/<id>/respond/` with `action=stop` transitions session to `stopped` and evicts the cached team.
 - **First run**: `task` must be non-empty — a 400 is returned if `discussions` is empty and no task was provided.
+
+Mode-specific pause behavior:
+
+- **Multi-assistant (`n_agents >= 2`)**: gate pauses after each full round and completion can occur when `current_round` reaches `max_iterations`.
+- **Single-assistant (`n_agents == 1`) chat mode**: gate pauses after every assistant turn and does not auto-complete via `max_iterations`; the human `Stop` action controls termination.
 
 ---
 

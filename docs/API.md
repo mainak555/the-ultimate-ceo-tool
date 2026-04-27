@@ -110,6 +110,12 @@ This keeps provider behavior consistent while allowing provider-specific payload
 - `team[temperature]` — float string (default `0.0`; only used for selector)
 - `team[allow_repeated_speaker]` — `"on"` if checked (default on; only used for selector)
 
+Single-assistant chat mode semantics:
+- When exactly one assistant is configured, `human_gate[enabled]` is required.
+- `team[type]=selector` is invalid with one assistant.
+- Team Setup controls may be hidden in the UI for one-assistant projects; server-side validation remains authoritative.
+- On save, the persisted project document may omit the `team` object in one-assistant mode.
+
 **Success response**: HTML partial (`config_form.html`) with `HX-Trigger: refreshSidebar`
 
 **Error response**: `<div class="alert alert-error">message</div>` with status 400 or 403
@@ -240,3 +246,7 @@ Active run coordination contract:
 - `POST /chat/sessions/<session_id>/stop/` writes a Redis cancel signal so
   cancellation propagates across workers/pods.
 - MongoDB remains the durable source for `discussions` and `agent_state`.
+
+Run behavior by mode:
+- Multi-assistant gated runs pause after each full round and may auto-complete when `current_round` reaches `team.max_iterations`.
+- Single-assistant chat mode pauses after each assistant turn and does not use `team.max_iterations` for auto-completion; the human `stop` action terminates the conversation.

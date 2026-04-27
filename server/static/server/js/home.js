@@ -576,12 +576,18 @@ document.addEventListener("DOMContentLoaded", function () {
 
   function appendGatePanel(data) {
     var sessionId = activeSessionIdInput ? activeSessionIdInput.value : "";
+    var promptText;
+    if (data && data.chat_mode === "single_assistant") {
+      promptText = ' - Round ' + data.round + ' complete. Continue or Stop?';
+    } else {
+      promptText = ' - Round ' + data.round + ' of ' + data.max_rounds + ' complete. What would you like to do?';
+    }
     chatMessages.insertAdjacentHTML(
       "beforeend",
       '<div class="human-gate-panel" data-session-id="' + sessionId + '">'
       + '<div class="human-gate-panel__prompt">'
       + '<strong>' + (data.human_name || "You") + '</strong>'
-      + ' - Round ' + data.round + ' of ' + data.max_rounds + ' complete. What would you like to do?'
+      + promptText
       + '</div>'
       + '<div class="human-gate-panel__decision-row">'
       + '<button class="btn btn--success human-gate-btn human-gate-btn--approve">Approve</button>'

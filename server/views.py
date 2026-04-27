@@ -651,14 +651,27 @@ def chat_session_update(request, session_id):
 # SSE helpers
 # ---------------------------------------------------------------------------
 
+def _json_default(value):
+    """JSON serializer fallback for datetime payload values."""
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.isoformat()
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+
+def _json_dumps(payload) -> str:
+    """Serialize JSON payloads with datetime support."""
+    return json.dumps(payload, default=_json_default)
+
 def _sse(event: str, data: dict) -> str:
     """Format a single SSE frame."""
-    return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+    return f"event: {event}\ndata: {_json_dumps(data)}\n\n"
 
 
 def _json_error(message: str, status: int) -> HttpResponse:
     """Return a standard JSON error response."""
-    return HttpResponse(json.dumps({"error": message}), status=status, content_type="application/json")
+    return HttpResponse(_json_dumps({"error": message}), status=status, content_type="application/json")
 
 
 # ---------------------------------------------------------------------------
@@ -758,6 +771,7 @@ async def chat_session_run(request, session_id):
         return _json_error("Active session coordinator is unavailable.", 503)
 
     async def event_stream():
+        nonlocal task
         from autogen_agentchat.base import TaskResult
         from autogen_agentchat.messages import TextMessage
         from agents.runtime import (
@@ -818,6 +832,9 @@ async def chat_session_run(request, session_id):
 
             has_gate = project.get("human_gate", {}).get("enabled", False)
             max_iter = project.get("team", {}).get("max_iterations", 5)
+            is_single_assistant_chat_mode = (
+                has_gate and len(project.get("agents") or []) == 1
+            )
 
             # Export integration metadata for client-side export actions.
             export_meta = _build_export_meta(project)
@@ -880,12 +897,15 @@ async def chat_session_run(request, session_id):
                         updated = await asyncio.to_thread(services.get_chat_session, session_id)
                         current_round = updated["current_round"] if updated else 0
 
-                        if has_gate and current_round < max_iter:
+                        if has_gate and (
+                            is_single_assistant_chat_mode or current_round < max_iter
+                        ):
                             await asyncio.to_thread(services.set_session_status, session_id, "awaiting_input")
                             gate_data = {
                                 "round": current_round + 1,
-                                "max_rounds": max_iter,
+                                "max_rounds": None if is_single_assistant_chat_mode else max_iter,
                                 "human_name": project["human_gate"]["name"],
+                                "chat_mode": "single_assistant" if is_single_assistant_chat_mode else "team",
                             }
                             if export_meta:
                                 gate_data["export"] = export_meta
@@ -1009,16 +1029,16 @@ def chat_session_respond(request, session_id):
         from agents.runtime import evict_team
         services.set_session_status(session_id, "stopped")
         evict_team(session_id)
-        return HttpResponse(json.dumps({"status": "stopped"}), content_type="application/json")
+        return HttpResponse(_json_dumps({"status": "stopped"}), content_type="application/json")
 
     if action == "continue":
         services.set_session_status(session_id, "idle")
         return HttpResponse(
-            json.dumps({"status": "ok", "task": text, "attachment_ids": attachment_ids}),
+            _json_dumps({"status": "ok", "task": text, "attachment_ids": attachment_ids}),
             content_type="application/json",
         )
 
-    return HttpResponse(json.dumps({"error": "Invalid action"}), status=400,
+    return HttpResponse(_json_dumps({"error": "Invalid action"}), status=400,
                         content_type="application/json")
 
 
@@ -1057,7 +1077,7 @@ def chat_session_restart(request, session_id):
 
     services.set_session_status(session_id, "idle")
     task = text if mode == "continue_with_context" else ""
-    return HttpResponse(json.dumps({"status": "ok", "task": task, "mode": mode}), content_type="application/json")
+    return HttpResponse(_json_dumps({"status": "ok", "task": task, "mode": mode}), content_type="application/json")
 
 
 # ---------------------------------------------------------------------------
@@ -1092,7 +1112,7 @@ def chat_session_stop(request, session_id):
 
     from agents.runtime import cancel_team
     cancel_team(session_id)
-    return HttpResponse(json.dumps({"status": "cancelling"}), content_type="application/json")
+    return HttpResponse(_json_dumps({"status": "cancelling"}), content_type="application/json")
 
 
 @csrf_exempt
@@ -1116,7 +1136,7 @@ def chat_session_upload_attachments(request, session_id):
         return _json_error("Attachment upload failed.", 500)
 
     enriched = _enrich_attachments_for_display(session_id, uploaded)
-    return HttpResponse(json.dumps({"status": "ok", "attachments": enriched}), content_type="application/json")
+    return HttpResponse(_json_dumps({"status": "ok", "attachments": enriched}), content_type="application/json")
 
 
 @require_GET

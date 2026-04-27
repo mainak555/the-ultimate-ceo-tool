@@ -130,6 +130,7 @@ Shared markdown rendering for Home and export reference panes must go through `s
 - **Team**: nested config with `type` and `max_iterations`. Supported types:
   - `round_robin` — agents take turns in fixed order.
   - `selector` — a dedicated model client routes between agents each turn. Requires `model`, `system_prompt` (supports `{roles}`, `{history}`, `{participants}`), `temperature` (default `0.0`), and `allow_repeated_speaker`. Selector fields are wrapped in an `.agent-card` container (edit) / `.agent-card--readonly` card (readonly) with header "Selector Agent" / "Selector", matching assistant agent cards.
+- **Single-assistant chat mode**: when assistant count is exactly 1, Team Setup is hidden and Human Gate is forced on. In this mode the run pauses after each assistant turn and continues until the human selects `Stop`.
 - **Integrations → Trello → Export Agents**: checkboxes (`name="integrations[trello][export_agents]"`) rendered inside `#integrations-trello-fields` as the first element (above App Name). Leaving all unchecked means every agent's messages show the export button. Synced dynamically by `syncExportAgentCheckboxes()` whenever agent names change.
 - **Home chat export controls**: per-agent output export dropdowns are rendered from `project.integrations.<provider>` where `enabled=true` and filtered by each provider's `export_agents` allowlist (`[]` = all agents). These controls are visible only when the Secret Key input has a value (edit/create mode behavior).
 - **Home chat attachments**:

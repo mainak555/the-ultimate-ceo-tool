@@ -51,6 +51,20 @@ def _coerce_dt_to_iso(value) -> str:
         return value.isoformat()
     return str(value) if value else ""
 
+
+def _json_default(value):
+    """Serialize datetime values for JSON-only boundaries."""
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.isoformat()
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+
+def _json_size_bytes(value) -> int:
+    """Return UTF-8 byte size of JSON payload with datetime-safe serialization."""
+    return len(json.dumps(value, ensure_ascii=True, default=_json_default).encode("utf-8"))
+
 from core.tracing import traced_function
 
 
@@ -840,7 +854,13 @@ def save_agent_state(session_id, state):
         "saved_at": _utc_now(),  # BSON Date — coerced to ISO string on read
         "state": state,
     }
-    payload_size = len(json.dumps(payload, ensure_ascii=True).encode("utf-8"))
+    try:
+        payload_size = _json_size_bytes(payload)
+    except TypeError as e:
+        raise TypeError(f"Serialization failed: {e}")
+    except ValueError as e:
+        raise TypeError(f"JSON format error: {e}")
+    
     if payload_size > MAX_AGENT_STATE_BYTES:
         raise ValueError("Agent state is too large to persist.")
 

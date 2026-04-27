@@ -58,6 +58,7 @@ import json
 import logging
 import os
 import re
+from datetime import datetime, timezone
 from contextlib import contextmanager
 from threading import Lock
 from typing import Any, Callable, Iterator
@@ -112,8 +113,16 @@ def _stringify_payload(value: Any) -> str:
     """Convert payload values to raw strings for span attributes."""
     if isinstance(value, str):
         return value
+
+    def _json_default(obj: Any) -> str:
+        if isinstance(obj, datetime):
+            if obj.tzinfo is None:
+                obj = obj.replace(tzinfo=timezone.utc)
+            return obj.isoformat()
+        raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
+
     try:
-        return json.dumps(value, ensure_ascii=False)
+        return json.dumps(value, ensure_ascii=False, default=_json_default)
     except Exception:
         return str(value)
 

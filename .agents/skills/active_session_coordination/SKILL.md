@@ -41,6 +41,14 @@ Use this skill when touching:
 - Lease acquisition and Mongo status transition must both succeed before run starts.
 - Lease must be released in all terminal paths (completed, stopped, error, disconnect).
 
+### Single-assistant chat mode
+
+- When a project has exactly one assistant agent, Human Gate is mandatory.
+- In this mode, the run pauses after every assistant turn and returns `awaiting_input`.
+- Do not use `team.max_iterations` as a completion condition for this mode.
+- Conversation termination is human-controlled (`respond action=stop`) or cancellation/error.
+- Keep the same lease/heartbeat/release guarantees as multi-agent flows.
+
 ### Observability
 
 - Use module logger (`logging.getLogger(__name__)`).

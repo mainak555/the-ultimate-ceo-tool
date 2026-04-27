@@ -231,6 +231,15 @@ def close_session_workbenches(session_id: str) -> None:
         for wb in workbenches:
             try:
                 await asyncio.wait_for(wb.stop(), timeout=timeout_s)
+            except RuntimeError as exc:
+                # Lazy-started workbenches may never have been started in a
+                # session. Stopping those should be a no-op, not an error.
+                if "not started" in str(exc).lower():
+                    continue
+                logger.exception(
+                    "agents.mcp.failed",
+                    extra={"session_id": session_id, "phase": "stop"},
+                )
             except asyncio.TimeoutError:
                 logger.exception(
                     "agents.mcp.failed",

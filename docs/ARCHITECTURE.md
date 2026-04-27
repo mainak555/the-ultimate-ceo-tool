@@ -57,7 +57,7 @@ product-discovery/
 - `validate_project(data)` — validates and cleans project configuration data.
 - `validate_agent(data)` — validates a single assistant agent entry.
 - `validate_human_gate(data)` — validates the optional human approval gate.
-- `validate_team(data, human_gate_enabled)` — validates team type and max iterations.
+- `validate_team(data, human_gate_enabled, assistant_count=None)` — validates team type and max iterations, including single-assistant chat-mode constraints.
 - Returns cleaned `dict` or raises `ValueError` with a descriptive message.
 - No database or request coupling.
 
@@ -86,6 +86,7 @@ Deletion policy:
 - `agents/factory.py` resolves provider-specific AutoGen model clients from model names.
 - `agents/prompt_builder.py` resolves system prompts and appends the project objective.
 - `agents/team_builder.py` builds AutoGen teams (`RoundRobinGroupChat` or `SelectorGroupChat`) from saved configuration. The team type is read from `project["team"]["type"]`. Each `AssistantAgent` receives `description=` (line 1 of its resolved system message) so that `SelectorGroupChat`'s `{roles}` placeholder renders meaningful routing context.
+- Single-assistant projects run in chat mode with Human Gate enabled and a `RoundRobinGroupChat` runtime; selector routing requires at least two assistants.
 - `agents/runtime.py` owns process-local team/cache lifecycle and MCP workbench teardown.
 - `agents/session_coordination.py` owns Redis-backed active-session coordination (run lease, heartbeat, cross-instance cancel signaling).
 
