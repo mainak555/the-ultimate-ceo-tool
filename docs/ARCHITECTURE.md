@@ -91,6 +91,7 @@ Orchestrates the full lifecycle: upload validation → blob write → MongoDB me
 - **Vision** (`load_images_for_agents`): downloads raw image bytes from blob on every run/resume (images are never Redis-cached) and returns `list[tuple[filename, bytes, mime_type]]`.
 - **Cleanup** (`delete_session_attachments`): purges Redis text-cache keys (`purge_session_attachment_cache`) → deletes blob prefix → deletes MongoDB metadata rows, in that order.
 - Redis client is shared from `agents.session_coordination.get_redis_client()` (imported lazily inside `_get_redis()` to avoid circular imports).
+- **Storage layer design**: see [docs/attachment_storage.md](attachment_storage.md) for the three-layer rationale (blob / metadata / Redis cache), data models, sequence diagrams for upload / agent-run / session-delete, and a decision guide for common tasks.
 
 ### `storage_backends.py` — Blob Storage Strategy
 Implements a Strategy + Factory pattern for pluggable blob providers.

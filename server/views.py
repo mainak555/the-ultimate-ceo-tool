@@ -742,6 +742,87 @@ def _json_error(message: str, status: int) -> HttpResponse:
     return HttpResponse(_json_dumps({"error": message}), status=status, content_type="application/json")
 
 
+def _friendly_run_error(exc: Exception) -> str:
+    """Return a user-readable error string for agent run failures.
+
+    AutoGen's BaseGroupChat wraps agent exceptions as::
+
+        raise RuntimeError(str(message.error))
+
+    so the outer ``exc`` is always a ``RuntimeError`` whose ``str()`` begins
+    with the original exception class name, e.g.::
+
+        "BadRequestError: Error code: 400 - {'error': {...}}\nTraceback:..."
+
+    We unwrap the inner ``BadRequestError`` (direct OR wrapped in RuntimeError)
+    so the chat UI shows an actionable message rather than a raw JSON blob.
+    """
+    import json as _json
+
+    # Helper: parse a BadRequestError-like object into a friendly string.
+    def _format_bad_request(err_obj) -> str:
+        try:
+            body = getattr(err_obj, "body", None) or {}
+            inner = body.get("error", {}) if isinstance(body, dict) else {}
+            code = inner.get("code") or ""
+            api_msg = inner.get("message") or str(err_obj)
+            # Azure wraps the Anthropic error as a JSON string inside 'message'.
+            if isinstance(api_msg, str) and api_msg.startswith("{"):
+                try:
+                    api_msg = _json.loads(api_msg).get("error", {}).get("message") or api_msg
+                except Exception:  # noqa: BLE001
+                    pass
+            return (
+                f"Model API error ({code}): {api_msg}. "
+                "The model could not complete the tool-call reflection step. "
+                "Start a new session to continue (the session state has been reset)."
+            )
+        except Exception:  # noqa: BLE001
+            return str(err_obj)
+
+    # 1. Direct BadRequestError (openai package).
+    try:
+        from openai import BadRequestError as _OAIBadRequest
+        if isinstance(exc, _OAIBadRequest):
+            return _format_bad_request(exc)
+    except ImportError:
+        pass
+
+    # 2. RuntimeError wrapping a BadRequestError — AutoGen's run_stream raises:
+    #      raise RuntimeError(str(message.error))
+    #    str(exc) begins with "BadRequestError: Error code: 400 - ..."
+    exc_str = str(exc)
+    if isinstance(exc, RuntimeError) and "BadRequestError" in exc_str and "invalid_prompt" in exc_str:
+        # Extract the JSON body from the string representation.
+        # Pattern: "Error code: 400 - {...}"
+        import re as _re
+        match = _re.search(r"Error code: \d+ - (\{.*)", exc_str, _re.DOTALL)
+        if match:
+            try:
+                body = _json.loads(match.group(1).split("\nTraceback")[0])
+                inner = body.get("error", {})
+                code = inner.get("code") or "invalid_prompt"
+                api_msg = inner.get("message") or "invalid prompt"
+                if isinstance(api_msg, str) and api_msg.startswith("{"):
+                    try:
+                        api_msg = _json.loads(api_msg).get("error", {}).get("message") or api_msg
+                    except Exception:  # noqa: BLE001
+                        pass
+                return (
+                    f"Model API error ({code}): {api_msg}. "
+                    "The model could not complete the tool-call reflection step. "
+                    "Start a new session to continue (the session state has been reset)."
+                )
+            except Exception:  # noqa: BLE001
+                pass
+        return (
+            "The model rejected the tool-call reflection prompt (invalid_prompt). "
+            "Start a new session to continue (the session state has been reset)."
+        )
+
+    return exc_str
+
+
 # ---------------------------------------------------------------------------
 # Agent execution — SSE streaming run
 # ---------------------------------------------------------------------------
@@ -887,7 +968,7 @@ async def chat_session_run(request, session_id):
             except Exception:  # noqa: BLE001
                 pass
         from autogen_agentchat.base import TaskResult
-        from autogen_agentchat.messages import TextMessage
+        from autogen_agentchat.messages import TextMessage, ToolCallSummaryMessage
         from agents.runtime import (
             evict_team,
             get_or_build_team,
@@ -1060,6 +1141,26 @@ async def chat_session_run(request, session_id):
                             sse_record["export"] = export_meta
                         yield _sse("message", sse_record)
 
+                    elif isinstance(msg, ToolCallSummaryMessage) and msg.source != "user":
+                        # Emitted when reflect_on_tool_use is False or unavailable.
+                        # Persist and stream so tool results are visible in the chat
+                        # even without a full reflection LLM call.
+                        ts_dt = datetime.now(timezone.utc)
+                        ts_iso = ts_dt.isoformat()
+                        record = {
+                            "id": str(uuid4()),
+                            "agent_name": msg.source,
+                            "role": "assistant",
+                            "content": msg.content,
+                            "timestamp": ts_dt,
+                        }
+                        pending_messages.append(record)
+                        sse_record = dict(record)
+                        sse_record["timestamp"] = ts_iso
+                        if export_meta:
+                            sse_record["export"] = export_meta
+                        yield _sse("message", sse_record)
+
             except asyncio.CancelledError:
                 if pending_messages:
                     await asyncio.to_thread(services.append_messages, session_id, pending_messages)
@@ -1076,9 +1177,19 @@ async def chat_session_run(request, session_id):
                     yield _sse("stopped", {"status": "stopped"})
 
             except Exception as exc:
+                logger.exception(
+                    "agents.session.run_error",
+                    extra={"session_id": session_id, "exc_type": type(exc).__name__},
+                )
                 await asyncio.to_thread(services.set_session_status, session_id, "idle")
                 evict_team(session_id)
-                yield _sse("error", {"message": str(exc)})
+                # AutoGen's BaseGroupChat wraps exceptions as:
+                #   raise RuntimeError(str(message.error))
+                # so exc is always RuntimeError whose str() begins with the
+                # original exception class name (e.g. "BadRequestError: ...").
+                # We check both the direct type and the string representation.
+                user_msg = _friendly_run_error(exc)
+                yield _sse("error", {"message": user_msg})
 
             finally:
                 heartbeat_stop.set()

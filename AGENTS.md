@@ -58,6 +58,15 @@ See [docs/export_schema_contracts.md](docs/export_schema_contracts.md) for:
 - Required provider integration doc contract sections
 - Change-management rule when schema or push payload behavior changes
 
+## Chat Attachments
+
+See [docs/attachment_storage.md](docs/attachment_storage.md) for:
+- Three-layer storage rationale (Azure Blob / MongoDB `chat_attachments` / Redis text cache)
+- Why `discussions[].attachments[]` is a denormalized display snapshot, not a duplicate
+- Upload, agent-run (text + vision), and session-delete sequence diagrams
+- Data model for each store and key invariants
+- Decision guide: which layer to use for each access pattern
+
 ## Agent Teams & Runtime
 
 See [docs/agent_teams.md](docs/agent_teams.md) for:

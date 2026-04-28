@@ -522,18 +522,26 @@ def delete_session_attachments(session_id: str) -> None:
         return
 
     col = get_collection(ATTACHMENTS_COLLECTION)
-    if col.count_documents({"session_id": session_id}, limit=1) == 0:
-        return
 
     # 1. Purge Redis text cache first (uses the index set populated at run time).
     purge_session_attachment_cache(session_id)
 
-    # 2. Delete Azure Blob objects.
-    strategy = build_storage_strategy()
-    prefix = f"sessions/{session_id}/"
-    deleted_blobs = strategy.delete_prefix(prefix=prefix)
+    # 2. Delete all blob objects under the session prefix.  Always attempt this
+    #    regardless of whether metadata rows exist — blobs and metadata can fall
+    #    out of sync (e.g. upload interrupted after blob write, or metadata rows
+    #    already removed), and skipping the prefix delete would orphan blobs.
+    deleted_blobs = 0
+    try:
+        strategy = build_storage_strategy()
+        prefix = f"sessions/{session_id}/"
+        deleted_blobs = strategy.delete_prefix(prefix=prefix)
+    except Exception:
+        logger.exception(
+            "attachments.blob_delete_failed",
+            extra={"session_id": session_id},
+        )
 
-    # 3. Delete MongoDB metadata.
+    # 3. Delete MongoDB metadata (no-op if no rows exist).
     result = col.delete_many({"session_id": session_id})
 
     logger.info(
