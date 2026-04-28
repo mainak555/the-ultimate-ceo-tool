@@ -58,6 +58,17 @@ Single-assistant contract:
 	selects `Continue`; conversation ends when the human selects `Stop`.
 - `max_iterations` is not used as an auto-completion condition in
 	single-assistant chat mode.
+- **`Continue` requires a message or attachment** in single-assistant mode.
+	The button starts disabled and enables only when text is typed or files are attached.
+	An empty continue is rejected at the backend with HTTP 400.
+
+Multi-assistant gate contract:
+
+- Gate pauses after each full agent round (all agents have spoken once).
+- `Continue` may be sent with an empty notes textarea — agents resume their
+	internal collaboration with the accumulated history as context.
+- `Stop` triggers a graceful termination: the current agent finishes its turn,
+	the message is persisted, then the run ends cleanly.
 
 ---
 

@@ -39,7 +39,11 @@ MCP (Model Context Protocol) tool wiring for assistant agents.
 - All workbench construction goes through `agents/mcp_tools.py`.
 - `team_builder.py` calls `resolve_mcp_servers_for_agent()` +
   `build_mcp_workbenches()` only — never instantiates `McpWorkbench` directly.
-- Workbenches are passed to `AssistantAgent(workbench=...)`.
+- Workbenches are passed to `AssistantAgent(workbench=..., reflect_on_tool_use=True)`.
+  **`reflect_on_tool_use=True` is mandatory** for every agent that receives an MCP
+  workbench. Without it, AutoGen omits the second LLM call after tool execution and
+  yields a raw `ToolCallSummaryMessage` instead of a synthesised `TextMessage` —
+  the result is invisible in the SSE chat and produces no `LLMCallEvent` span.
 - `agents/runtime.py::evict_team()` MUST call
   `close_session_workbenches(session_id)`.
 - Active run exclusivity/cancel across multiple workers is coordinated by

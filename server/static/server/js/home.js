@@ -399,10 +399,24 @@ document.addEventListener("DOMContentLoaded", function () {
     return state;
   }
 
+  // Re-evaluate Continue button enabled state for single-assistant chat mode.
+  function _evalGateContinue(panel) {
+    if (!panel || panel.dataset.chatMode !== "single_assistant") return;
+    var ta = panel.querySelector(".human-gate-panel__textarea");
+    var state = getGateState(panel);
+    var hasContent = (ta && ta.value.trim().length > 0)
+      || state.pending.length > 0
+      || state.uploaded.length > 0;
+    var continueBtn = panel.querySelector(".human-gate-btn--continue");
+    if (continueBtn) continueBtn.disabled = !hasContent;
+  }
+
   function renderGateAttachments(panel) {
     var state = getGateState(panel);
     var listEl = panel.querySelector(".human-gate-panel__attachment-list");
     renderAttachmentList(listEl, state.uploaded.concat(state.pending), "gate");
+    // Keep Continue enabled/disabled in sync for single-assistant mode
+    _evalGateContinue(panel);
   }
 
   function addGateFiles(panel, fileList) {
@@ -576,15 +590,23 @@ document.addEventListener("DOMContentLoaded", function () {
 
   function appendGatePanel(data) {
     var sessionId = activeSessionIdInput ? activeSessionIdInput.value : "";
+    var isSingleAssistant = data && data.chat_mode === "single_assistant";
     var promptText;
-    if (data && data.chat_mode === "single_assistant") {
+    if (isSingleAssistant) {
       promptText = ' - Round ' + data.round + ' complete. Continue or Stop?';
     } else {
       promptText = ' - Round ' + data.round + ' of ' + data.max_rounds + ' complete. What would you like to do?';
     }
+    // Single-assistant mode: Continue starts disabled until user types or attaches
+    var continueBtnAttr = isSingleAssistant ? ' disabled' : '';
+    var textareaPlaceholder = isSingleAssistant
+      ? 'Enter your next message (required)...'
+      : 'Optional details to send to agents...';
     chatMessages.insertAdjacentHTML(
       "beforeend",
-      '<div class="human-gate-panel" data-session-id="' + sessionId + '">'
+      '<div class="human-gate-panel" data-session-id="' + sessionId + '"'
+      + (isSingleAssistant ? ' data-chat-mode="single_assistant"' : '')
+      + '>'
       + '<div class="human-gate-panel__prompt">'
       + '<strong>' + (data.human_name || "You") + '</strong>'
       + promptText
@@ -593,14 +615,14 @@ document.addEventListener("DOMContentLoaded", function () {
       + '<button class="btn btn--success human-gate-btn human-gate-btn--approve">Approve</button>'
       + '<button class="btn btn--warning human-gate-btn human-gate-btn--reject">Reject</button>'
       + '</div>'
-      + '<textarea class="input input--textarea human-gate-panel__textarea" rows="3" placeholder="Optional details to send to agents..."></textarea>'
+      + '<textarea class="input input--textarea human-gate-panel__textarea" rows="3" placeholder="' + textareaPlaceholder + '"></textarea>'
       + '<div class="human-gate-panel__attachment-row">'
       + '<button class="btn btn--secondary human-gate-btn human-gate-btn--attach" type="button">Attach files</button>'
       + '<input class="human-gate-panel__file-input" type="file" hidden multiple>'
       + '</div>'
       + '<div class="chat-attachment-list human-gate-panel__attachment-list" hidden></div>'
       + '<div class="human-gate-panel__actions">'
-      + '<button class="btn btn--primary human-gate-btn human-gate-btn--continue">Continue</button>'
+      + '<button class="btn btn--primary human-gate-btn human-gate-btn--continue"' + continueBtnAttr + '>Continue</button>'
       + '<button class="btn btn--danger human-gate-btn human-gate-btn--stop">Stop</button>'
       + '</div>'
       + '</div>'
@@ -944,6 +966,12 @@ document.addEventListener("DOMContentLoaded", function () {
     if (!panel) return;
     addGateFiles(panel, e.target.files);
     e.target.value = "";
+  });
+
+  document.body.addEventListener("input", function (e) {
+    if (!e.target.classList || !e.target.classList.contains("human-gate-panel__textarea")) return;
+    var panel = e.target.closest(".human-gate-panel");
+    if (panel) _evalGateContinue(panel);
   });
 
   document.body.addEventListener("paste", function (e) {

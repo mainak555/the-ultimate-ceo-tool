@@ -303,6 +303,8 @@ class AutoGenEventSpanBridgeHandler(logging.Handler):
                     except Exception:
                         pass
                     if arguments is not None:
+                        # input.value surfaces in Langfuse "Input" panel
+                        set_payload_attribute(span, "input.value", arguments)
                         set_payload_attribute(span, "gen_ai.tool.arguments", arguments)
                     if record.levelno >= logging.ERROR:
                         span.set_status(Status(StatusCode.ERROR, raw_message[:300]))
@@ -334,6 +336,8 @@ class AutoGenEventSpanBridgeHandler(logging.Handler):
                     except Exception:
                         pass
                     if result is not None:
+                        # output.value surfaces in Langfuse "Output" panel
+                        set_payload_attribute(span, "output.value", result)
                         set_payload_attribute(span, "gen_ai.tool.result", result)
                     if is_error:
                         span.set_status(

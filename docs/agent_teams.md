@@ -55,11 +55,30 @@ Reads `project["team"]["type"]` and builds the appropriate AutoGen team.
 
 #### Termination strategy
 
+All termination uses a custom `AgentMessageTermination` class (defined in `team_builder.py`)
+that counts only messages where `source != "user"`. This avoids the off-by-one present in
+AutoGen's built-in `MaxMessageTermination`, which counts the initial task message and would
+consume one agent turn on every `run_stream()` call.
+
 | `human_gate.enabled` | Termination |
 |----------------------|-------------|
-| `false` | `MaxMessageTermination(n_agents × max_iterations)` — runs all rounds automatically |
-| `true` and `n_agents >= 2` | `MaxMessageTermination(n_agents)` — stops after one full round; caller resumes per round |
-| `true` and `n_agents == 1` | `MaxMessageTermination(1)` — stops after each assistant turn; caller resumes until human stops |
+| `false` | `AgentMessageTermination(n_agents × max_iterations)` — runs all rounds automatically |
+| `true` | `AgentMessageTermination(n_agents) \| ExternalTermination()` — stops after one full agent round or when Stop is pressed (graceful); see Stop Mechanism below |
+
+`ExternalTermination` is stored in `project["_runtime"]["external_termination"]` after `build_team()` so
+`runtime.cancel_team()` can call `.set()` for a graceful stop.
+
+AutoGen automatically calls `termination.reset()` after each round fires, so `AgentMessageTermination._count`
+and `ExternalTermination._setted` both reset cleanly between gate rounds without manual intervention.
+
+#### Stop mechanism (human-gated runs)
+
+When the user presses **Stop**:
+1. `cancel_team(session_id)` calls `ExternalTermination.set()` first — graceful signal.
+2. `CancellationToken.cancel()` follows — hard interrupt for any in-flight LLM call.
+3. The graceful signal fires at the next turn boundary; the current agent message (if any) is
+   fully written before `TaskResult` is yielded, so no message is lost.
+4. `evict_team(session_id)` removes the team and `ExternalTermination` from all caches.
 
 ---
 
@@ -143,6 +162,23 @@ The default example is stored in `server/model_catalog.SELECTOR_AGENT_PROMPT` an
 
 ---
 
+## `AgentMessageTermination` — Custom Condition
+
+Defined in `agents/team_builder.py`. Replaces AutoGen's `MaxMessageTermination` everywhere in this project.
+
+**Why it exists**: `MaxMessageTermination` counts every `BaseChatMessage`, including the
+initial `TextMessage(source="user")` task. With `MaxMessageTermination(N)`, only `N-1`
+agent turns occur per round. `AgentMessageTermination(N)` filters to messages where
+`source != "user"`, giving exactly `N` agent turns.
+
+**Interface** (duck-type compatible with `TerminationCondition`):
+- `terminated: bool` — true once the limit is reached
+- `async __call__(messages) -> StopMessage | None` — accumulates count, returns `StopMessage` when limit is hit
+- `async reset() -> None` — resets count to 0 (called automatically by AutoGen when fired)
+- `__or__(other) -> _Or` — supports `AgentMessageTermination(N) | ExternalTermination()` syntax
+
+---
+
 ## Runtime Cache — `runtime.py`
 
 Teams are kept alive in a process-local dict (`_TEAM_CACHE`) keyed by `session_id`. This preserves AutoGen's internal conversation history between rounds in human-gated runs.
@@ -162,16 +198,17 @@ The runtime also persists native AutoGen team state to `chat_sessions.agent_stat
 ```
 session_id → AutoGen team instance
 session_id → CancellationToken
+session_id → ExternalTermination  (gated runs only; graceful stop signal)
 ```
 
 ### Key functions
 
 | Function | When to call |
 |----------|-------------|
-| `get_or_build_team(session_id, project)` | Before every `run_stream()` call. Builds on miss, returns cached on hit |
-| `reset_cancel_token(session_id)` | Before every `run_stream()` call to issue a fresh token |
-| `cancel_team(session_id)` | To stop a running stream (e.g. user cancels) |
-| `evict_team(session_id)` | After session completes or is abandoned; frees memory |
+| `get_or_build_team(session_id, project)` | Before every `run_stream()` call. Builds on miss, returns cached on hit. Stashes `ExternalTermination` on cache miss |
+| `reset_cancel_token(session_id)` | Before every `run_stream()` call to issue a fresh `CancellationToken`. `ExternalTermination` resets automatically when fired |
+| `cancel_team(session_id)` | To stop a running stream. Calls `ExternalTermination.set()` (graceful) then `CancellationToken.cancel()` (hard fallback) |
+| `evict_team(session_id)` | After session completes or is abandoned; clears `_TEAM_CACHE`, `_CANCEL_TOKENS`, `_EXTERNAL_TERMINATIONS`, and MCP workbenches |
 
 ### Cache lifetime
 

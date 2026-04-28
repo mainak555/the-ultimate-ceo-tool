@@ -48,6 +48,28 @@ Use this skill when touching:
 - Do not use `team.max_iterations` as a completion condition for this mode.
 - Conversation termination is human-controlled (`respond action=stop`) or cancellation/error.
 - Keep the same lease/heartbeat/release guarantees as multi-agent flows.
+- **Empty Continue is invalid** in single-assistant mode: no text and no attachments means
+  the backend must return HTTP 400 **before** acquiring the Redis lease. The frontend must
+  keep the Continue button disabled until the user types text or attaches a file.
+
+### Graceful stop contract (human-gated runs)
+
+When `cancel_team(session_id)` is called (e.g. Stop button):
+
+1. Call `ExternalTermination.set()` first — fires at the next turn boundary so the current
+   agent message is fully written before `TaskResult` is yielded.
+2. Call `CancellationToken.cancel()` as a hard fallback — interrupts any in-flight LLM call.
+3. `evict_team(session_id)` must clear `_TEAM_CACHE`, `_CANCEL_TOKENS`, and
+   `_EXTERNAL_TERMINATIONS` so no stale signal leaks to a future session rebuild.
+
+`ExternalTermination` is stashed in `project["_runtime"]["external_termination"]` by
+`build_team()` and registered in `runtime._EXTERNAL_TERMINATIONS[session_id]` during
+`get_or_build_team()` cache-miss. It is absent for non-gated runs; all code must
+guard with `if ext_stop is not None`.
+
+AutoGen automatically calls `termination.reset()` when the termination condition fires,
+so `ExternalTermination._setted` and `AgentMessageTermination._count` reset cleanly between
+gate rounds without any manual reset in `reset_cancel_token()`.
 
 ### Observability
 

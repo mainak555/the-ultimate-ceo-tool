@@ -722,6 +722,14 @@ async def chat_session_run(request, session_id):
     if is_first_run and not task and not attachment_ids:
         return _json_error("'task' is required to start a conversation.", 400)
 
+    # Single-assistant chat mode: empty Continue is invalid (no new context for agent)
+    is_single_assistant_gate = (
+        project.get("human_gate", {}).get("enabled", False)
+        and len(project.get("agents") or []) == 1
+    )
+    if is_single_assistant_gate and not is_first_run and not task and not attachment_ids:
+        return _json_error("A message or attachment is required to continue.", 400)
+
     from agents.session_coordination import (
         SessionCoordinationError,
         acquire_run_lease,
