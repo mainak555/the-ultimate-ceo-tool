@@ -80,18 +80,59 @@ Home chat composer and HITL gate textarea support:
 - drag and drop
 - paste from clipboard
 
-Supported files are uploaded to Azure Blob and linked to the session via
-MongoDB metadata. Image attachments render thumbnails in session history.
-Non-image attachments render as filename links under each message.
+### Supported file types
+
+| Category | Extensions |
+|---|---|
+| **Images** | `png`, `jpg`, `jpeg`, `webp`, `gif`, `bmp`, `svg`, `heic`, `heif`, `tif`, `tiff` |
+| **Documents** | `pdf`, `docx`, `doc` |
+| **Spreadsheets** | `xlsx`, `xls`, `csv` |
+| **Presentations** | `pptx`, `ppt` |
+| **Text / Data** | `txt`, `md`, `json` |
+
+Max file size: **20 MB** per file. Max files per message: **10**.
+
+### Upload flow
+
+1. **Select** — Use the attach button, drag-and-drop onto the composer, or paste from clipboard. The file is validated immediately (type, size, count).
+2. **Upload** — The file is uploaded to Blob Storage (Azure in current implementation) in the background *before* the message is sent. A chip appears in the composer with a loading indicator during upload.
+3. **Bind** — Once the upload succeeds the chip is bound with an `attachment_id`. Multiple files upload in parallel and each binds independently.
+4. **Send** — When you press **Send** (or **Continue** in the HITL gate), the bound `attachment_id`s are submitted alongside your message text. The server validates session ownership for every ID.
+5. **Agent context** — The server assembles the full agent task: extracted text from documents is appended as an `--- Attachments:` block; image bytes are injected as vision frames. The agent receives the complete content without truncation.
+
+If an upload fails the chip is removed and an error is shown — no partial IDs are ever submitted.
+
+### How attachments reach the agent
+
+**Text files** (PDF, Word, Excel, CSV, PPTX, TXT, MD, JSON) — content is extracted
+lazily the first time an agent run references the attachment:
+
+1. The app checks Redis for a cached copy
+   (`REDIS_ATTACHMENT_TTL_SECONDS`, default 24 h).
+2. Cache **hit** → text returned immediately (< 1 ms).
+3. Cache **miss** → bytes downloaded from Azure Blob, text extracted, stored
+   in Redis, then returned. Full content is passed — no truncation.
+
+For Excel files, every sheet is extracted with its name as a heading and
+rows formatted as tab-separated values, preserving the tabular structure
+for the model.
+
+**Images** — downloaded from blob on each run and passed as raw pixel data
+via `MultiModalMessage` to vision-capable models. Set `"vision": true` in
+`agent_models.json` for the model being used (see [Models & `model_info`](#models--model_info)).
+
+### Storage
+
+All blobs are stored under `sessions/{session_id}/attachments/{attachment_id}/{filename}`
+in **Azure Blob** (current implementation — swappable via `ATTACHMENT_STORAGE_PROVIDER`).
+MongoDB stores only metadata — no file content in the database.
+Blobs, Redis cache, and metadata rows are all cleaned up when a session is deleted.
 
 Storage abstraction pattern:
 
 - **Strategy**: provider-specific byte operations (`StorageStrategy`)
 - **Factory**: runtime provider selection (`build_storage_strategy()`)
 - **Repository-style metadata access**: attachment metadata queries scoped by `session_id`
-
-There is no interaction-mode toggle in project configuration; this single flow
-is used for every gated pause.
 
 ---
 
@@ -306,6 +347,7 @@ Full documentation: [docs/mcp_integration.md](docs/mcp_integration.md).
 | `REDIS_RUN_LEASE_TTL_SECONDS` | Active run lease TTL (seconds) | `300` |
 | `REDIS_RUN_HEARTBEAT_SECONDS` | Lease heartbeat interval (seconds) | `20` |
 | `REDIS_CANCEL_SIGNAL_TTL_SECONDS` | Cancel signal TTL (seconds) | `120` |
+| `REDIS_ATTACHMENT_TTL_SECONDS` | How long extracted attachment text is kept in Redis (seconds). Raise this if sessions span multiple days. | `86400` (24 h) |
 | `DEBUG` | Django debug mode | `True` |
 | `ALLOWED_HOSTS` | Comma-separated allowed hosts | `localhost,127.0.0.1` |
 | `LOG_LEVEL` | Console log level (`DEBUG`/`INFO`/`WARNING`/`ERROR`). `DEBUG` upgrades `OTEL_CONSOLE_EXPORTER` default to `all`. | `INFO` |

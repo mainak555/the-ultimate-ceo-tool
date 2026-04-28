@@ -221,7 +221,8 @@ Run endpoint attachment contract:
   - `task`: optional text (required on first run unless attachments are provided)
   - `attachment_ids`: optional repeated values
 - Behavior:
-  - If attachment IDs are supplied, the server binds them to the new user message and appends an attachment context block (including extracted-text previews when available) before invoking the agent run.
+  - Non-image attachments: text is extracted lazily (Redis-cached, first call downloads from Azure Blob). Full extracted text is appended to the agent task as an `--- Attachments:` block — no truncation.
+  - Image attachments: bytes are downloaded from Azure Blob and passed as `autogen_core.Image` objects inside a `MultiModalMessage` to vision-capable models. Requires `"vision": true` in the model's `agent_models.json` entry.
 
 Attachment upload/content contract:
 

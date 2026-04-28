@@ -106,6 +106,16 @@ def _get_client():
     return _REDIS_CLIENT
 
 
+def get_redis_client():
+    """Return the shared Redis client.
+
+    Exposed for use by other server-layer modules (e.g. ``attachment_service``)
+    so they reuse the same connection pool rather than creating a second one.
+    Raises :class:`SessionCoordinationError` when Redis is unreachable.
+    """
+    return _get_client()
+
+
 @traced_function("agents.session.redis_available")
 def ensure_redis_available() -> bool:
     """Return True when Redis responds to ping; False on any connectivity error."""
@@ -249,6 +259,7 @@ __all__ = [
     "ensure_redis_available",
     "get_heartbeat_interval_seconds",
     "get_instance_id",
+    "get_redis_client",
     "get_run_traceparent",
     "is_cancel_signaled",
     "release_run_lease",

@@ -1,4 +1,27 @@
-"""Attachment upload, extraction, binding, and retrieval helpers."""
+"""Attachment upload, extraction, binding, and retrieval helpers.
+
+Extraction strategy
+-------------------
+Text extraction is **lazy**: nothing is extracted at upload time so the user
+gets an instant response and no CPU is wasted on files that are never sent.
+
+When the first agent run (or any resume) calls
+``build_attachment_context_block``, each non-image attachment's text is
+loaded as follows:
+
+1. Check Redis ``{ns}:attachment:{session_id}:{attachment_id}:text``
+   (TTL = ``REDIS_ATTACHMENT_TTL_SECONDS``, default 24 h).
+2. Cache **HIT** → return text immediately (< 1 ms).
+3. Cache **MISS** → download raw bytes from Azure Blob, extract, store in
+   Redis, return text.  This one-time extraction is done inside
+   ``asyncio.to_thread`` so the event loop is never blocked.
+
+Images are **never** stored in Redis.  Each run/resume downloads image bytes
+directly from blob and wraps them in ``autogen_core.Image`` objects for
+``MultiModalMessage``.  Vision models receive actual pixel data.
+
+MongoDB stores only metadata — no file content ever lands in the database.
+"""
 
 from __future__ import annotations
 
@@ -13,6 +36,7 @@ from uuid import uuid4
 
 from bson import ObjectId
 from bson.errors import InvalidId
+from django.conf import settings
 from django.core.files.uploadedfile import UploadedFile
 
 from core.tracing import traced_function
@@ -25,11 +49,107 @@ logger = logging.getLogger(__name__)
 ATTACHMENTS_COLLECTION = "chat_attachments"
 _MAX_ATTACHMENTS_PER_MESSAGE = 10
 _MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
-_MAX_EXTRACTED_TEXT_CHARS = 6000
+
+# ---------------------------------------------------------------------------
+# Redis cache helpers
+# ---------------------------------------------------------------------------
+
+def _attachment_cache_ttl() -> int:
+    """Return the attachment text cache TTL (minimum 1 h)."""
+    raw = int(getattr(settings, "REDIS_ATTACHMENT_TTL_SECONDS", 86400) or 86400)
+    return max(3600, raw)
+
+
+def _redis_namespace() -> str:
+    ns = (getattr(settings, "REDIS_NAMESPACE", "product_discovery") or "product_discovery").strip()
+    return ns or "product_discovery"
+
+
+def _att_text_key(session_id: str, attachment_id: str) -> str:
+    return f"{_redis_namespace()}:attachment:{session_id}:{attachment_id}:text"
+
+
+def _att_index_key(session_id: str) -> str:
+    """Redis SET key that tracks all attachment_ids cached for a session."""
+    return f"{_redis_namespace()}:attachment:{session_id}:index"
+
+
+def _get_redis():
+    """Return the shared Redis client (reuses agent session_coordination pool).
+
+    Returns ``None`` and logs a warning when Redis is unavailable so callers
+    can fall back to blob-only extraction without crashing.
+    """
+    try:
+        from agents.session_coordination import get_redis_client
+        return get_redis_client()
+    except Exception:
+        logger.warning("attachments.redis_unavailable", exc_info=False)
+        return None
+
+
+def _redis_get_text(session_id: str, attachment_id: str) -> str | None:
+    """Return cached extracted text or ``None`` on miss/error."""
+    try:
+        r = _get_redis()
+        if r is None:
+            return None
+        return r.get(_att_text_key(session_id, attachment_id))
+    except Exception:
+        return None
+
+
+def _redis_set_text(session_id: str, attachment_id: str, text: str) -> None:
+    """Store extracted text in Redis and add attachment_id to the session index."""
+    try:
+        r = _get_redis()
+        if r is None:
+            return
+        ttl = _attachment_cache_ttl()
+        key = _att_text_key(session_id, attachment_id)
+        idx_key = _att_index_key(session_id)
+        pipe = r.pipeline(transaction=False)
+        pipe.setex(key, ttl, text)
+        pipe.sadd(idx_key, attachment_id)
+        pipe.expire(idx_key, ttl)
+        pipe.execute()
+    except Exception:
+        logger.warning(
+            "attachments.redis_write_failed",
+            extra={"session_id": session_id, "attachment_id": attachment_id},
+        )
+
+
+def purge_session_attachment_cache(session_id: str) -> None:
+    """Delete all Redis text-cache keys for a session.
+
+    Called by :func:`delete_session_attachments` so Redis is cleaned up in
+    sync with blob and MongoDB deletion.  Silent on Redis errors.
+    """
+    try:
+        r = _get_redis()
+        if r is None:
+            return
+        idx_key = _att_index_key(session_id)
+        attachment_ids = r.smembers(idx_key) or set()
+        keys_to_delete = [
+            _att_text_key(session_id, aid) for aid in attachment_ids
+        ] + [idx_key]
+        if keys_to_delete:
+            r.delete(*keys_to_delete)
+        logger.info(
+            "attachments.cache_purged",
+            extra={"session_id": session_id, "key_count": len(keys_to_delete)},
+        )
+    except Exception:
+        logger.warning(
+            "attachments.cache_purge_failed",
+            extra={"session_id": session_id},
+        )
 
 _ALLOWED_EXTENSIONS = {
     "png", "jpg", "jpeg", "webp", "gif", "bmp", "svg", "heic", "heif", "tif", "tiff",
-    "pdf", "txt", "md", "csv", "json", "doc", "docx", "ppt", "pptx",
+    "pdf", "txt", "md", "csv", "json", "doc", "docx", "ppt", "pptx", "xls", "xlsx",
 }
 _IMAGE_EXTENSIONS = {
     "png", "jpg", "jpeg", "webp", "gif", "bmp", "svg", "heic", "heif", "tif", "tiff",
@@ -64,7 +184,7 @@ def _extract_text_for_extension(ext: str, raw: bytes) -> str:
             reader = csv.reader(io.StringIO(raw.decode("utf-8", errors="replace")))
             for idx, row in enumerate(reader):
                 rows.append(", ".join(row))
-                if idx >= 50:
+                if idx >= 200:
                     break
             return "\n".join(rows)
         if ext == "pdf":
@@ -74,7 +194,7 @@ def _extract_text_for_extension(ext: str, raw: bytes) -> str:
                 return ""
             reader = PdfReader(io.BytesIO(raw))
             out = []
-            for page in reader.pages[:20]:
+            for page in reader.pages[:50]:
                 out.append(page.extract_text() or "")
             return "\n".join(out)
         if ext == "docx":
@@ -91,11 +211,40 @@ def _extract_text_for_extension(ext: str, raw: bytes) -> str:
                 return ""
             prs = Presentation(io.BytesIO(raw))
             out = []
-            for slide in prs.slides[:30]:
+            for slide in prs.slides[:50]:
                 for shape in slide.shapes:
                     text = getattr(shape, "text", "")
                     if text:
                         out.append(text)
+            return "\n".join(out)
+        if ext == "xlsx":
+            try:
+                import openpyxl
+            except Exception:
+                return ""
+            wb = openpyxl.load_workbook(io.BytesIO(raw), read_only=True, data_only=True)
+            out = []
+            for sheet in wb.worksheets:
+                out.append(f"=== Sheet: {sheet.title} ===")
+                for row in sheet.iter_rows(values_only=True):
+                    row_parts = [str(cell) if cell is not None else "" for cell in row]
+                    if any(p.strip() for p in row_parts):
+                        out.append("\t".join(row_parts))
+            wb.close()
+            return "\n".join(out)
+        if ext == "xls":
+            try:
+                import xlrd
+            except Exception:
+                return ""
+            wb = xlrd.open_workbook(file_contents=raw)
+            out = []
+            for sheet in wb.sheets():
+                out.append(f"=== Sheet: {sheet.name} ===")
+                for row_idx in range(sheet.nrows):
+                    row_parts = [str(sheet.cell_value(row_idx, col)) for col in range(sheet.ncols)]
+                    if any(p.strip() for p in row_parts):
+                        out.append("\t".join(row_parts))
             return "\n".join(out)
     except Exception:
         logger.exception("attachments.extract_failed", extra={"extension": ext})
@@ -169,10 +318,6 @@ def upload_session_attachments(*, session: dict, files: list[UploadedFile]) -> l
             content_type=(uploaded.content_type or "application/octet-stream"),
         )
 
-        extracted = _extract_text_for_extension(ext, raw)
-        if len(extracted) > _MAX_EXTRACTED_TEXT_CHARS:
-            extracted = extracted[:_MAX_EXTRACTED_TEXT_CHARS]
-
         doc = {
             "attachment_id": attachment_id,
             "project_id": project_id,
@@ -185,8 +330,6 @@ def upload_session_attachments(*, session: dict, files: list[UploadedFile]) -> l
             "is_image": ext in _IMAGE_EXTENSIONS,
             "blob_key": key,
             "uploaded_at": _utc_now(),
-            "extracted_text": extracted,
-            "extraction_status": "available" if extracted else "none",
         }
         col.insert_one(doc)
         placeholders.append(_attachment_descriptor(doc))
@@ -237,21 +380,125 @@ def bind_attachments_to_message(*, session_id: str, message_id: str, attachment_
 
 
 def build_attachment_context_block(*, session_id: str, attachment_ids: Iterable[str]) -> str:
+    """Build a text block describing non-image attachments for the agent task.
+
+    Text extraction is lazy-cached in Redis:
+
+    * **Cache hit** — returns immediately (< 1 ms).
+    * **Cache miss** — downloads from Azure Blob, extracts, stores in Redis
+      with ``REDIS_ATTACHMENT_TTL_SECONDS`` TTL, then returns.
+
+    The full extracted text is sent to the agent (no truncation) so the agent
+    can see the complete document.  Redis memory use is bounded by the TTL and
+    by ``REDIS_ATTACHMENT_TTL_SECONDS`` env var (default 24 h).
+
+    Images are excluded here; they are handled separately by
+    :func:`load_images_for_agents` as ``MultiModalMessage`` content.
+    """
     docs = _get_attachment_docs_for_session(session_id, attachment_ids)
     if not docs:
         return ""
 
-    lines = ["", "---", "Attachments Context:"]
+    strategy = build_storage_strategy()
+    lines = ["", "---", "Attachments:"]
+    has_content = False
+
     for d in docs:
-        lines.append(
-            f"- {d.get('filename', 'file')} ({d.get('mime_type', 'application/octet-stream')}, {int(d.get('size_bytes') or 0)} bytes)"
+        if d.get("is_image"):
+            # Images are passed as pixel data in MultiModalMessage, not text.
+            lines.append(f"- [image] {d.get('filename', 'image')} ({d.get('mime_type', 'image/*')}")
+            has_content = True
+            continue
+
+        filename = d.get("filename", "file")
+        ext = (d.get("extension") or "").lower()
+        attachment_id = d.get("attachment_id", "")
+        size_bytes = int(d.get("size_bytes") or 0)
+
+        # 1. Try Redis cache.
+        text = _redis_get_text(session_id, attachment_id)
+        cache_hit = text is not None
+
+        if not cache_hit:
+            # 2. Download from blob and extract.
+            try:
+                raw = strategy.download_bytes(key=d.get("blob_key", ""))
+                text = _extract_text_for_extension(ext, raw)
+            except Exception:
+                logger.exception(
+                    "attachments.extract_on_run_failed",
+                    extra={"session_id": session_id, "attachment_id": attachment_id},
+                )
+                text = ""
+
+            # 3. Populate cache (even for empty text, to avoid repeated blobs
+            #    on subsequent resumes for a genuinely unextractable file).
+            if attachment_id:
+                _redis_set_text(session_id, attachment_id, text or "")
+
+        logger.debug(
+            "attachments.context_block",
+            extra={
+                "session_id": session_id,
+                "attachment_id": attachment_id,
+                "cache_hit": cache_hit,
+                "text_chars": len(text) if text else 0,
+            },
         )
-        extracted = (d.get("extracted_text") or "").strip()
-        if extracted:
-            lines.append("  Extracted text preview:")
-            for row in extracted[:1200].splitlines()[:12]:
-                lines.append(f"  {row}")
+
+        lines.append(f"\n### {filename} ({ext.upper()}, {size_bytes} bytes)")
+        if text and text.strip():
+            lines.append(text.strip())
+        else:
+            lines.append("(no extractable text content)")
+        has_content = True
+
+    if not has_content:
+        return ""
     return "\n".join(lines)
+
+
+def load_images_for_agents(
+    *, session_id: str, attachment_ids: Iterable[str]
+) -> list[tuple[str, bytes, str]]:
+    """Return ``(filename, raw_bytes, mime_type)`` for each image attachment.
+
+    Images are downloaded directly from Azure Blob on every run/resume — they
+    are NOT cached in Redis (raw bytes are too large and Redis is not a blob
+    store).  Each download is a single Azure GET (~50–200 ms).
+
+    Non-image attachments are skipped; their text is handled by
+    :func:`build_attachment_context_block`.
+
+    Download failures are logged and skipped individually so a bad blob never
+    aborts the whole agent run.
+    """
+    docs = _get_attachment_docs_for_session(session_id, attachment_ids)
+    if not docs:
+        return []
+
+    strategy = build_storage_strategy()
+    results: list[tuple[str, bytes, str]] = []
+    for d in docs:
+        if not d.get("is_image"):
+            continue
+        try:
+            raw = strategy.download_bytes(key=d.get("blob_key", ""))
+            results.append((
+                d.get("filename", "image"),
+                raw,
+                d.get("mime_type", "image/png"),
+            ))
+        except Exception:
+            logger.exception(
+                "attachments.load_image_failed",
+                extra={
+                    "session_id": session_id,
+                    "attachment_id": d.get("attachment_id", ""),
+                    "filename": d.get("filename", ""),
+                },
+            )
+    return results
 
 
 def get_attachment_content(*, session_id: str, attachment_id: str) -> tuple[bytes, str, str]:
@@ -278,10 +525,15 @@ def delete_session_attachments(session_id: str) -> None:
     if col.count_documents({"session_id": session_id}, limit=1) == 0:
         return
 
+    # 1. Purge Redis text cache first (uses the index set populated at run time).
+    purge_session_attachment_cache(session_id)
+
+    # 2. Delete Azure Blob objects.
     strategy = build_storage_strategy()
     prefix = f"sessions/{session_id}/"
     deleted_blobs = strategy.delete_prefix(prefix=prefix)
 
+    # 3. Delete MongoDB metadata.
     result = col.delete_many({"session_id": session_id})
 
     logger.info(

@@ -253,6 +253,62 @@ def _enrich_attachments_for_display(session_id, attachments):
     return out
 
 
+def _build_agent_task_for_run(task_text: str, session_id: str, attachment_ids):
+    """Return the task to pass to ``team.run_stream``.
+
+    * No attachments → return ``task_text`` unchanged (plain ``str``).
+    * Images present → download bytes, wrap as ``autogen_core.Image`` objects,
+      and return a ``MultiModalMessage`` whose ``content`` list is
+      ``[task_text, img1, img2, ...]``.  This gives vision-capable models
+      actual pixel data.
+    * Non-image attachments are already incorporated into ``task_text`` via
+      the ``---\\nAttachments:`` block produced by
+      ``build_attachment_context_block``.
+    """
+    if not attachment_ids:
+        return task_text
+
+    try:
+        images = attachment_service.load_images_for_agents(
+            session_id=session_id, attachment_ids=attachment_ids
+        )
+    except Exception:
+        logger.exception("views.load_images_failed", extra={"session_id": session_id})
+        images = []
+
+    if not images:
+        return task_text
+
+    # Build MultiModalMessage — lazy import to avoid cost at module load.
+    try:
+        import PIL.Image
+        from autogen_core import Image as AutoGenImage
+        from autogen_agentchat.messages import MultiModalMessage
+    except Exception:
+        logger.warning(
+            "views.multimodal_import_failed",
+            extra={"session_id": session_id},
+        )
+        return task_text
+
+    content: list = [task_text]
+    for filename, raw, _mime in images:
+        try:
+            pil_img = PIL.Image.open(io.BytesIO(raw))
+            content.append(AutoGenImage(pil_img))
+        except Exception:
+            logger.warning(
+                "views.image_decode_failed",
+                extra={"session_id": session_id, "filename": filename},
+            )
+
+    if len(content) == 1:
+        # All image loads failed — fall back to plain text.
+        return task_text
+
+    return MultiModalMessage(content=content, source="user")
+
+
 def _build_export_meta(project):
     """Build provider metadata for export actions from project integrations."""
     integrations = project.get("integrations") if isinstance(project, dict) else {}
@@ -913,27 +969,37 @@ async def chat_session_run(request, session_id):
                     message_id=human_message_id,
                     attachment_ids=attachment_ids,
                 )
-                task_with_context = task + await asyncio.to_thread(
+                text_with_context = task + await asyncio.to_thread(
                     attachment_service.build_attachment_context_block,
                     session_id=session_id,
                     attachment_ids=attachment_ids,
+                )
+                # Build the actual task for the agent: plain str or MultiModalMessage
+                # when vision images are attached.
+                task_for_agent = await asyncio.to_thread(
+                    _build_agent_task_for_run,
+                    text_with_context,
+                    session_id,
+                    attachment_ids,
                 )
                 attachments_for_display = _enrich_attachments_for_display(session_id, attachments)
                 pending_messages.append({
                     "id": human_message_id,
                     "agent_name": human_name,
                     "role": "user",
-                    "content": task_with_context,
+                    "content": text_with_context,
                     "attachments": attachments_for_display,
                     "timestamp": datetime.now(timezone.utc),  # BSON Date in MongoDB
                 })
-                task = task_with_context
+                task = task_for_agent
+            else:
+                task_for_agent = task
 
             heartbeat_task = asyncio.create_task(_lease_heartbeat(cancel_token))
 
             try:
                 async for msg in team.run_stream(
-                    task=task if task else None,
+                    task=task_for_agent if task_for_agent else None,
                     cancellation_token=cancel_token,
                 ):
                     try:
