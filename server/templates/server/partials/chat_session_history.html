@@ -27,8 +27,8 @@
             <div class="chat-message-attachments">
               {% for att in msg.attachments %}
                 <a class="chat-message-attachment" href="{{ att.content_url }}" target="_blank" rel="noopener noreferrer">
-                  {% if att.is_image and att.thumbnail_url %}
-                    <img class="chat-message-attachment__thumb" src="{{ att.thumbnail_url }}" alt="{{ att.filename }}">
+                  {% if att.thumbnail_url %}
+                    <img class="chat-message-attachment__thumb{% if not att.is_image %} chat-message-attachment__thumb--icon{% endif %}" src="{{ att.thumbnail_url }}" alt="{{ att.filename }}">
                   {% endif %}
                   <span class="chat-message-attachment__name">{{ att.filename }}</span>
                 </a>
@@ -49,8 +49,8 @@
               <div class="chat-message-attachments">
                 {% for att in msg.attachments %}
                   <a class="chat-message-attachment" href="{{ att.content_url }}" target="_blank" rel="noopener noreferrer">
-                    {% if att.is_image and att.thumbnail_url %}
-                      <img class="chat-message-attachment__thumb" src="{{ att.thumbnail_url }}" alt="{{ att.filename }}">
+                    {% if att.thumbnail_url %}
+                      <img class="chat-message-attachment__thumb{% if not att.is_image %} chat-message-attachment__thumb--icon{% endif %}" src="{{ att.thumbnail_url }}" alt="{{ att.filename }}">
                     {% endif %}
                     <span class="chat-message-attachment__name">{{ att.filename }}</span>
                   </a>

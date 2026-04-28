@@ -87,11 +87,25 @@ document.addEventListener("DOMContentLoaded", function () {
     return (n / (1024 * 1024)).toFixed(1) + " MB";
   }
 
+  var _FILE_ICON_EXTS = {
+    pdf: 1, doc: 1, docx: 1, xls: 1, xlsx: 1, ppt: 1, pptx: 1,
+    csv: 1, txt: 1, json: 1, xml: 1, md: 1,
+  };
+
+  function _iconUrlForFile(filename) {
+    var ext = (filename || "").split(".").pop().toLowerCase();
+    var name = _FILE_ICON_EXTS[ext] ? ext : "document";
+    return "/static/server/assets/icons/file-" + name + ".svg";
+  }
+
   function attachmentChipHtml(att, target, index) {
     var name = escapeHtml(att.filename || "file");
     var url = att.content_url || "";
-    var thumb = (att.is_image && att.thumbnail_url)
-      ? '<img class="chat-attachment-chip__thumb" src="' + att.thumbnail_url + '" alt="' + name + '">'
+    var iconCls = att.is_image
+      ? "chat-attachment-chip__thumb"
+      : "chat-attachment-chip__thumb chat-attachment-chip__thumb--icon";
+    var thumb = att.thumbnail_url
+      ? '<img class="' + iconCls + '" src="' + att.thumbnail_url + '" alt="' + name + '">'
       : "";
     var openTag = url
       ? '<a class="chat-attachment-chip__file" href="' + url + '" target="_blank" rel="noopener noreferrer">'
@@ -128,13 +142,14 @@ document.addEventListener("DOMContentLoaded", function () {
   }
 
   function toUploadRecord(file) {
+    var isImg = /^image\//i.test(file.type || "");
     return {
       id: "",
       filename: file.name,
       mime_type: file.type || "application/octet-stream",
       size_bytes: file.size || 0,
-      is_image: /^image\//i.test(file.type || ""),
-      thumbnail_url: "",
+      is_image: isImg,
+      thumbnail_url: isImg ? "" : _iconUrlForFile(file.name),
       content_url: "",
       _file: file,
     };
@@ -171,8 +186,11 @@ document.addEventListener("DOMContentLoaded", function () {
     list.forEach(function (att) {
       var name = escapeHtml(att.filename || "file");
       var url = att.content_url || "";
-      var thumb = (att.is_image && att.thumbnail_url)
-        ? '<img class="chat-message-attachment__thumb" src="' + att.thumbnail_url + '" alt="' + name + '">'
+      var iconCls = att.is_image
+        ? "chat-message-attachment__thumb"
+        : "chat-message-attachment__thumb chat-message-attachment__thumb--icon";
+      var thumb = att.thumbnail_url
+        ? '<img class="' + iconCls + '" src="' + att.thumbnail_url + '" alt="' + name + '">'
         : "";
       html += '<a class="chat-message-attachment" href="' + url + '" target="_blank" rel="noopener noreferrer">'
         + thumb

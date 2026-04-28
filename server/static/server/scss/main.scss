@@ -979,6 +979,12 @@ select.input {
   object-fit: cover;
   border-radius: $radius;
   border: 1px solid $color-border;
+
+  &--icon {
+    object-fit: contain;
+    padding: 0.1rem;
+    border: none;
+  }
 }
 
 .chat-attachment-chip__file {
@@ -1044,6 +1050,14 @@ select.input {
   object-fit: cover;
   border-radius: $radius;
   border: 1px solid $color-border;
+
+  &--icon {
+    width: 1.8rem;
+    height: 1.8rem;
+    object-fit: contain;
+    padding: 0.1rem;
+    border: none;
+  }
 }
 
 .chat-message-attachment__name {
