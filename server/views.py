@@ -225,6 +225,12 @@ def _parse_attachment_ids(post_data):
     return clean
 
 
+_ATTACHMENT_ICON_EXTENSIONS = {
+    "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx",
+    "csv", "txt", "json", "xml", "md",
+}
+
+
 def _enrich_attachments_for_display(session_id, attachments):
     """Attach session-scoped URLs for attachment previews/downloads."""
     out = []
@@ -239,6 +245,10 @@ def _enrich_attachments_for_display(session_id, attachments):
         row["content_url"] = url
         if row.get("is_image"):
             row["thumbnail_url"] = url
+        else:
+            ext = (row.get("extension") or "").lower()
+            icon = ext if ext in _ATTACHMENT_ICON_EXTENSIONS else "document"
+            row["thumbnail_url"] = f"/static/server/assets/icons/file-{icon}.svg"
         out.append(row)
     return out
 
@@ -722,13 +732,14 @@ async def chat_session_run(request, session_id):
     if is_first_run and not task and not attachment_ids:
         return _json_error("'task' is required to start a conversation.", 400)
 
-    # Single-assistant chat mode: empty Continue is invalid (no new context for agent)
+    # Single-assistant chat mode: empty Continue is invalid (no new context for agent).
+    # Attachments alone are not sufficient — a text message is required.
     is_single_assistant_gate = (
         project.get("human_gate", {}).get("enabled", False)
         and len(project.get("agents") or []) == 1
     )
-    if is_single_assistant_gate and not is_first_run and not task and not attachment_ids:
-        return _json_error("A message or attachment is required to continue.", 400)
+    if is_single_assistant_gate and not is_first_run and not task:
+        return _json_error("A message is required to continue.", 400)
 
     from agents.session_coordination import (
         SessionCoordinationError,

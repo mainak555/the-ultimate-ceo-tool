@@ -1753,24 +1753,45 @@ select.input {
     line-height: 1.5;
   }
 
-  &__textarea {
-    width: 100%;
+  // Compose-style bordered row: [+ attach] [textarea] — mirrors .chat-input-row
+  &__input-row {
+    display: flex;
+    align-items: flex-end;
+    gap: $space-sm;
+    background: $color-surface;
+    border: 1px solid $color-border;
+    border-radius: $radius;
+    padding: $space-xs $space-sm;
     margin-bottom: $space-sm;
-    resize: vertical;
+
+    &:focus-within {
+      border-color: $color-primary;
+      box-shadow: 0 0 0 2px rgba($color-primary, 0.12);
+    }
+  }
+
+  &__textarea {
+    flex: 1;
+    border: none;
+    background: transparent;
+    resize: none;
     font-size: $font-size-base;
+    color: $color-text;
+    line-height: 1.5;
+    min-height: 4.5rem;   // ~3 rows
+    max-height: 10rem;
+    overflow-y: auto;
+    padding: 2px 0;
+    font-family: $font-family;
+
+    &:focus { outline: none; }
+    &::placeholder { color: $color-text-muted; }
   }
 
   &__decision-row {
     display: flex;
     gap: $space-sm;
     flex-wrap: wrap;
-    margin-bottom: $space-sm;
-  }
-
-  &__attachment-row {
-    display: flex;
-    align-items: center;
-    gap: $space-sm;
     margin-bottom: $space-sm;
   }
 
@@ -1787,6 +1808,16 @@ select.input {
 
 .human-gate-btn.is-active {
   box-shadow: 0 0 0 2px rgba($color-primary, 0.22);
+}
+
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  25%       { transform: translateX(-4px); }
+  75%       { transform: translateX(4px); }
+}
+
+.input--shake {
+  animation: shake 0.3s ease;
 }
 
 // ---------------------------------------------------------------------------

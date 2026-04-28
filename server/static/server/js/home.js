@@ -400,15 +400,16 @@ document.addEventListener("DOMContentLoaded", function () {
   }
 
   // Re-evaluate Continue button enabled state for single-assistant chat mode.
+  // Text is ALWAYS required; attachments alone are not sufficient.
   function _evalGateContinue(panel) {
     if (!panel || panel.dataset.chatMode !== "single_assistant") return;
+    // Never re-enable once a submit is in-flight (panel.dataset.submitting="1").
+    // The panel is removed on success; state is restored on failure.
+    if (panel.dataset.submitting === "1") return;
     var ta = panel.querySelector(".human-gate-panel__textarea");
-    var state = getGateState(panel);
-    var hasContent = (ta && ta.value.trim().length > 0)
-      || state.pending.length > 0
-      || state.uploaded.length > 0;
+    var hasText = ta && ta.value.trim().length > 0;
     var continueBtn = panel.querySelector(".human-gate-btn--continue");
-    if (continueBtn) continueBtn.disabled = !hasContent;
+    if (continueBtn) continueBtn.disabled = !hasText;
   }
 
   function renderGateAttachments(panel) {
@@ -615,9 +616,9 @@ document.addEventListener("DOMContentLoaded", function () {
       + '<button class="btn btn--success human-gate-btn human-gate-btn--approve">Approve</button>'
       + '<button class="btn btn--warning human-gate-btn human-gate-btn--reject">Reject</button>'
       + '</div>'
-      + '<textarea class="input input--textarea human-gate-panel__textarea" rows="3" placeholder="' + textareaPlaceholder + '"></textarea>'
-      + '<div class="human-gate-panel__attachment-row">'
-      + '<button class="btn btn--secondary human-gate-btn human-gate-btn--attach" type="button">Attach files</button>'
+      + '<div class="human-gate-panel__input-row">'
+      + '<button class="btn btn--secondary human-gate-btn human-gate-btn--attach chat-attach-btn" type="button" title="Attach files">+</button>'
+      + '<textarea class="human-gate-panel__textarea" rows="3" placeholder="' + textareaPlaceholder + '"></textarea>'
       + '<input class="human-gate-panel__file-input" type="file" hidden multiple>'
       + '</div>'
       + '<div class="chat-attachment-list human-gate-panel__attachment-list" hidden></div>'
@@ -827,6 +828,9 @@ document.addEventListener("DOMContentLoaded", function () {
       if (!text && !hasAttachments) return;
 
       function runWithSession(sessionId) {
+        // Disable Send immediately to prevent double-submit during the async upload.
+        // chatInput stays enabled so the user can keep typing.
+        chatSendBtn.disabled = true;
         return ensureComposeAttachmentsUploaded(sessionId).then(function (attachmentIds) {
           var attachmentsForBubble = composeUploaded.slice();
           appendHumanBubble(text || "Attached files", attachmentsForBubble);
@@ -835,6 +839,10 @@ document.addEventListener("DOMContentLoaded", function () {
           chatInput.focus();
           clearComposeAttachments();
           startRun(text, attachmentIds);
+        }).catch(function (err) {
+          // Restore Send so the user can retry.
+          chatSendBtn.disabled = false;
+          appendBubble('<div class="chat-bubble chat-bubble--error">Error: ' + err.message + '</div>');
         });
       }
 
@@ -1034,8 +1042,21 @@ document.addEventListener("DOMContentLoaded", function () {
     } else if (e.target.closest(".human-gate-btn--reject")) {
       setGateDecision(panel, "REJECTED");
     } else if (e.target.closest(".human-gate-btn--continue")) {
+      var continueBtn = panel.querySelector(".human-gate-btn--continue");
       var ta = panel.querySelector(".human-gate-panel__textarea");
       var text = ta ? ta.value.trim() : "";
+      // Text is mandatory for ALL gate modes — attachments alone are not enough.
+      // Approve/Reject buttons prepend their decision to the textarea, satisfying this.
+      if (!text) {
+        if (ta) { ta.focus(); ta.classList.add("input--shake"); setTimeout(function () { ta.classList.remove("input--shake"); }, 400); }
+        return;
+      }
+      // Prevent double-submit while an async file upload is in-flight.
+      // Without this guard, clicking Continue twice (or clicking during upload)
+      // fires multiple appendHumanBubble + sendRespond calls.
+      if (panel.dataset.submitting === "1") return;
+      panel.dataset.submitting = "1";
+      if (continueBtn) continueBtn.disabled = true;
       ensureGateAttachmentsUploaded(panel, sessionId).then(function (attachmentIds) {
         var state = getGateState(panel);
         var bubbleAttachments = state.uploaded.slice();
@@ -1049,6 +1070,9 @@ document.addEventListener("DOMContentLoaded", function () {
           appendBubble('<div class="chat-bubble chat-bubble--error">Error: ' + err.message + '</div>');
         });
       }).catch(function (err) {
+        // Upload failed — restore interactive state so the user can retry.
+        panel.dataset.submitting = "";
+        if (continueBtn) continueBtn.disabled = false;
         appendBubble('<div class="chat-bubble chat-bubble--error">Error: ' + err.message + '</div>');
       });
     } else if (e.target.closest(".human-gate-btn--stop")) {

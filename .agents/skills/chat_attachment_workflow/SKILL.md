@@ -9,13 +9,13 @@ description: Implement and maintain chat attachment upload/bind/render/delete be
 Keep chat attachment behavior consistent across backend, frontend, and docs.
 
 ## Required Contracts
-1. Storage key prefix is always `sessions/{session_id}/...`.
+1. Storage key format is always `sessions/{session_id}/attachments/{attachment_id}/{filename}` — flat, permanent, no `message_id` segment. The key is assigned at upload time and is never renamed at bind.
 2. Attachment metadata must include `session_id` and must be validated on every read/bind operation.
 3. Session deletion must remove both blob bytes and metadata rows.
 4. Azure auth uses `AZURE_STORAGE_CONTAINER_SAS_URL` (container SAS URL with query token), not account connection strings.
 5. Main chat composer and HITL gate input must both support attach button, drag/drop, and paste.
 6. HITL notes and user messages are rendered as markdown in both live and persisted history.
-7. Image attachments must render thumbnails in history; non-image attachments render filename links.
+7. Image attachments must render thumbnails (the content URL) in history. Non-image attachments must render a per-extension SVG icon from `/static/server/assets/icons/file-{ext}.svg`, falling back to `file-document.svg` for unrecognised extensions. The `_enrich_attachments_for_display` function in `server/views.py` owns both mappings; adding a new allowed extension also requires adding its SVG icon.
 
 ## Backend Pattern
 1. Use Strategy + Factory for storage provider selection.
@@ -40,3 +40,6 @@ Keep chat attachment behavior consistent across backend, frontend, and docs.
 4. Session delete path performs prefix cleanup and metadata cleanup.
 5. API/UI/DB docs and README are updated in the same change.
 6. SAS token scope includes needed blob permissions (read/write/create/list/delete) for upload, content fetch, and session cleanup.
+7. Compose Send button is disabled immediately on click and re-enabled only on upload/send failure; `chatInput` stays editable throughout.
+8. HITL gate Continue button must set `panel.dataset.submitting="1"` and `continueBtn.disabled=true` before the async upload starts; `_evalGateContinue` must bail out if `panel.dataset.submitting==="1"` so an in-flight upload cannot re-enable the button.
+9. HITL gate Attach button uses class `chat-attach-btn` (circular, 2.25rem) rather than `btn--secondary` with text label, matching the compose-area attach button style.

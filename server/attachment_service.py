@@ -117,8 +117,18 @@ def _validate_files(files: list[UploadedFile]) -> None:
             raise ValueError(f"File '{item.name}' exceeds 20 MB limit.")
 
 
-def _build_blob_key(*, session_id: str, message_id: str, attachment_id: str, filename: str) -> str:
-    return f"sessions/{session_id}/messages/{message_id}/attachments/{attachment_id}/{filename}"
+def _build_blob_key(*, session_id: str, attachment_id: str, filename: str) -> str:
+    """Stable, permanent blob key for this attachment.
+
+    Format: ``sessions/{session_id}/attachments/{attachment_id}/{filename}``
+
+    The key has no message/discussion segment because those IDs are unknown at
+    upload time (attachments are staged before a message is persisted).
+    ``get_attachment_content`` looks up the key from MongoDB, so the path shape
+    only matters for Azure prefix-based cleanup (``delete_session_attachments``
+    uses the ``sessions/{session_id}/`` prefix which still matches).
+    """
+    return f"sessions/{session_id}/attachments/{attachment_id}/{filename}"
 
 
 def _attachment_descriptor(doc: dict) -> dict:
@@ -146,10 +156,8 @@ def upload_session_attachments(*, session: dict, files: list[UploadedFile]) -> l
         filename = _clean_filename(uploaded.name)
         ext = _file_ext(filename)
         attachment_id = str(uuid4())
-        message_id = str(uuid4())
         key = _build_blob_key(
             session_id=session_id,
-            message_id=message_id,
             attachment_id=attachment_id,
             filename=filename,
         )
@@ -170,7 +178,6 @@ def upload_session_attachments(*, session: dict, files: list[UploadedFile]) -> l
             "project_id": project_id,
             "session_id": session_id,
             "message_id": None,
-            "staging_message_id": message_id,
             "filename": filename,
             "extension": ext,
             "mime_type": uploaded.content_type or "application/octet-stream",

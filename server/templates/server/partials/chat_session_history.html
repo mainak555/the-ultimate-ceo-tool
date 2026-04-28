@@ -101,7 +101,7 @@
 {% else %}
 {% if session.status == "awaiting_input" %}
 {% if project %}
-  <div class="human-gate-panel" data-session-id="{{ session.session_id }}">
+  <div class="human-gate-panel" data-session-id="{{ session.session_id }}"{% if project.agents|length == 1 %} data-chat-mode="single_assistant"{% endif %}>
     {% if project.agents|length == 1 %}
     <div class="human-gate-panel__prompt">
       &#x1F464; <strong>{{ project.human_gate.name }}</strong> &mdash; Round {{ session.current_round }} complete.
@@ -117,16 +117,16 @@
       <button class="btn btn--success human-gate-btn human-gate-btn--approve">&#x2705; Approve</button>
       <button class="btn btn--warning human-gate-btn human-gate-btn--reject">&#x26A0; Reject</button>
     </div>
-    <textarea class="input input--textarea human-gate-panel__textarea"
-              rows="3"
-              placeholder="Optional details to send to agents..."></textarea>
-    <div class="human-gate-panel__attachment-row">
-      <button class="btn btn--secondary human-gate-btn human-gate-btn--attach" type="button">Attach files</button>
+    <div class="human-gate-panel__input-row">
+      <button class="btn btn--secondary human-gate-btn human-gate-btn--attach chat-attach-btn" type="button" title="Attach files">+</button>
+      <textarea class="human-gate-panel__textarea"
+                rows="3"
+                placeholder="{% if project.agents|length == 1 %}Enter your next message (required)...{% else %}Optional details to send to agents...{% endif %}"></textarea>
       <input class="human-gate-panel__file-input" type="file" hidden multiple>
     </div>
     <div class="chat-attachment-list human-gate-panel__attachment-list" hidden></div>
     <div class="human-gate-panel__actions">
-      <button class="btn btn--primary human-gate-btn human-gate-btn--continue">&#x27A1; Continue</button>
+      <button class="btn btn--primary human-gate-btn human-gate-btn--continue"{% if project.agents|length == 1 %} disabled{% endif %}>&#x27A1; Continue</button>
       <button class="btn btn--danger human-gate-btn human-gate-btn--stop">&#x1F6D1; Stop</button>
     </div>
   </div>
