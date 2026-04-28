@@ -385,8 +385,13 @@ def build_attachment_context_block(*, session_id: str, attachment_ids: Iterable[
     Text extraction is lazy-cached in Redis:
 
     * **Cache hit** — returns immediately (< 1 ms).
-    * **Cache miss** — downloads from Azure Blob, extracts, stores in Redis
-      with ``REDIS_ATTACHMENT_TTL_SECONDS`` TTL, then returns.
+    * **Cache miss + success** — downloads from Azure Blob, extracts, stores in
+      Redis with ``REDIS_ATTACHMENT_TTL_SECONDS`` TTL (default 24 h), then
+      returns.  Genuinely empty documents (e.g. scanned PDFs with no text
+      layer) are cached so repeated runs avoid repeated blob downloads.
+    * **Cache miss + exception** — blob download or extraction error: the
+      result is **not** written to Redis so the next run retries the
+      extraction.  Only durable successes (including empty text) are cached.
 
     The full extracted text is sent to the agent (no truncation) so the agent
     can see the complete document.  Redis memory use is bounded by the TTL and
@@ -406,7 +411,7 @@ def build_attachment_context_block(*, session_id: str, attachment_ids: Iterable[
     for d in docs:
         if d.get("is_image"):
             # Images are passed as pixel data in MultiModalMessage, not text.
-            lines.append(f"- [image] {d.get('filename', 'image')} ({d.get('mime_type', 'image/*')}")
+            lines.append(f"- [image] {d.get('filename', 'image')} ({d.get('mime_type', 'image/*')})")
             has_content = True
             continue
 
@@ -418,6 +423,7 @@ def build_attachment_context_block(*, session_id: str, attachment_ids: Iterable[
         # 1. Try Redis cache.
         text = _redis_get_text(session_id, attachment_id)
         cache_hit = text is not None
+        extract_failed = False
 
         if not cache_hit:
             # 2. Download from blob and extract.
@@ -430,10 +436,14 @@ def build_attachment_context_block(*, session_id: str, attachment_ids: Iterable[
                     extra={"session_id": session_id, "attachment_id": attachment_id},
                 )
                 text = ""
+                extract_failed = True
 
-            # 3. Populate cache (even for empty text, to avoid repeated blobs
-            #    on subsequent resumes for a genuinely unextractable file).
-            if attachment_id:
+            # 3. Populate cache only when extraction did not raise.
+            #    Exception-caused empties are NOT cached so the next run
+            #    retries the blob download / extraction (e.g. transient Azure
+            #    Blob timeout or pypdf error).  Genuinely empty documents are
+            #    cached normally to avoid repeated blob downloads.
+            if attachment_id and not extract_failed:
                 _redis_set_text(session_id, attachment_id, text or "")
 
         logger.debug(
@@ -442,9 +452,23 @@ def build_attachment_context_block(*, session_id: str, attachment_ids: Iterable[
                 "session_id": session_id,
                 "attachment_id": attachment_id,
                 "cache_hit": cache_hit,
+                "extract_failed": extract_failed,
                 "text_chars": len(text) if text else 0,
             },
         )
+
+        if not (text and text.strip()):
+            logger.warning(
+                "attachments.extract_empty",
+                extra={
+                    "session_id": session_id,
+                    "attachment_id": attachment_id,
+                    "filename": filename,
+                    "ext": ext,
+                    "cache_hit": cache_hit,
+                    "extract_failed": extract_failed,
+                },
+            )
 
         lines.append(f"\n### {filename} ({ext.upper()}, {size_bytes} bytes)")
         if text and text.strip():

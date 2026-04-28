@@ -210,11 +210,11 @@ Cross-references: [docs/API.md](API.md) (form fields + HTTP schema), [AGENTS.md]
   "mime_type": "string",
   "size_bytes": 0,
   "is_image": true,
-  "blob_key": "sessions/<session_id>/messages/<message_id>/attachments/<attachment_id>/<filename>",
+  "blob_key": "sessions/<session_id>/attachments/<attachment_id>/<filename>",
   "uploaded_at": "datetime (UTC BSON Date)",
-  "bound_at": "datetime (UTC BSON Date)",
-  "extracted_text": "string",
-  "extraction_status": "none | available"
+  "bound_at": "datetime (UTC BSON Date)"
+  // NOTE: extracted_text and extraction_status are NEVER written here.
+  // Text extraction is lazy-cached in Redis only; see attachment_storage.md.
 }
 ```
 
@@ -230,6 +230,7 @@ Attachment storage/delete contract:
 ### Discussion Export Persistence Rule
 
 - Raw reference content for export modals is always `discussions[].content`.
+- For human (`role=user`) messages, `discussions[].content` stores **only the raw user-typed text** — never the `text_with_context` string that includes extracted PDF/DOCX/etc. attachment content. Extracted attachment text is a runtime artefact rebuilt from Blob → Redis on each run.
 - Export payload persistence is provider-scoped under `discussions[].exports.<provider>`.
 - This separation allows re-extract/save/push workflows without mutating source discussion text.
 
@@ -284,7 +285,7 @@ The `integrations` root never holds an `export_agent` field in new documents.
 |-------|------|------------|
 | `project_name` | str | non-empty, unique in collection |
 | `objective` | str | any string (may be empty) |
-| `agents[].name` | str | valid Python identifier after sanitisation |
+| `agents[].name` | str | valid Python identifier after sanitization |
 | `agents[].model` | str | must be in `agent_models.json` |
 | `agents[].system_prompt` | str | non-empty |
 | `agents[].temperature` | float | 0.0 ≤ value ≤ 2.0 |

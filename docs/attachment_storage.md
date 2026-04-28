@@ -149,7 +149,11 @@ sequenceDiagram
             attachment_service->>AzureBlob: download_bytes(blob_key)
             AzureBlob-->>attachment_service: raw bytes
             attachment_service->>attachment_service: _extract_text_for_extension(ext, bytes)
-            attachment_service->>Redis: SET text + index with TTL
+            alt extraction succeeded (no exception)
+                attachment_service->>Redis: SET text + index with TTL
+            else extraction raised exception (transient failure)
+                attachment_service->>attachment_service: skip SET — next run retries
+            end
         end
     end
     attachment_service-->>views.py: "--- Attachments: …" context block
@@ -241,3 +245,12 @@ Delete order is always **Redis → Blob → MongoDB**. Blob deletion always runs
 4. Delete order is always: **Redis → Blob → MongoDB**.
 5. `message_id` in `chat_attachments` is `null` until `bind_attachments_to_message()`
    is called; unbound rows are still cleaned up on session delete.
+6. **Extraction failures are never cached.** If `build_attachment_context_block` raises
+   an exception during blob download or text extraction, the result is not written to
+   Redis so the next run retries. Genuinely empty documents (e.g. scanned PDFs with no
+   text layer) are cached normally to avoid repeated blob downloads.
+7. **`discussions[].content` for user messages stores raw task text only** — never the
+   `text_with_context` string that includes the extracted attachment block. Extracted
+   attachment text is rebuilt at runtime from Blob → Redis; persisting it in MongoDB
+   would duplicate ephemeral data, inflate document size, and corrupt the export
+   reference text used by Trello/Jira modals.

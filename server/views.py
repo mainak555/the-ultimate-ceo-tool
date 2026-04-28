@@ -1038,7 +1038,17 @@ async def chat_session_run(request, session_id):
 
             async def checkpoint_state() -> None:
                 state = await save_team_state(team)
-                await asyncio.to_thread(services.save_agent_state, session_id, state)
+                try:
+                    await asyncio.to_thread(services.save_agent_state, session_id, state)
+                except ValueError as _exc:
+                    # State exceeds the MongoDB document-size budget (typically
+                    # because image bytes are embedded in the AutoGen message
+                    # history).  Log a warning and continue — the current run
+                    # completes normally; only session resume will be unavailable.
+                    logger.warning(
+                        "agents.session.state_too_large",
+                        extra={"session_id": session_id, "error": str(_exc)},
+                    )
 
             # Persist the human's message (initial task or gate notes) to discussions.
             if task or attachment_ids:
@@ -1068,7 +1078,11 @@ async def chat_session_run(request, session_id):
                     "id": human_message_id,
                     "agent_name": human_name,
                     "role": "user",
-                    "content": text_with_context,
+                    # Store only the user's raw typed text — not the attachment
+                    # context block.  Extracted attachment text is an ephemeral
+                    # runtime artefact built from Blob → Redis on each run; it
+                    # must not be persisted in discussions[].
+                    "content": task,
                     "attachments": attachments_for_display,
                     "timestamp": datetime.now(timezone.utc),  # BSON Date in MongoDB
                 })

@@ -72,7 +72,14 @@ class ProjectDeletionBlocked(ValueError):
     """Raised when a project cannot be deleted due to dependent records."""
 
 
-MAX_AGENT_STATE_BYTES = 900_000
+from django.conf import settings as _django_settings
+
+# Read from settings (env var MAX_AGENT_STATE_BYTES, default 1 MB).
+# Agent state lives inside the chat_sessions MongoDB document (16 MB hard limit
+# shared with discussions[]).  AutoGen serializes the full message history
+# including base64 image bytes, so image-heavy sessions can exceed the default;
+# raise MAX_AGENT_STATE_BYTES in the environment for those deployments.
+MAX_AGENT_STATE_BYTES: int = getattr(_django_settings, "MAX_AGENT_STATE_BYTES", 1_000_000)
 
 
 def _coerce_temperature(value):
@@ -862,7 +869,10 @@ def save_agent_state(session_id, state):
         raise TypeError(f"JSON format error: {e}")
     
     if payload_size > MAX_AGENT_STATE_BYTES:
-        raise ValueError("Agent state is too large to persist.")
+        raise ValueError(
+            f"Agent state is too large to persist "
+            f"({payload_size:,} bytes; limit {MAX_AGENT_STATE_BYTES:,} bytes)."
+        )
 
     col = get_collection(CHAT_SESSIONS_COLLECTION)
     result = col.update_one({"_id": oid}, {"$set": {"agent_state": payload}})

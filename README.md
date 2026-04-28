@@ -110,8 +110,13 @@ lazily the first time an agent run references the attachment:
 1. The app checks Redis for a cached copy
    (`REDIS_ATTACHMENT_TTL_SECONDS`, default 24 h).
 2. Cache **hit** → text returned immediately (< 1 ms).
-3. Cache **miss** → bytes downloaded from Azure Blob, text extracted, stored
-   in Redis, then returned. Full content is passed — no truncation.
+3. Cache **miss + success** → bytes downloaded from Azure Blob, text extracted,
+   stored in Redis, then returned. Full content is passed — no truncation.
+   Genuinely empty documents (e.g. scanned PDFs with no text layer) are cached
+   to avoid repeated blob downloads.
+4. Cache **miss + exception** → blob download or extraction error: result is
+   **not** stored in Redis. The next agent run retries the extraction, so
+   transient failures do not become permanent.
 
 For Excel files, every sheet is extracted with its name as a heading and
 rows formatted as tab-separated values, preserving the tabular structure
@@ -348,6 +353,7 @@ Full documentation: [docs/mcp_integration.md](docs/mcp_integration.md).
 | `REDIS_RUN_HEARTBEAT_SECONDS` | Lease heartbeat interval (seconds) | `20` |
 | `REDIS_CANCEL_SIGNAL_TTL_SECONDS` | Cancel signal TTL (seconds) | `120` |
 | `REDIS_ATTACHMENT_TTL_SECONDS` | How long extracted attachment text is kept in Redis (seconds). Raise this if sessions span multiple days. | `86400` (24 h) |
+| `MAX_AGENT_STATE_BYTES` | Maximum byte size of serialised AutoGen agent state stored in MongoDB. Raise for long sessions with many attachments or embedded images. MongoDB's document limit is 16 MB (shared with `discussions[]`). | `1000000` (1 MB) |
 | `DEBUG` | Django debug mode | `True` |
 | `ALLOWED_HOSTS` | Comma-separated allowed hosts | `localhost,127.0.0.1` |
 | `LOG_LEVEL` | Console log level (`DEBUG`/`INFO`/`WARNING`/`ERROR`). `DEBUG` upgrades `OTEL_CONSOLE_EXPORTER` default to `all`. | `INFO` |

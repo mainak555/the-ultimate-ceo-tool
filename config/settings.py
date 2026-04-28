@@ -52,6 +52,10 @@ REDIS_CANCEL_SIGNAL_TTL_SECONDS = int(os.getenv("REDIS_CANCEL_SIGNAL_TTL_SECONDS
 # How long extracted attachment text is kept in Redis (seconds). Default 24 h.
 # Raise this if sessions span multiple days; lower it to reduce Redis memory use.
 REDIS_ATTACHMENT_TTL_SECONDS = int(os.getenv("REDIS_ATTACHMENT_TTL_SECONDS", "86400"))
+# Maximum byte size of a serialized AutoGen agent state that can be persisted
+# inside the chat_sessions MongoDB document (16 MB limit shared with discussions[]).
+# Raise for long sessions with many attachments; lower to reduce document size.
+MAX_AGENT_STATE_BYTES = int(os.getenv("MAX_AGENT_STATE_BYTES", "1000000"))  # default 1 MB
 
 # ---------------------------------------------------------------------------
 # Application definition
