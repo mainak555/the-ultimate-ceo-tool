@@ -35,6 +35,33 @@ App will be on http://localhost:8000, MCP gateway on http://localhost:9000.
 Redis is started by default at `redis://redis:6379/0` and is required for
 active-session run coordination (distributed lease + cancel signaling).
 
+## Multi-replica scaling — session affinity required
+
+The app's team cache (`_TEAM_CACHE`) is process-local. If you scale the `app`
+service to multiple replicas (`docker compose up --scale app=N`) you must put
+a sticky-session reverse proxy in front of it so each `session_id` always
+routes to the same container.
+
+**Nginx upstream example** (add an `nginx` service to the compose file):
+
+```nginx
+upstream app_backend {
+    ip_hash;  # or: hash $cookie_sessionid consistent;
+    server app_1:8000;
+    server app_2:8000;
+}
+```
+
+Without stickiness a HITL resume request may land on a different replica,
+triggering a cache miss — the team is rebuilt from MongoDB `agent_state` and
+the in-progress turn counter resets.
+
+Cross-instance **cancel** works without stickiness: the stop endpoint writes a
+Redis key; the owning container polls it via `session_coordination.py` and
+calls `cancel_team()` locally.
+
+The default single-replica `docker compose up` needs no changes.
+
 ## With a local Mongo (dev only)
 
 ```powershell

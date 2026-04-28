@@ -7,6 +7,29 @@ built-in conversation history is preserved for multi-round human-gated runs.
 Cache is process-local. On server restart a session in "awaiting_input" will
 rebuild the team; the full prior discussion from MongoDB is passed as the
 initial task so agents retain context.
+
+## Horizontal scaling constraint
+
+_TEAM_CACHE and _CANCEL_TOKENS are process-local dicts. AutoGen team objects
+(RoundRobinGroupChat / SelectorGroupChat) hold live asyncio tasks, agent
+instances, and MCP workbench connections — they cannot be serialised to Redis
+or any shared store. Therefore:
+
+  * Cross-instance run ownership and cancel signalling use Redis exclusively
+    via agents/session_coordination.py (lease key + cancel key). The team
+    object stays in-process.
+  * Multi-replica deployments MUST enable session-affinity (sticky sessions)
+    at the load balancer / ingress so that every SSE stream and HITL resume
+    request for a given session_id is routed to the same container instance.
+  * Crash / restart recovery: if the owning container dies the session is
+    rebuilt on the next request (cache miss). MongoDB agent_state provides
+    the durable checkpoint for load_state() restore; the Redis lease is
+    expired by TTL so the new instance can acquire ownership.
+  * Memcached or Redis cannot replace this cache — they cannot hold live
+    Python objects with open asyncio tasks or network sockets.
+
+See docs/agent_teams.md §"Horizontal Scaling" and the relevant deployment
+README for ingress / load-balancer sticky-session configuration.
 """
 
 from __future__ import annotations

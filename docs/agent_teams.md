@@ -183,6 +183,43 @@ session_id → CancellationToken
 Redis coordination keys are ephemeral and are not used for resume state.
 Durable resume data always comes from MongoDB `chat_sessions.agent_state`.
 
+### Horizontal scaling
+
+`_TEAM_CACHE` and `_CANCEL_TOKENS` are **process-local**. AutoGen team objects
+contain live asyncio tasks, agent instances, and MCP workbench connections —
+they cannot be serialised to Redis, Memcached, or any shared store.
+
+**Required: session-affinity (sticky sessions) at the load balancer / ingress.**
+
+Every SSE streaming request and every HITL resume POST for a given `session_id`
+must be routed to the same container instance. Without stickiness, a resume
+request landing on a different replica causes a cache miss, the team is rebuilt
+from scratch, and the in-progress turn counter resets.
+
+| Deployment | Sticky session mechanism |
+|---|---|
+| **Nginx** | `ip_hash;` or `hash $cookie_sessionid consistent;` in upstream block |
+| **Docker Compose (multi-replica)** | Add `nginx` reverse proxy with `ip_hash` in front of scaled `app` replicas |
+| **Kubernetes Ingress (nginx-ingress)** | `nginx.ingress.kubernetes.io/affinity: "cookie"` + `nginx.ingress.kubernetes.io/session-cookie-name: "SERVERID"` annotations |
+| **Kubernetes Service** | `sessionAffinity: ClientIP` on the `ClusterIP` Service (coarser — IP-level only) |
+| **AWS ALB** | Target group stickiness enabled with duration-based cookies |
+
+**Cancel across instances** still works without stickiness: the stop endpoint
+writes a Redis cancel key; the owning container's heartbeat loop polls this key
+and calls `cancel_team()` locally via `session_coordination.py`.
+
+**Crash / restart recovery:**
+
+1. Owning container dies — Redis lease expires after `REDIS_RUN_LEASE_TTL_SECONDS`.
+2. Next request for the session arrives on any instance — cache miss.
+3. `get_or_build_team()` builds a fresh team; `load_state()` restores it from
+   MongoDB `chat_sessions.agent_state` checkpoint.
+4. New instance acquires the Redis lease and resumes SSE streaming.
+
+> **Do not use Memcached as an alternative to Redis.** Memcached has no
+> server-side scripting, no atomic CAS, and no Lua — the lease/heartbeat
+> atomicity in `session_coordination.py` requires Redis.
+
 ---
 
 ## Human Gate Flow
