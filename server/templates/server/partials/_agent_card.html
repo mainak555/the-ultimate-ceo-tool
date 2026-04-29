@@ -1,5 +1,6 @@
 <!-- Single agent card (used in config_form.html) -->
 <!-- Variables: idx (int or "__IDX__"), agent (dict or None) -->
+{% load md_extras %}
 
 <div class="agent-card" data-agent-index="{{ idx }}">
   <div class="agent-card__header">
@@ -33,6 +34,34 @@
     </div>
   </div>
 
+  <div class="form-row">
+    <div class="form-group">
+      <label>MCP Tools</label>
+      <select name="agents[{{ idx }}][mcp_tools]"
+              class="input input--sm js-mcp-tools-select"
+              data-agent-index="{{ idx }}">
+        <option value="none"      {% if not agent or agent.mcp_tools == 'none' or not agent.mcp_tools %}selected{% endif %}>None</option>
+        <option value="shared"    {% if agent and agent.mcp_tools == 'shared' %}selected{% endif %}>Shared</option>
+        <option value="dedicated" {% if agent and agent.mcp_tools == 'dedicated' %}selected{% endif %}>Dedicated</option>
+      </select>
+    </div>
+
+    <div class="form-group">
+      <label>Temperature</label>
+      <input type="number"
+             name="agents[{{ idx }}][temperature]"
+             class="input input--sm"
+             value="{% if agent and agent.temperature %}{{ agent.temperature }}{% else %}0.7{% endif %}"
+             step="0.1"
+             min="0"
+             max="2"
+             placeholder="0.7"
+             required>
+    </div>
+  </div>
+
+  <small class="form-hint form-hint--compact"><i>Choose how this agent gets MCP tools: <strong>None</strong> (no tools), <strong>Shared</strong> (project-wide pool), or <strong>Dedicated</strong> (agent-only JSON below).</i></small>
+
   <div class="form-group">
     <label>System Prompt</label>
     <textarea name="agents[{{ idx }}][system_prompt]"
@@ -42,17 +71,16 @@
               required>{% if agent and agent.system_prompt %}{{ agent.system_prompt }}{% else %}{{ default_system_prompt }}{% endif %}</textarea>
   </div>
 
-  <div class="form-group">
-    <label>Temperature</label>
-    <input type="number"
-           name="agents[{{ idx }}][temperature]"
-           class="input input--sm"
-           value="{% if agent and agent.temperature %}{{ agent.temperature }}{% else %}0.7{% endif %}"
-           step="0.1"
-           min="0"
-           max="2"
-           placeholder="0.7"
-           required>
+  <div class="form-group js-mcp-dedicated-wrap"
+       data-agent-index="{{ idx }}"
+       {% if not agent or agent.mcp_tools != 'dedicated' %}hidden{% endif %}>
+    <label>Dedicated MCP Configuration (JSON)</label>
+    <textarea name="agents[{{ idx }}][mcp_configuration]"
+              class="input input--textarea input--mono js-mcp-dedicated-json"
+              rows="8"
+              placeholder='{"mcpServers": {"filesystem": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "/data"], "env": {}}}}'>{% if agent and agent.mcp_configuration %}{{ agent.mcp_configuration|to_json }}{% endif %}</textarea>
+    <small class="form-hint">JSON object with <code>mcpServers</code> map. Each server uses stdio (<code>command</code>/<code>args</code>/<code>env</code>) or streamable HTTP (<code>transport: "http"</code> + <code>url</code>/<code>headers</code>). Validated on save.</small>
   </div>
+
   </div>
 </div>

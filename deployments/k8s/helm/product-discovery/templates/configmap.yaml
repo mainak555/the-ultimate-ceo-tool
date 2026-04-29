@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "product-discovery.fullname" . }}-env
+  labels:
+    {{- include "product-discovery.labels" . | nindent 4 }}
+data:
+{{- range $k, $v := .Values.env }}
+  {{ $k }}: {{ $v | quote }}
+{{- end }}
+{{- if .Values.mcpGateway.enabled }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "product-discovery.fullname" . }}-mcp
+  labels:
+    {{- include "product-discovery.labels" . | nindent 4 }}
+data:
+  mcp.json: |
+    {{- toJson .Values.mcpGateway.config | nindent 4 }}
+{{- end }}

@@ -12,7 +12,7 @@ import re
 import time
 
 from agents.factory import build_model_client
-from core.tracing import traced_block
+from core.tracing import set_payload_attribute, traced_block
 
 logger = logging.getLogger(__name__)
 
@@ -112,17 +112,17 @@ def run_extraction(
             "app.component": "agents.integrations.extractor",
             "app.model_name": model_name,
             "app.discussion_chars": len(discussion_text or ""),
-            "input.value": json.dumps(input_payload, ensure_ascii=False),
-            "input.mime_type": "application/json",
         },
     ) as span:
+        if span is not None:
+            set_payload_attribute(span, "input.value", input_payload)
+
         t0 = time.monotonic()
         raw = asyncio.run(_run())
         elapsed_ms = int((time.monotonic() - t0) * 1000)
 
         if span is not None:
-            span.set_attribute("output.value", raw)
-            span.set_attribute("output.mime_type", _infer_text_mime_type(raw))
+            set_payload_attribute(span, "output.value", raw)
 
         # Parse JSON from the response — handle markdown code fences.
         text = raw.strip()

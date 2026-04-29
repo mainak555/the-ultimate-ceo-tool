@@ -1,0 +1,19 @@
+product-discovery {{ .Chart.AppVersion }} installed as release "{{ .Release.Name }}".
+
+App service:        {{ include "product-discovery.fullname" . }} (port {{ .Values.service.port }})
+{{- if .Values.mcpGateway.enabled }}
+MCP gateway service: {{ include "product-discovery.fullname" . }}-mcp-gateway (port {{ .Values.mcpGateway.service.port }})
+
+In your project's Shared MCP Tools (or per-agent dedicated MCP) JSON, reference servers as:
+
+  {
+    "mcpServers": {
+      "<server-name>": {
+        "transport": "http",
+        "url": "http://{{ include "product-discovery.fullname" . }}-mcp-gateway:{{ .Values.mcpGateway.service.port }}/<server-name>/mcp"
+      }
+    }
+  }
+{{- end }}
+
+Required: a Mongo cluster reachable at MONGODB_URI (set via secretEnv or existingSecret).

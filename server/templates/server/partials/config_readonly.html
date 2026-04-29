@@ -1,4 +1,5 @@
 <!-- Read-only configuration view (HTMX partial) -->
+{% load md_extras %}
 
 {% if message %}
   <div class="alert alert-info">{{ message }}</div>
@@ -25,9 +26,21 @@
           <strong>Temperature:</strong> {{ agent.temperature }}
         </div>
         <div class="agent-card__detail">
+          <strong>MCP Tools:</strong>
+          {% if agent.mcp_tools == 'dedicated' %}Dedicated{% elif agent.mcp_tools == 'shared' %}Shared{% else %}None{% endif %}
+        </div>
+        <div class="agent-card__detail">
           <strong>System Prompt:</strong>
           <div class="agent-card__prompt agent-card__prompt--markdown markdown-prose" data-markdown>{{ agent.system_prompt }}</div>
         </div>
+        {% if agent.mcp_tools == 'dedicated' and agent.mcp_configuration %}
+        <div class="agent-card__detail">
+          <strong>Dedicated MCP Configuration:</strong>
+          <div class="agent-card__prompt agent-card__prompt--markdown markdown-prose" data-markdown>```json
+{{ agent.mcp_configuration|to_json }}
+```</div>
+        </div>
+        {% endif %}
       </div>
     {% endfor %}
   </div>
@@ -35,17 +48,24 @@
   <div class="config-readonly__section">
     <h3>Human Gate</h3>
     {% if project.human_gate.enabled %}
-      <p>
-        <strong>Name:</strong> {{ project.human_gate.name }} &nbsp;|&nbsp;
-        <strong>Mode:</strong> {{ project.human_gate.interaction_mode }}
-      </p>
+      <p><strong>Name:</strong> {{ project.human_gate.name }}</p>
     {% else %}
       <p>Human gate disabled.</p>
     {% endif %}
   </div>
 
   <div class="config-readonly__section">
+    {% if project.agents|length == 1 %}
+    <h3>Mode</h3>
+    {% else %}
     <h3>Team</h3>
+    {% endif %}
+    {% if project.agents|length == 1 %}
+    <p>
+      <strong>Mode:</strong> Chat Mode (single assistant) &nbsp;|&nbsp;
+      <strong>Runtime:</strong> Round Robin with Human Gate continuation until Stop
+    </p>
+    {% else %}
     <p>
       <strong>Type:</strong> {{ project.team.type }} &nbsp;|&nbsp;
       <strong>Max Iterations:</strong> {{ project.team.max_iterations }}
@@ -65,7 +85,27 @@
         </div>
       </div>
     {% endif %}
+    {% endif %}
   </div>
+
+  {% if project.shared_mcp_tools %}
+  <div class="config-readonly__section">
+    <h3>Shared MCP Tools</h3>
+    <div class="agent-card agent-card--readonly">
+      <div class="agent-card__detail">
+        <div class="agent-card__prompt agent-card__prompt--markdown markdown-prose" data-markdown>```json
+{{ project.shared_mcp_tools|to_json }}
+```</div>
+        {% if project.mcp_secrets %}
+        <p class="form-hint form-hint--compact" style="margin-top: 0.5rem;">
+          🔒 {{ project.mcp_secrets|length }} secret{{ project.mcp_secrets|length|pluralize }} configured
+          ({{ project.mcp_secrets.keys|join:", " }}) — values hidden.
+        </p>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+  {% endif %}
 
   {% if project.integrations.enabled %}
   <div class="config-readonly__section">

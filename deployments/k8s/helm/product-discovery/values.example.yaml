@@ -1,0 +1,48 @@
+# Example overrides — copy and edit, then `helm install -f values.example.yaml`.
+
+image:
+  repository: ghcr.io/your-org/product-discovery
+  tag: "0.1.0"
+
+replicaCount: 2
+
+ingress:
+  enabled: true
+  className: nginx
+  hosts:
+    - host: discovery.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - hosts:
+        - discovery.example.com
+      secretName: discovery-tls
+
+env:
+  LOG_LEVEL: "INFO"
+  REDIS_NAMESPACE: "product_discovery"
+  REDIS_RUN_LEASE_TTL_SECONDS: "300"
+  REDIS_RUN_HEARTBEAT_SECONDS: "20"
+  REDIS_CANCEL_SIGNAL_TTL_SECONDS: "120"
+
+secretEnv:
+  APP_SECRET_KEY: "change-me"
+  MONGODB_URI: "mongodb+srv://user:pass@cluster.example.com/?retryWrites=true&w=majority"
+  MONGODB_NAME: "product_discovery"
+  REDIS_URI: "redis://redis-master.redis.svc.cluster.local:6379/0"
+  OPENAI_API_KEY: "sk-..."
+  LANGFUSE_PUBLIC_KEY: "pk-..."
+  LANGFUSE_SECRET_KEY: "sk-..."
+  LANGFUSE_HOST: "https://cloud.langfuse.com"
+
+mcpGateway:
+  enabled: true
+  config:
+    mcpServers:
+      filesystem:
+        command: "npx"
+        args: ["-y", "@modelcontextprotocol/server-filesystem", "/data"]
+      fetch:
+        command: "npx"
+        args: ["-y", "@modelcontextprotocol/server-fetch"]

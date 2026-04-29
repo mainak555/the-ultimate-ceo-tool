@@ -1,0 +1,92 @@
+# Default values for product-discovery.
+
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  repository: ghcr.io/your-org/product-discovery
+  tag: latest
+  pullPolicy: IfNotPresent
+
+replicaCount: 1
+
+service:
+  type: ClusterIP
+  port: 8000
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: product-discovery.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+resources:
+  app:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+  mcpGateway:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+# App env. Anything not in `secretEnv` is rendered into a plain ConfigMap.
+env:
+  LOG_LEVEL: "INFO"
+  OTEL_INSTRUMENT_HTTP: "1"
+  OTEL_INSTRUMENT_AGENTS: "1"
+  REDIS_NAMESPACE: "product_discovery"
+  REDIS_RUN_LEASE_TTL_SECONDS: "300"
+  REDIS_RUN_HEARTBEAT_SECONDS: "20"
+  REDIS_CANCEL_SIGNAL_TTL_SECONDS: "120"
+
+# Secret env. Rendered into a Kubernetes Secret. NEVER commit real values.
+# Provide via `--set-string` / `--values` / external secret manager.
+secretEnv:
+  APP_SECRET_KEY: ""
+  MONGODB_URI: ""
+  MONGODB_NAME: "product_discovery"
+  REDIS_URI: ""
+  OPENAI_API_KEY: ""
+  LANGFUSE_PUBLIC_KEY: ""
+  LANGFUSE_SECRET_KEY: ""
+  LANGFUSE_HOST: ""
+
+# Use an existing Secret instead of rendering one from secretEnv.
+existingSecret: ""
+
+mcpGateway:
+  # When enabled, deploys the Node-based MCP gateway as a sidecar Deployment
+  # exposed via an in-cluster Service the app reaches at:
+  #   http://<release>-mcp-gateway:9000/<server-name>/mcp
+  enabled: true
+  image:
+    repository: ghcr.io/your-org/product-discovery-mcp-gateway
+    tag: latest
+    pullPolicy: IfNotPresent
+  service:
+    port: 9000
+  # MCP server catalog rendered into a ConfigMap and mounted at /config/mcp.json.
+  # See deployments/compose/mcp.json.example for shape.
+  config:
+    mcpServers: {}
+
+# External Mongo is REQUIRED. The chart never ships a Mongo workload —
+# install Bitnami Mongo or point at a managed cluster, then set
+# `secretEnv.MONGODB_URI` accordingly.
+
+podAnnotations: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}

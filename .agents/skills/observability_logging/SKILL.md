@@ -22,7 +22,7 @@ serve different purposes:
 1. Every Python module that performs I/O declares `logger = logging.getLogger(__name__)` at module top. No custom logger names. No `print()` for diagnostics.
 2. Logging configuration lives only in `config/settings.py` (`LOGGING` dict). One stderr `StreamHandler` + JSON formatter (`python-json-logger`). Root level driven by `LOG_LEVEL` env (default `INFO`).
 3. The `console` handler installs `EventOnlyConsoleFilter` from `server/logging_utils.py`, which drops INFO records whose message ends in `.api.call`. Per-call HTTP detail belongs on spans, not console.
-4. AutoGen event payload loggers (`autogen_core.events`, `autogen_agentchat.events`) are owned by `_install_autogen_event_bridge()` in `core/tracing.py`, NOT by `config/settings.py` LOGGING. The bridge strips the shared `console` handler from those loggers and attaches `AutoGenEventSpanBridgeHandler` instead, so INFO payload events flow to spans and never reach console. Do not re-add `autogen_*.events` entries to the LOGGING dict.
+4. AutoGen event payload loggers (`autogen_core.events`, `autogen_agentchat.events`) are owned by `_install_autogen_event_bridge()` in `core/tracing.py`, NOT by `config/settings.py` LOGGING. The bridge strips the shared `console` handler from those loggers and attaches `AutoGenEventSpanBridgeHandler` instead, so payload events flow to spans (with redaction + truncation) and never reach console. Both loggers are set to **DEBUG** so that `ToolCallRequestEvent` and `ToolCallExecutionEvent` (emitted at `logging.DEBUG` by `autogen_agentchat`) reach the bridge; `propagate=False` prevents those DEBUG records from flooding the root logger. `autogen_core.events` records (`LLMCallEvent`) are INFO — unaffected by the level change. Do not re-add `autogen_*.events` entries to the LOGGING dict.
 5. Event names use dotted snake_case scoped by layer:
    - Service layer: `mongo.connect`, `mongo.connect_failed`, `project.created`, `chat.session.started`.
    - HTTP clients: `trello.api.error`, `jira.api.error` (success no longer logged — see rule 3).
@@ -78,12 +78,100 @@ instead of implementing provider-local span helpers.
 | `agents/team_builder.py` | `agents.team.built` (INFO with `{team_type, agent_count, selector_used}`) |
 | `agents/runtime.py` | Cache hit/miss at `DEBUG`; `agents.team.started`/`agents.team.cancelled` at `INFO` |
 | `agents/integrations/extractor.py` | `agents.extraction.started`/`agents.extraction.completed` with `elapsed_ms`; `agents.extraction.parse_failed` via `logger.exception` with sanitized response snippet; LLM call wrapped in `traced_block("agents.extraction.run", ...)` with canonical `input.value`/`output.value` attributes. |
+| `core/tracing.py` (AutoGen event bridge) | One span per item in the event `content` array for tool events. **`mcp.tool.request <name>`** (ToolCallRequestEvent — logged at DEBUG) — attributes: `input.value` (Langfuse Input panel), `gen_ai.tool.name`, `gen_ai.tool.call.id`, `gen_ai.tool.arguments` (payload). **`mcp.tool.result <name>`** (ToolCallExecutionEvent — logged at DEBUG) — attributes: `output.value` (Langfuse Output panel), `gen_ai.tool.name`, `gen_ai.tool.call.id`, `gen_ai.tool.result` (payload), `gen_ai.tool.is_error`; span `StatusCode.ERROR` when `is_error=true`. All spans carry `autogen.agent.id` from the event `source` field. Other events produce `autogen.event.<type>` spans with `input.value`/`output.value` payloads. Never log or set span attributes for `args`, `env`, or `headers` of MCP server entries. The bridge handler and event loggers operate at DEBUG level so tool events (which AutoGen emits at DEBUG) are captured. |
 
 ## Request ID Propagation
 1. `server/middleware.py` defines `RequestIdMiddleware` and is registered at the **top** of `MIDDLEWARE` in `config/settings.py`.
 2. The middleware reads incoming `X-Request-ID` header or generates `uuid4().hex[:12]`, binds it via `bind_request_id()` (a `contextvars.ContextVar` set in `server/logging_utils.py`), echoes the value back as a response header, and clears the binding in `finally`.
 3. `RequestIdFilter` (in `server/logging_utils.py`) injects the current request id onto every `LogRecord` as `record.request_id`. Default value is `"-"` when no request is active.
 4. Async tasks awaited within a request inherit the contextvar automatically. Do not pass request ids manually.
+
+## SSE Streaming Views — Mandatory request_id + trace_id Pattern
+
+Django SSE views return a `StreamingHttpResponse` synchronously. Middleware
+`finally` blocks (including OTel context teardown and `_request_id` clear)
+run **before** the ASGI server begins iterating the generator body. Without
+special handling, every log line inside the generator shows
+`request_id: "-"` and `trace_id: "-"`.
+
+### Required pattern for every SSE view that logs inside the generator body
+
+```python
+# 1. Capture request_id BEFORE event_stream() is defined.
+_captured_request_id = get_request_id()
+
+# 2. Create a fresh root OTel span for this run (empty context → new trace_id
+#    per call) and store its W3C traceparent in Redis for reattachment.
+from core.tracing import context_from_traceparent, start_root_span
+from agents.session_coordination import clear_run_traceparent, store_run_traceparent
+
+_run_span, _run_traceparent = start_root_span(
+    "agents.session.run", {"session_id": session_id}
+)
+if _run_traceparent:
+    await asyncio.to_thread(store_run_traceparent, session_id, _run_traceparent)
+
+async def event_stream():
+    # 3. Re-bind request_id (middleware cleared it before the body is consumed).
+    _rid_token = bind_request_id(_captured_request_id)
+
+    # 4. Reattach the root OTel span so all agents.* spans and log lines share
+    #    the same trace_id.  Two attach tokens are used in LIFO order on exit.
+    _otel_parent_token = None
+    _otel_span_token = None
+    if _run_span is not None and _run_traceparent:
+        try:
+            from opentelemetry import context as otel_context, trace
+            _parent_ctx = context_from_traceparent(_run_traceparent)
+            if _parent_ctx is not None:
+                _otel_parent_token = otel_context.attach(_parent_ctx)
+            _otel_span_token = otel_context.attach(
+                trace.set_span_in_context(_run_span)
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
+    try:
+        ...  # actual streaming logic
+    finally:
+        # 5. Detach OTel tokens (LIFO), end the span, clear Redis key,
+        #    restore request_id.
+        if _otel_span_token is not None:
+            try:
+                from opentelemetry import context as otel_context
+                otel_context.detach(_otel_span_token)
+            except Exception:  # noqa: BLE001
+                pass
+        if _otel_parent_token is not None:
+            try:
+                from opentelemetry import context as otel_context
+                otel_context.detach(_otel_parent_token)
+            except Exception:  # noqa: BLE001
+                pass
+        if _run_span is not None:
+            try:
+                _run_span.end()
+            except Exception:  # noqa: BLE001
+                pass
+        try:
+            await asyncio.to_thread(clear_run_traceparent, session_id)
+        except Exception:  # noqa: BLE001
+            pass
+        clear_request_id(_rid_token)
+```
+
+Key rules:
+- `start_root_span` uses `Context()` (empty) — guarantees a **fresh
+  trace_id** per call, not a child of the Django request span.
+- Redis storage is best-effort (silent on Redis failure). When tracing is
+  disabled or Redis is down, `_run_span` and `_run_traceparent` are `None`;
+  all guards skip and the run continues normally with `trace_id: "-"`.
+- Detach tokens **must** be applied in reverse attach order.
+- `_run_span.end()` must be called only once, in `finally`.
+- `clear_run_traceparent` cleans the Redis key (TTL also expires it
+  automatically on process death so no manual cleanup is strictly needed).
+
+Full details: `docs/observability.md` § "Session Run Tracing (SSE event_stream)".
 
 ## Tracing Architecture
 1. `core/tracing.py` owns all OpenTelemetry wiring. Integration clients should use `core/http_tracing.py` (`instrument_http_response`) rather than importing OpenTelemetry directly.
@@ -105,7 +193,7 @@ Rules for new I/O code:
 2. Do **not** add a fourth auto-instrumentation package without also adding a category env var following the `_flag_enabled(name, default=...)` pattern in `core/tracing.py`.
 3. Never assume a span exists — callers can disable the AGENTS bridge or HTTP layer. Code that reads `trace.get_current_span()` must tolerate the no-recording sentinel.
 
-4. AutoGen event-log → span bridge: `AutoGenEventSpanBridgeHandler` converts INFO records on `autogen_*.events` loggers into spans with canonical `input.value`/`output.value` attributes. The bridge owns those loggers — it strips the shared `console` handler and never mutates handler levels (mutating the shared handler would silence other namespaces).
+4. AutoGen event-log → span bridge: `AutoGenEventSpanBridgeHandler` converts records on `autogen_*.events` loggers into spans with canonical `input.value`/`output.value` attributes. Both loggers are set to **DEBUG** so that `ToolCallRequestEvent` and `ToolCallExecutionEvent` (logged at DEBUG by `autogen_agentchat`) are captured alongside INFO-level `LLMCallEvent` records. The bridge owns those loggers — it strips the shared `console` handler and never mutates handler levels (mutating the shared handler would silence other namespaces). `propagate=False` keeps bridge-only DEBUG records off the root logger / console.
 
 ## Pluggable OTLP Backend
 Langfuse is the currently-wired backend, but the architecture supports any
@@ -148,7 +236,7 @@ Don't:
 - Duplicate the same payload under both canonical and legacy keys (`input.value` + `gen_ai.input`).
 - Hardcode a single MIME type for all payloads.
 - Set bodies directly without going through `set_payload_attribute()` (skips redaction + truncation).
-- Emit AutoGen INFO payload logs to console; keep them bridge-only.
+- Emit AutoGen payload logs (any level) to console; those loggers must remain bridge-only (`propagate=False`).
 
 ## Validation Checklist
 1. `grep -RnE "print\(" server/ agents/` returns zero matches (excluding tests / docs).
@@ -158,6 +246,6 @@ Don't:
 5. `grep -nE "API_KEY|SECRET|password|Authorization|Bearer" <git-diff-files>` shows no occurrences inside log message strings.
 6. `python manage.py runserver` starts cleanly; the first HTTP request emits a JSON log line containing `request_id`. With `LANGFUSE_*` set, console shows `tracing.enabled` (with `max_payload_bytes`); without, shows `tracing.disabled`.
 7. New modules use `logging.getLogger(__name__)` — no string literals.
-8. Console output does not include `autogen_core.events` or `autogen_agentchat.events` records of any level — those loggers are bridge-only. INFO payload events (LLMCall, prompt dumps, tool payloads) appear in spans; ERROR records set the active span's status to ERROR (visible on console only when `OTEL_CONSOLE_EXPORTER=error|all`).
+8. Console output does not include `autogen_core.events` or `autogen_agentchat.events` records of any level — those loggers are bridge-only (`propagate=False`). Payload events (LLM calls, prompt dumps, tool request/execution results) appear as spans; ERROR records set the active span's status to ERROR (visible on console only when `OTEL_CONSOLE_EXPORTER=error|all`).
 9. Spans use canonical payload fields only (`input.value`/`output.value` + inferred MIME types) with no duplicate payload copies, all routed through `set_payload_attribute()`.
 10. Sending a request body > 32 KB produces a span with `span.body.truncated=true` and `span.body.original_bytes=<n>`. Setting `OTEL_MAX_PAYLOAD_BYTES=131072` and replaying preserves the full body.

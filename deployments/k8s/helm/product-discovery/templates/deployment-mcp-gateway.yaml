@@ -1,0 +1,41 @@
+{{- if .Values.mcpGateway.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "product-discovery.fullname" . }}-mcp-gateway
+  labels:
+    {{- include "product-discovery.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mcp-gateway
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "product-discovery.mcpSelector" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "product-discovery.mcpSelector" . | nindent 8 }}
+    spec:
+      containers:
+        - name: mcp-gateway
+          image: "{{ .Values.mcpGateway.image.repository }}:{{ .Values.mcpGateway.image.tag }}"
+          imagePullPolicy: {{ .Values.mcpGateway.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 9000
+          env:
+            - name: MCP_GATEWAY_PORT
+              value: "9000"
+            - name: MCP_CONFIG_PATH
+              value: "/config/mcp.json"
+          volumeMounts:
+            - name: mcp-config
+              mountPath: /config
+              readOnly: true
+          resources:
+            {{- toYaml .Values.resources.mcpGateway | nindent 12 }}
+      volumes:
+        - name: mcp-config
+          configMap:
+            name: {{ include "product-discovery.fullname" . }}-mcp
+{{- end }}

@@ -1,0 +1,11 @@
+apiVersion: v2
+name: product-discovery
+description: Django SPA for managing AutoGen agent configurations, with optional MCP gateway sidecar.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/your-org/product-discovery
+sources:
+  - https://github.com/your-org/product-discovery
+maintainers:
+  - name: product-discovery

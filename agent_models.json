@@ -6,7 +6,14 @@
   "claude-sonnet-4.6": {
     "model": "claude-sonnet-4-6",
     "provider": "azure_anthropic",
-    "endpoint": "https://ml-mkr7cej8-eastus2.services.ai.azure.com/anthropic/"
+    "endpoint": "https://ml-mkr7cej8-eastus2.services.ai.azure.com/anthropic/",
+    "model_info": {
+      "function_calling": true,
+      "json_output": true,
+      "structured_output": true,
+      "vision": true,
+      "family": "claude-sonnet-4"
+    }
   },
   "gemini-2.5-flash": {
     "disabled": true, 
@@ -15,7 +22,14 @@
   "gpt-4.1": {
     "provider": "azure_openai",
     "endpoint": "https://cmazfoundry.cognitiveservices.azure.com/",
-    "api_version": "2024-12-01-preview"
+    "api_version": "2024-12-01-preview",
+    "model_info": {
+      "function_calling": true,
+      "json_output": true,
+      "structured_output": true,
+      "vision": true,
+      "family": "gpt-4.1"
+    }
   },
   "gpt-4o": {
     "disabled": true, 
@@ -24,13 +38,34 @@
   "gpt-5.4-mini": {
     "provider": "azure_openai",
     "api_version": "2024-12-01-preview",
-    "model": "gpt-5.4-mini-2026-03-17"
+    "model": "gpt-5.4-mini-2026-03-17",
+    "model_info": {
+      "function_calling": true,
+      "json_output": true,
+      "structured_output": true,
+      "vision": true,
+      "family": "gpt-5"
+    }
   },
   "DeepSeek-V3.2": {
     "model": "deepseek-v3.2",
-    "provider": "azure_openai"
+    "provider": "azure_openai",
+    "model_info": {
+      "function_calling": true,
+      "json_output": true,
+      "structured_output": false,
+      "vision": false,
+      "family": "deepseek-v3"
+    }
   },
   "grok-4-1-fast-reasoning": {
-    "provider": "azure_openai"
+    "provider": "azure_openai",
+    "model_info": {
+      "function_calling": true,
+      "json_output": true,
+      "structured_output": false,
+      "vision": false,
+      "family": "grok-4"
+    }
   }
 }

@@ -26,23 +26,29 @@ Cross-references: [docs/API.md](API.md) (form fields + HTTP schema), [AGENTS.md]
   // ── Top-level ─────────────────────────────────────────────────────────────
   "project_name": "string (unique, used as URL slug)",
   "objective":    "string — injected into every agent system prompt and selector system prompt at runtime",
+  "created_at":   "datetime (UTC BSON Date — set on insert, never overwritten)",
+  "updated_at":   "datetime (UTC BSON Date — stamped on every replace_one)",
 
   // ── Assistant agents ──────────────────────────────────────────────────────
   "agents": [
     {
-      "name":          "string — must be a valid Python identifier",
-      "model":         "string — must match an entry in agent_models.json",
-      "system_prompt": "string — non-empty; project objective is appended at runtime",
-      "temperature":   0.7   // float, 0.0–2.0
+      "name":              "string — must be a valid Python identifier",
+      "model":             "string — must match an entry in agent_models.json",
+      "system_prompt":     "string — non-empty; project objective is appended at runtime",
+      "temperature":       0.7,   // float, 0.0–2.0
+      "mcp_tools":         "none",  // "none" | "shared" | "dedicated"
+      "mcp_configuration": {}        // {} unless mcp_tools == "dedicated"; see docs/mcp_integration.md
     }
     // ...one entry per assistant agent
   ],
 
+  // ── Project-level MCP shared config ───────────────────────────────────────
+  "shared_mcp_tools": {},  // {} or {"mcpServers": {...}} — required non-empty when any agent uses mcp_tools = "shared"
+
   // ── Human gate (optional) ─────────────────────────────────────────────────
   "human_gate": {
-    "enabled":          true,           // bool
-    "name":             "string",       // required when enabled=true
-    "interaction_mode": "approve_reject" // "approve_reject" | "feedback"
+    "enabled":          true,      // bool
+    "name":             "string"  // required when enabled=true
   },
 
   // ── Team ──────────────────────────────────────────────────────────────────
@@ -69,7 +75,7 @@ Cross-references: [docs/API.md](API.md) (form fields + HTTP schema), [AGENTS.md]
       "app_name": "string",     // required when enabled
       "api_key": "string",      // required when enabled — stored encrypted at rest
       "token": "string",        // Trello token (expiration=never), masked in UI via SECRET_MASK
-      "token_generated_at": "string",  // ISO 8601 UTC datetime when token was generated
+      "token_generated_at": "datetime (UTC BSON Date — coerced to ISO string on read)",
       "default_workspace_id": "",  // Trello workspace/organization ID
       "default_workspace_name": "", // display name (for readonly view)
       "default_board_id": "",      // Trello board ID
@@ -127,16 +133,29 @@ Cross-references: [docs/API.md](API.md) (form fields + HTTP schema), [AGENTS.md]
       "agent_name": "string",
       "role": "user | assistant",
       "content": "string",
-      "timestamp": "HH:MM",
+      "timestamp": "datetime (UTC BSON Date)",
+      "attachments": [
+        {
+          "id": "uuid string",
+          "filename": "string",
+          "mime_type": "string",
+          "extension": "string",
+          "size_bytes": 0,
+          "is_image": true,
+          "content_url": "string (session-scoped endpoint)",
+          "thumbnail_url": "string (image only)",
+          "uploaded_at": "datetime (UTC BSON Date)"
+        }
+      ],
       "exports": {
         "trello": {
           "schema_version": "string",
-          "updated_at": "ISO datetime",
+          "updated_at": "datetime (UTC BSON Date — coerced to ISO string on read)",
           "exported": true,
           "source": "extract | manual",
           "cards": [],
           "last_push": {
-            "pushed_at": "ISO datetime",
+            "pushed_at": "datetime (UTC BSON Date — coerced to ISO string on read)",
             "list_id": "string",
             "result": []
           }
@@ -144,12 +163,12 @@ Cross-references: [docs/API.md](API.md) (form fields + HTTP schema), [AGENTS.md]
         "jira": {
           "software": {
             "schema_version": "string",
-            "updated_at": "ISO datetime",
+            "updated_at": "datetime (UTC BSON Date — coerced to ISO string on read)",
             "exported": true,
             "source": "extract | manual",
             "issues": [],
             "last_push": {
-              "pushed_at": "ISO datetime",
+              "pushed_at": "datetime (UTC BSON Date — coerced to ISO string on read)",
               "project_key": "string",
               "result": []
             }
@@ -170,11 +189,39 @@ Cross-references: [docs/API.md](API.md) (form fields + HTTP schema), [AGENTS.md]
   "agent_state": {
     "source": "string",
     "version": "string",
-    "saved_at": "ISO datetime",
-    "state": {}
+    "saved_at": "datetime (UTC BSON Date — coerced to ISO string on read)",
+    "state": {}  // AutoGen TeamState JSON — do not modify structure
   }
 }
 ```
+
+## Collection: `chat_attachments`
+
+```jsonc
+{
+  "_id": "ObjectId",
+  "attachment_id": "uuid string",
+  "project_id": "string (project ObjectId hex)",
+  "session_id": "string (chat session ObjectId hex)",
+  "message_id": "string | null (bound discussion message id)",
+  "staging_message_id": "string",
+  "filename": "string",
+  "extension": "string",
+  "mime_type": "string",
+  "size_bytes": 0,
+  "is_image": true,
+  "blob_key": "sessions/<session_id>/attachments/<attachment_id>/<filename>",
+  "uploaded_at": "datetime (UTC BSON Date)",
+  "bound_at": "datetime (UTC BSON Date)"
+  // NOTE: extracted_text and extraction_status are NEVER written here.
+  // Text extraction is lazy-cached in Redis only; see attachment_storage.md.
+}
+```
+
+Attachment storage/delete contract:
+
+- Blob/object keys are strictly session-scoped by prefix `sessions/<session_id>/...`.
+- On chat session delete, all blobs under `sessions/<session_id>/` and all `chat_attachments` metadata rows for that session are deleted together.
 
 `exports.trello.exported` lifecycle:
 - `false` after Extract Items or Save (editable mode).
@@ -183,6 +230,7 @@ Cross-references: [docs/API.md](API.md) (form fields + HTTP schema), [AGENTS.md]
 ### Discussion Export Persistence Rule
 
 - Raw reference content for export modals is always `discussions[].content`.
+- For human (`role=user`) messages, `discussions[].content` stores **only the raw user-typed text** — never the `text_with_context` string that includes extracted PDF/DOCX/etc. attachment content. Extracted attachment text is a runtime artefact rebuilt from Blob → Redis on each run.
 - Export payload persistence is provider-scoped under `discussions[].exports.<provider>`.
 - This separation allows re-extract/save/push workflows without mutating source discussion text.
 
@@ -213,6 +261,10 @@ naming across agent and team layers.
 Stored on `team`, not at the top level. `normalize_project()` falls back to the legacy
 top-level `max_iterations` for backward compatibility with old documents.
 
+When assistant count is exactly 1 (single-assistant chat mode), the persisted
+`team` object may be omitted entirely. Runtime falls back to Round Robin behavior
+and human-gated `Continue`/`Stop` controls loop progression and termination.
+
 ### `integrations.trello.export_agents`
 Stored as a list of agent name strings. An empty list means all agents' messages will show
 the Trello Export button. Legacy documents may have `integrations.export_agent` (a single
@@ -233,14 +285,14 @@ The `integrations` root never holds an `export_agent` field in new documents.
 |-------|------|------------|
 | `project_name` | str | non-empty, unique in collection |
 | `objective` | str | any string (may be empty) |
-| `agents[].name` | str | valid Python identifier after sanitisation |
+| `agents[].name` | str | valid Python identifier after sanitization |
 | `agents[].model` | str | must be in `agent_models.json` |
 | `agents[].system_prompt` | str | non-empty |
 | `agents[].temperature` | float | 0.0 ≤ value ≤ 2.0 |
-| `human_gate.interaction_mode` | str | `"approve_reject"` or `"feedback"` |
 | `human_gate.name` | str | required when `enabled=true` |
 | `team.type` | str | `"round_robin"` or `"selector"` |
 | `team.max_iterations` | int | ≥ 1; ≤ 10 when `human_gate.enabled=false` |
+| `single-assistant rule` | logical | if `len(agents)==1`, then `human_gate.enabled=true` and `team.type != "selector"` |
 | `team.model` | str | required for selector; must be in `agent_models.json` |
 | `team.system_prompt` | str | required for selector; non-empty |
 | `team.temperature` | float | 0.0 ≤ value ≤ 2.0 (default `0.0`) |

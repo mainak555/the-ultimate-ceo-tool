@@ -1,0 +1,36 @@
+FROM node:20-bookworm-slim
+
+# MCP Gateway sidecar.
+#
+# Hosts one or more MCP servers and exposes them over Streamable HTTP so the
+# `app` container (Python-only) can attach to them without spawning local
+# Node processes.
+#
+# The `mcp-proxy` package wraps each MCP server (stdio or otherwise) in a
+# streamable HTTP endpoint. Configure servers via `/config/mcp.json`
+# (see `mcp.json.example`).
+
+ENV NODE_ENV=production \
+    MCP_GATEWAY_PORT=9000 \
+    MCP_CONFIG_PATH=/config/mcp.json
+
+WORKDIR /opt/mcp-gateway
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ca-certificates dumb-init && \
+    rm -rf /var/lib/apt/lists/*
+
+# Pre-install commonly used MCP server packages so cold start is fast.
+# Override at deploy time by mounting a different /config/mcp.json or by
+# extending this image with additional packages.
+RUN npm install -g \
+        @modelcontextprotocol/server-filesystem@latest \
+        @modelcontextprotocol/server-fetch@latest \
+        mcp-proxy@latest || true
+
+COPY entrypoint.sh /opt/mcp-gateway/entrypoint.sh
+RUN chmod +x /opt/mcp-gateway/entrypoint.sh
+
+EXPOSE 9000
+
+ENTRYPOINT ["dumb-init", "--", "/opt/mcp-gateway/entrypoint.sh"]

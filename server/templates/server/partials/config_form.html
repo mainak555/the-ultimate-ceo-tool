@@ -1,5 +1,6 @@
 <!-- Configuration form (create / edit) — HTMX partial -->
 {% load static %}
+{% load md_extras %}
 
 {% if success %}
   <div class="alert alert-success" id="toast">{{ success }}</div>
@@ -78,12 +79,16 @@
         <input type="checkbox"
                id="human-gate-enabled"
                name="human_gate[enabled]"
-               {% if project.human_gate.enabled %}checked{% endif %}>
+               {% if project.human_gate.enabled or not project.agents or project.agents|length == 1 %}checked{% endif %}
+               {% if not project.agents or project.agents|length == 1 %}disabled{% endif %}>
         Enable human approval gate
       </label>
     </div>
+    {% if not project.agents or project.agents|length == 1 %}
+      <input type="hidden" id="human-gate-enabled-forced" name="human_gate[enabled]" value="on">
+    {% endif %}
 
-    <div id="human-gate-fields" {% if not project.human_gate.enabled %}hidden{% endif %}>
+    <div id="human-gate-fields" {% if not project.human_gate.enabled and project.agents and project.agents|length != 1 %}hidden{% endif %}>
       <div class="form-row">
         <div class="form-group">
           <label for="human_gate_name">Gate Name</label>
@@ -94,24 +99,16 @@
                  value="{{ project.human_gate.name|default:'Architect' }}"
                  placeholder="Architect">
         </div>
-
-        <div class="form-group">
-          <label for="human_gate_interaction_mode">Interaction Mode</label>
-          <select id="human_gate_interaction_mode"
-                  name="human_gate[interaction_mode]"
-                  class="input">
-            <option value="approve_reject" {% if project.human_gate.interaction_mode|default:'approve_reject' == 'approve_reject' %}selected{% endif %}>Approve / Reject</option>
-            <option value="feedback" {% if project.human_gate.interaction_mode == 'feedback' %}selected{% endif %}>Feedback</option>
-          </select>
-        </div>
       </div>
-      <small class="form-hint">If disabled, team max iterations cannot exceed 10.</small>
+      <small class="form-hint" id="human-gate-default-hint" {% if not project.agents or project.agents|length == 1 %}hidden{% endif %}>During chat pause, the reviewer selects Approve or Reject, can add optional notes, then chooses Continue or Stop. If disabled, team max iterations cannot exceed 10.</small>
+      <small class="form-hint" id="human-gate-single-assistant-hint" {% if project.agents and project.agents|length != 1 %}hidden{% endif %}>Single-assistant chat mode requires Human Gate. The loop continues until the human chooses Stop.</small>
     </div>
   </fieldset>
 
   <!-- ====== TEAM ====== -->
-  <fieldset class="form-group section-fieldset">
+  <fieldset class="form-group section-fieldset" id="team-settings-fieldset" {% if not project.agents or project.agents|length == 1 %}hidden{% endif %}>
     <legend>Team</legend>
+    <small class="form-hint" id="team-settings-disabled-hint" hidden>Team setup is available when there are at least 2 assistant agents.</small>
 
     <div class="form-row">
       <div class="form-group">
@@ -141,28 +138,30 @@
           <span class="agent-card__number">Selector Agent</span>
         </div>
 
-        <div class="form-group">
-          <label for="team-model">Selector Model</label>
-          <select id="team-model" name="team[model]" class="input">
-            <option value="" disabled>— choose a model —</option>
-            {% for m in model_names %}
-              <option value="{{ m }}" {% if project.team.model == m %}selected{% endif %}>{{ m }}</option>
-            {% endfor %}
-          </select>
-          <small class="form-hint">Model used exclusively for agent routing decisions.</small>
-        </div>
+        <div class="form-row form-row--two-col">
+          <div class="form-group">
+            <label for="team-model">Selector Model</label>
+            <select id="team-model" name="team[model]" class="input">
+              <option value="" disabled>— choose a model —</option>
+              {% for m in model_names %}
+                <option value="{{ m }}" {% if project.team.model == m %}selected{% endif %}>{{ m }}</option>
+              {% endfor %}
+            </select>
+            <small class="form-hint">Model used exclusively for agent routing decisions.</small>
+          </div>
 
-        <div class="form-group">
-          <label for="team-temperature">Selector Temperature</label>
-          <input type="number"
-                 id="team-temperature"
-                 name="team[temperature]"
-                 class="input input--sm"
-                 value="{{ project.team.temperature|default:'0.0' }}"
-                 step="0.1"
-                 min="0"
-                 max="2">
-          <small class="form-hint">0.0 = deterministic routing (recommended).</small>
+          <div class="form-group">
+            <label for="team-temperature">Selector Temperature</label>
+            <input type="number"
+                   id="team-temperature"
+                   name="team[temperature]"
+                   class="input input--sm"
+                   value="{{ project.team.temperature|default:'0.0' }}"
+                   step="0.1"
+                   min="0"
+                   max="2">
+            <small class="form-hint">0.0 = deterministic routing (recommended).</small>
+          </div>
         </div>
 
         <div class="form-group">
@@ -187,6 +186,61 @@
       </div>
     </div>
 
+  </fieldset>
+
+  <!-- ====== SHARED MCP TOOLS ====== -->
+  <fieldset class="form-group section-fieldset">
+    <legend>Shared MCP Tools</legend>
+    <p class="form-hint form-hint--compact">
+      Project-wide MCP server pool. Used by every assistant agent whose <strong>MCP Tools</strong> field is set to <strong>Shared</strong>.
+      Leave empty to disable. JSON is validated on save. Use <strong>MCP Secrets</strong> below as the single global secret store for
+      both this Shared configuration and every assistant's Dedicated MCP configuration.
+    </p>
+    <div class="form-group">
+      <label for="shared_mcp_tools">Shared MCP Configuration (JSON)</label>
+      <textarea id="shared_mcp_tools"
+                name="shared_mcp_tools"
+                class="input input--textarea input--mono js-shared-mcp-json"
+                rows="10"
+                placeholder='{"mcpServers": {"filesystem": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "/data"], "env": {}}}}'>{% if project.shared_mcp_tools %}{{ project.shared_mcp_tools|to_json }}{% endif %}</textarea>
+      <small class="form-hint">JSON object with <code>mcpServers</code> map. Each server uses stdio (<code>command</code>/<code>args</code>/<code>env</code>) or streamable HTTP (<code>transport: "http"</code> + <code>url</code>/<code>headers</code>). Required when any agent uses Shared scope.</small>
+    </div>
+
+    <div class="mcp-secrets__subsection">
+      <div class="mcp-secrets__subsection-header">
+        <strong>MCP Secrets</strong>
+        <button type="button" class="btn btn--secondary btn--sm js-add-mcp-secret">+ Add Secret</button>
+      </div>
+      <p class="form-hint form-hint--compact">
+        This is the global secret store for all MCP configs in this project. Reference keys from any string value in
+        <strong>Shared MCP Tools</strong> and any assistant's <strong>Dedicated MCP configuration</strong> as <code>{KEY_NAME}</code>
+        (e.g. <code>"Authorization": "Bearer {GITHUB_PAT}"</code>).
+        Keys must be <code>UPPER_SNAKE_CASE</code>. Values are stored on the server, masked on read, and substituted at runtime — they are never sent to the browser after save.
+      </p>
+      <div class="mcp-secrets__rows" id="mcp-secrets-rows">
+        {% for key, value in project.mcp_secrets.items %}
+        <div class="mcp-secrets__row" data-secret-index="{{ forloop.counter0 }}">
+          <input type="text"
+                 class="input input--sm js-mcp-secret-key"
+                 name="mcp_secrets[{{ forloop.counter0 }}][key]"
+                 value="{{ key }}"
+                 placeholder="GITHUB_PAT"
+                 pattern="^[A-Z][A-Z0-9_]*$"
+                 autocomplete="off">
+          <input type="password"
+                 class="input input--sm js-mcp-secret-value"
+                 name="mcp_secrets[{{ forloop.counter0 }}][value]"
+                 value="{{ value }}"
+                 placeholder="secret value"
+                 autocomplete="new-password">
+          <button type="button"
+                  class="chat-session-item__delete js-delete-mcp-secret"
+                  aria-label="Remove secret"
+                  title="Remove secret">×</button>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
   </fieldset>
 
   <!-- ====== INTEGRATIONS ====== -->
@@ -281,7 +335,7 @@
               </button>
             </div>
             <small class="form-hint trello-token-status" id="trello-token-generated-at">
-              {% if mode == 'create' %}<strong>Save first</strong> to generate the token{% elif project.integrations.trello.token_generated_at %}Generated: {{ project.integrations.trello.token_generated_at }}{% endif %}
+              {% if mode == 'create' %}<strong>Save first</strong> to generate the token{% elif project.integrations.trello.token_generated_at %}Generated: <time class="local-time" data-utc="{{ project.integrations.trello.token_generated_at }}">{{ project.integrations.trello.token_generated_at }}</time>{% endif %}
             </small>
             <input type="hidden" name="integrations[trello][token]" value="{{ project.integrations.trello.token|default:'' }}">
             <input type="hidden" name="integrations[trello][token_generated_at]" value="{{ project.integrations.trello.token_generated_at|default:'' }}">
@@ -412,7 +466,7 @@
             <div id="jira-software-fields" {% if not project.integrations.jira.software.enabled %}hidden{% endif %}>
               <div class="form-group">
                 <label>Export Agents</label>
-                <div class="checkbox-grid">
+                <div class="checkbox-grid" id="jira-software-export-agents">
                   {% for agent in project.agents %}
                     <label>
                       <input type="checkbox"
@@ -536,7 +590,7 @@
             <div id="jira-service-desk-fields" {% if not project.integrations.jira.service_desk.enabled %}hidden{% endif %}>
               <div class="form-group">
                 <label>Export Agents</label>
-                <div class="checkbox-grid">
+                <div class="checkbox-grid" id="jira-service-desk-export-agents">
                   {% for agent in project.agents %}
                     <label>
                       <input type="checkbox"
@@ -660,7 +714,7 @@
             <div id="jira-business-fields" {% if not project.integrations.jira.business.enabled %}hidden{% endif %}>
               <div class="form-group">
                 <label>Export Agents</label>
-                <div class="checkbox-grid">
+                <div class="checkbox-grid" id="jira-business-export-agents">
                   {% for agent in project.agents %}
                     <label>
                       <input type="checkbox"

@@ -59,10 +59,147 @@ document.addEventListener("DOMContentLoaded", function () {
   var chatInput = document.getElementById("chat-input");
   var chatSendBtn = document.getElementById("chat-send-btn");
   var chatStopBtn = document.getElementById("chat-stop-btn");
+  var chatAttachBtn = document.getElementById("chat-attach-btn");
+  var chatAttachmentInput = document.getElementById("chat-attachment-input");
+  var chatComposeAttachments = document.getElementById("chat-compose-attachments");
   var chatProjectBtn = document.getElementById("chat-project-btn");
   var activeProjectIdInput = document.getElementById("active-project-id");
   var activeSessionIdInput = document.getElementById("active-session-id");
   var csrfToken = (document.getElementById("csrf-token-value") || {}).value || "";
+
+  var composePendingFiles = [];
+  var composeUploaded = [];
+
+  function escapeHtml(text) {
+    return String(text || "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/\"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
+  function formatBytes(size) {
+    var n = Number(size || 0);
+    if (!n) return "0 B";
+    if (n < 1024) return n + " B";
+    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KB";
+    return (n / (1024 * 1024)).toFixed(1) + " MB";
+  }
+
+  var _FILE_ICON_EXTS = {
+    pdf: 1, doc: 1, docx: 1, xls: 1, xlsx: 1, ppt: 1, pptx: 1,
+    csv: 1, txt: 1, json: 1, xml: 1, md: 1,
+  };
+
+  function _iconUrlForFile(filename) {
+    var ext = (filename || "").split(".").pop().toLowerCase();
+    var name = _FILE_ICON_EXTS[ext] ? ext : "document";
+    return "/static/server/assets/icons/file-" + name + ".svg";
+  }
+
+  function attachmentChipHtml(att, target, index) {
+    var name = escapeHtml(att.filename || "file");
+    var url = att.content_url || "";
+    var iconCls = att.is_image
+      ? "chat-attachment-chip__thumb"
+      : "chat-attachment-chip__thumb chat-attachment-chip__thumb--icon";
+    var thumb = att.thumbnail_url
+      ? '<img class="' + iconCls + '" src="' + att.thumbnail_url + '" alt="' + name + '">'
+      : "";
+    var openTag = url
+      ? '<a class="chat-attachment-chip__file" href="' + url + '" target="_blank" rel="noopener noreferrer">'
+      : '<span class="chat-attachment-chip__file">';
+    var closeTag = url ? "</a>" : "</span>";
+
+    return '<div class="chat-attachment-chip">'
+      + thumb
+      + openTag
+      + '<span class="chat-attachment-chip__name">' + name + '</span>'
+      + '<span class="chat-attachment-chip__meta">' + formatBytes(att.size_bytes) + '</span>'
+      + closeTag
+      + '<button class="chat-attachment-chip__remove" type="button" data-attachment-target="' + target + '" data-attachment-index="' + index + '">&#x00D7;</button>'
+      + '</div>';
+  }
+
+  function renderAttachmentList(container, records, target) {
+    if (!container) return;
+    if (!records || !records.length) {
+      container.hidden = true;
+      container.innerHTML = "";
+      return;
+    }
+    var html = "";
+    records.forEach(function (att, idx) {
+      html += attachmentChipHtml(att, target, idx);
+    });
+    container.innerHTML = html;
+    container.hidden = false;
+  }
+
+  function renderComposeAttachments() {
+    renderAttachmentList(chatComposeAttachments, composeUploaded, "compose");
+  }
+
+  function toUploadRecord(file) {
+    var isImg = /^image\//i.test(file.type || "");
+    return {
+      id: "",
+      filename: file.name,
+      mime_type: file.type || "application/octet-stream",
+      size_bytes: file.size || 0,
+      is_image: isImg,
+      thumbnail_url: isImg ? "" : _iconUrlForFile(file.name),
+      content_url: "",
+      _file: file,
+    };
+  }
+
+  function uploadAttachmentRecords(sessionId, records) {
+    if (!records || !records.length) return Promise.resolve([]);
+    var secretKey = getSecretKey();
+    if (!secretKey) return Promise.reject(new Error("Enter the Secret Key first."));
+
+    var form = new FormData();
+    records.forEach(function (rec) {
+      if (rec && rec._file) form.append("files", rec._file);
+    });
+    return fetch("/chat/sessions/" + sessionId + "/attachments/", {
+      method: "POST",
+      headers: {
+        "X-App-Secret-Key": secretKey,
+        "X-CSRFToken": csrfToken,
+      },
+      body: form,
+    }).then(function (r) {
+      return r.json().then(function (data) {
+        if (!r.ok) throw new Error(data.error || "Attachment upload failed");
+        return data.attachments || [];
+      });
+    });
+  }
+
+  function renderMessageAttachments(attachments) {
+    var list = attachments || [];
+    if (!list.length) return "";
+    var html = '<div class="chat-message-attachments">';
+    list.forEach(function (att) {
+      var name = escapeHtml(att.filename || "file");
+      var url = att.content_url || "";
+      var iconCls = att.is_image
+        ? "chat-message-attachment__thumb"
+        : "chat-message-attachment__thumb chat-message-attachment__thumb--icon";
+      var thumb = att.thumbnail_url
+        ? '<img class="' + iconCls + '" src="' + att.thumbnail_url + '" alt="' + name + '">'
+        : "";
+      html += '<a class="chat-message-attachment" href="' + url + '" target="_blank" rel="noopener noreferrer">'
+        + thumb
+        + '<span class="chat-message-attachment__name">' + name + '</span>'
+        + "</a>";
+    });
+    html += "</div>";
+    return html;
+  }
 
   var editSessionModal = document.getElementById("edit-session-modal");
   var editModalSessionId = document.getElementById("edit-modal-session-id");
@@ -90,10 +227,25 @@ document.addEventListener("DOMContentLoaded", function () {
       chatSendBtn.disabled = !hasSecret;
       chatSendBtn.title = hasSecret ? "Send" : "Enter the Secret Key to send messages.";
     }
+    if (chatAttachBtn) {
+      chatAttachBtn.disabled = !hasSecret;
+      chatAttachBtn.title = hasSecret ? "Attach files" : "Enter the Secret Key to attach files.";
+    }
+    if (chatAttachmentInput) {
+      chatAttachmentInput.disabled = !hasSecret;
+    }
     if (chatInput) {
       chatInput.disabled = !hasSecret;
       chatInput.placeholder = hasSecret ? "Send a message" : "Enter the Secret Key to send messages.";
     }
+
+    document.querySelectorAll(".human-gate-btn--attach").forEach(function (btn) {
+      btn.disabled = !hasSecret;
+      btn.title = hasSecret ? "Attach files" : "Enter the Secret Key to attach files.";
+    });
+    document.querySelectorAll(".human-gate-panel__file-input").forEach(function (input) {
+      input.disabled = !hasSecret;
+    });
 
     if (!hasSecret && editSessionModal && !editSessionModal.hidden) {
       closeEditModal();
@@ -217,6 +369,135 @@ document.addEventListener("DOMContentLoaded", function () {
     }
   });
 
+  function clearComposeAttachments() {
+    composePendingFiles = [];
+    composeUploaded = [];
+    renderComposeAttachments();
+  }
+
+  function addComposeFiles(fileList) {
+    var files = Array.prototype.slice.call(fileList || []);
+    if (!files.length) return;
+    var cap = 10 - composePendingFiles.length - composeUploaded.length;
+    if (cap <= 0) return;
+    files.slice(0, cap).forEach(function (file) {
+      composePendingFiles.push(toUploadRecord(file));
+    });
+    renderAttachmentList(chatComposeAttachments, composeUploaded.concat(composePendingFiles), "compose");
+  }
+
+  function ensureComposeAttachmentsUploaded(sessionId) {
+    if (!composePendingFiles.length) {
+      return Promise.resolve(composeUploaded.map(function (x) { return x.id; }));
+    }
+
+    var pending = composePendingFiles.slice();
+    composePendingFiles = [];
+    return uploadAttachmentRecords(sessionId, pending)
+      .then(function (uploaded) {
+        composeUploaded = composeUploaded.concat(uploaded || []);
+        renderComposeAttachments();
+        return composeUploaded.map(function (x) { return x.id; });
+      })
+      .catch(function (err) {
+        composePendingFiles = pending.concat(composePendingFiles);
+        renderAttachmentList(chatComposeAttachments, composeUploaded.concat(composePendingFiles), "compose");
+        throw err;
+      });
+  }
+
+  var gateAttachmentState = new WeakMap();
+
+  function getGateState(panel) {
+    var state = gateAttachmentState.get(panel);
+    if (!state) {
+      state = { pending: [], uploaded: [] };
+      gateAttachmentState.set(panel, state);
+    }
+    return state;
+  }
+
+  // Re-evaluate Continue button enabled state for single-assistant chat mode.
+  // Text is ALWAYS required; attachments alone are not sufficient.
+  function _evalGateContinue(panel) {
+    if (!panel || panel.dataset.chatMode !== "single_assistant") return;
+    // Never re-enable once a submit is in-flight (panel.dataset.submitting="1").
+    // The panel is removed on success; state is restored on failure.
+    if (panel.dataset.submitting === "1") return;
+    var ta = panel.querySelector(".human-gate-panel__textarea");
+    var hasText = ta && ta.value.trim().length > 0;
+    var continueBtn = panel.querySelector(".human-gate-btn--continue");
+    if (continueBtn) continueBtn.disabled = !hasText;
+  }
+
+  function renderGateAttachments(panel) {
+    var state = getGateState(panel);
+    var listEl = panel.querySelector(".human-gate-panel__attachment-list");
+    renderAttachmentList(listEl, state.uploaded.concat(state.pending), "gate");
+    // Keep Continue enabled/disabled in sync for single-assistant mode
+    _evalGateContinue(panel);
+  }
+
+  function addGateFiles(panel, fileList) {
+    var files = Array.prototype.slice.call(fileList || []);
+    if (!files.length) return;
+    var state = getGateState(panel);
+    var cap = 10 - state.pending.length - state.uploaded.length;
+    if (cap <= 0) return;
+    files.slice(0, cap).forEach(function (file) {
+      state.pending.push(toUploadRecord(file));
+    });
+    renderGateAttachments(panel);
+  }
+
+  function ensureGateAttachmentsUploaded(panel, sessionId) {
+    var state = getGateState(panel);
+    if (!state.pending.length) {
+      return Promise.resolve(state.uploaded.map(function (x) { return x.id; }));
+    }
+    var pending = state.pending.slice();
+    state.pending = [];
+    return uploadAttachmentRecords(sessionId, pending)
+      .then(function (uploaded) {
+        state.uploaded = state.uploaded.concat(uploaded || []);
+        renderGateAttachments(panel);
+        return state.uploaded.map(function (x) { return x.id; });
+      })
+      .catch(function (err) {
+        state.pending = pending.concat(state.pending);
+        renderGateAttachments(panel);
+        throw err;
+      });
+  }
+
+  if (chatAttachBtn && chatAttachmentInput) {
+    chatAttachBtn.addEventListener("click", function () {
+      chatAttachmentInput.click();
+    });
+    chatAttachmentInput.addEventListener("change", function () {
+      addComposeFiles(chatAttachmentInput.files);
+      chatAttachmentInput.value = "";
+    });
+  }
+
+  chatInput.addEventListener("paste", function (e) {
+    var files = (e.clipboardData && e.clipboardData.files) || [];
+    if (files.length) {
+      e.preventDefault();
+      addComposeFiles(files);
+    }
+  });
+
+  chatInput.addEventListener("dragover", function (e) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+  });
+
+  chatInput.addEventListener("drop", function (e) {
+    e.preventDefault();
+    addComposeFiles((e.dataTransfer && e.dataTransfer.files) || []);
+  });
+
   var _activeReader = null;
 
   function setRunningState(running) {
@@ -241,18 +522,21 @@ document.addEventListener("DOMContentLoaded", function () {
     chatMessages.scrollTop = chatMessages.scrollHeight;
   }
 
-  function appendHumanBubble(text) {
-    var ts = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  function appendHumanBubble(text, attachments) {
+    var ts = new Date().toISOString();
     var contentHtml = renderMarkdown(text);
+    var attachmentsHtml = renderMessageAttachments(attachments || []);
     appendBubble(
       '<div class="chat-bubble chat-bubble--human">'
       + '<div class="chat-bubble__meta">'
       + '<span class="chat-bubble__name">You</span>'
-      + '<span class="chat-bubble__time">' + ts + '</span>'
+      + '<span class="chat-bubble__time"><time class="local-time" data-utc="' + ts + '">' + ts + '</time></span>'
       + '</div>'
       + '<div class="chat-bubble__content">' + contentHtml + '</div>'
+      + attachmentsHtml
       + '</div>'
     );
+    window.renderLocalTimes();
   }
 
   function appendStatusBadge(type) {
@@ -325,31 +609,70 @@ document.addEventListener("DOMContentLoaded", function () {
 
   function appendGatePanel(data) {
     var sessionId = activeSessionIdInput ? activeSessionIdInput.value : "";
-    var modeHtml = data.mode === "feedback"
-      ? '<textarea class="input input--textarea human-gate-panel__textarea" rows="3" placeholder="Type your feedback for the agents..."></textarea>'
-        + '<div class="human-gate-panel__actions">'
-        + '<button class="btn btn--primary human-gate-btn human-gate-btn--feedback">Send Feedback</button>'
-        + '<button class="btn btn--danger human-gate-btn human-gate-btn--stop">Stop</button>'
-        + '</div>'
-      : '<div class="human-gate-panel__actions">'
-        + '<button class="btn btn--success human-gate-btn human-gate-btn--approve">Approve and Continue</button>'
-        + '<button class="btn btn--danger human-gate-btn human-gate-btn--stop">Stop</button>'
-        + '</div>';
-
+    var isSingleAssistant = data && data.chat_mode === "single_assistant";
+    var promptText;
+    if (isSingleAssistant) {
+      promptText = ' - Round ' + data.round + ' complete. Continue or Stop?';
+    } else {
+      promptText = ' - Round ' + data.round + ' of ' + data.max_rounds + ' complete. What would you like to do?';
+    }
+    // Single-assistant mode: Continue starts disabled until user types or attaches
+    var continueBtnAttr = isSingleAssistant ? ' disabled' : '';
+    var textareaPlaceholder = isSingleAssistant
+      ? 'Enter your next message (required)...'
+      : 'Optional details to send to agents...';
     chatMessages.insertAdjacentHTML(
       "beforeend",
-      '<div class="human-gate-panel" data-session-id="' + sessionId + '">'
+      '<div class="human-gate-panel" data-session-id="' + sessionId + '"'
+      + (isSingleAssistant ? ' data-chat-mode="single_assistant"' : '')
+      + '>'
       + '<div class="human-gate-panel__prompt">'
       + '<strong>' + (data.human_name || "You") + '</strong>'
-      + ' - Round ' + data.round + ' of ' + data.max_rounds + ' complete. What would you like to do?'
+      + promptText
       + '</div>'
-      + modeHtml
+      + '<div class="human-gate-panel__decision-row">'
+      + '<button class="btn btn--success human-gate-btn human-gate-btn--approve">Approve</button>'
+      + '<button class="btn btn--warning human-gate-btn human-gate-btn--reject">Reject</button>'
+      + '</div>'
+      + '<div class="human-gate-panel__input-row">'
+      + '<button class="btn btn--secondary human-gate-btn human-gate-btn--attach chat-attach-btn" type="button" title="Attach files">+</button>'
+      + '<textarea class="human-gate-panel__textarea" rows="3" placeholder="' + textareaPlaceholder + '"></textarea>'
+      + '<input class="human-gate-panel__file-input" type="file" hidden multiple>'
+      + '</div>'
+      + '<div class="chat-attachment-list human-gate-panel__attachment-list" hidden></div>'
+      + '<div class="human-gate-panel__actions">'
+      + '<button class="btn btn--primary human-gate-btn human-gate-btn--continue"' + continueBtnAttr + '>Continue</button>'
+      + '<button class="btn btn--danger human-gate-btn human-gate-btn--stop">Stop</button>'
+      + '</div>'
       + '</div>'
     );
     chatMessages.scrollTop = chatMessages.scrollHeight;
   }
 
-  function startRun(task) {
+  function setGateDecision(panel, decision) {
+    if (!panel || !decision) return;
+
+    panel.dataset.decision = decision;
+    panel.querySelectorAll(".human-gate-btn--approve, .human-gate-btn--reject").forEach(function (btn) {
+      btn.classList.remove("is-active");
+    });
+
+    var activeBtn = panel.querySelector(
+      decision === "APPROVED" ? ".human-gate-btn--approve" : ".human-gate-btn--reject"
+    );
+    if (activeBtn) activeBtn.classList.add("is-active");
+
+    var ta = panel.querySelector(".human-gate-panel__textarea");
+    if (!ta) return;
+
+    var value = ta.value || "";
+    var body = value.replace(/^(APPROVED|REJECTED)\s*\n\n?/i, "");
+    ta.value = decision + "\n\n" + body;
+    ta.focus();
+    ta.selectionStart = ta.selectionEnd = ta.value.length;
+  }
+
+  function startRun(task, attachmentIds) {
     var sessionId = activeSessionIdInput ? activeSessionIdInput.value.trim() : "";
     if (!sessionId) { return; }
 
@@ -364,6 +687,9 @@ document.addEventListener("DOMContentLoaded", function () {
 
     var body = new URLSearchParams();
     body.append("task", task || "");
+    (attachmentIds || []).forEach(function (id) {
+      if (id) body.append("attachment_ids", id);
+    });
 
     fetch("/chat/sessions/" + sessionId + "/run/", {
       method: "POST",
@@ -474,6 +800,7 @@ document.addEventListener("DOMContentLoaded", function () {
       var ts = data.timestamp || "";
       var initial = (data.agent_name || "A").slice(0, 1).toUpperCase();
       var contentHtml = renderMarkdown(data.content || "");
+      var attachmentsHtml = renderMessageAttachments(data.attachments || []);
       var exportHtml = buildExportDropdown(
         data.export,
         data.agent_name,
@@ -486,12 +813,14 @@ document.addEventListener("DOMContentLoaded", function () {
         + '<div class="chat-bubble__body">'
         + '<div class="chat-bubble__meta">'
         + '<span class="chat-bubble__name">' + (data.agent_name || "Agent") + '</span>'
-        + '<span class="chat-bubble__time">' + ts + '</span>'
+        + '<span class="chat-bubble__time"><time class="local-time" data-utc="' + ts + '">' + ts + '</time></span>'
         + '</div>'
         + '<div class="chat-bubble__content">' + contentHtml + '</div>'
+        + attachmentsHtml
         + exportHtml
         + '</div></div>'
       );
+      window.renderLocalTimes();
     } else if (eventName === "gate") {
       setRunningState(false);
       appendGatePanel(data);
@@ -513,7 +842,27 @@ document.addEventListener("DOMContentLoaded", function () {
     chatSendBtn.addEventListener("click", function () {
       if (chatSendBtn.disabled) return;
       var text = chatInput.value.trim();
-      if (!text) return;
+      var hasAttachments = composePendingFiles.length > 0 || composeUploaded.length > 0;
+      if (!text && !hasAttachments) return;
+
+      function runWithSession(sessionId) {
+        // Disable Send immediately to prevent double-submit during the async upload.
+        // chatInput stays enabled so the user can keep typing.
+        chatSendBtn.disabled = true;
+        return ensureComposeAttachmentsUploaded(sessionId).then(function (attachmentIds) {
+          var attachmentsForBubble = composeUploaded.slice();
+          appendHumanBubble(text || "Attached files", attachmentsForBubble);
+          chatInput.value = "";
+          chatInput.style.height = "auto";
+          chatInput.focus();
+          clearComposeAttachments();
+          startRun(text, attachmentIds);
+        }).catch(function (err) {
+          // Restore Send so the user can retry.
+          chatSendBtn.disabled = false;
+          appendBubble('<div class="chat-bubble chat-bubble--error">Error: ' + err.message + '</div>');
+        });
+      }
 
       var sessionId = activeSessionIdInput ? activeSessionIdInput.value.trim() : "";
       if (!sessionId) {
@@ -523,7 +872,7 @@ document.addEventListener("DOMContentLoaded", function () {
         var secretKey = getSecretKey();
         if (!secretKey) { alert("Enter the Secret Key first."); return; }
 
-        var description = text.substring(0, 150);
+        var description = (text || "Attachment message").substring(0, 150);
 
         chatSendBtn.disabled = true;
         chatInput.disabled = true;
@@ -567,11 +916,8 @@ document.addEventListener("DOMContentLoaded", function () {
           if (chatMessages) {
             chatMessages.innerHTML = '<div class="chat-history" id="chat-history-msgs"></div>';
           }
-          appendHumanBubble(text);
-          chatInput.value = "";
-          chatInput.style.height = "auto";
-          chatInput.focus();
-          startRun(text);
+          var sid = activeSessionIdInput ? activeSessionIdInput.value.trim() : "";
+          return runWithSession(sid);
         }).catch(function (err) {
           appendBubble('<div class="chat-bubble chat-bubble--error">Error: ' + err.message + '</div>');
         }).finally(function () {
@@ -581,11 +927,9 @@ document.addEventListener("DOMContentLoaded", function () {
         return;
       }
 
-      appendHumanBubble(text);
-      chatInput.value = "";
-      chatInput.style.height = "auto";
-      chatInput.focus();
-      startRun(text);
+      runWithSession(sessionId).catch(function (err) {
+        appendBubble('<div class="chat-bubble chat-bubble--error">Error: ' + err.message + '</div>');
+      });
     });
   }
 
@@ -602,6 +946,85 @@ document.addEventListener("DOMContentLoaded", function () {
   }
 
   document.body.addEventListener("click", function (e) {
+    var removeBtn = e.target.closest(".chat-attachment-chip__remove");
+    if (!removeBtn) return;
+    var target = removeBtn.getAttribute("data-attachment-target") || "";
+    var idx = parseInt(removeBtn.getAttribute("data-attachment-index") || "-1", 10);
+    if (idx < 0) return;
+
+    if (target === "compose") {
+      var uploadedLen = composeUploaded.length;
+      if (idx < uploadedLen) {
+        composeUploaded.splice(idx, 1);
+      } else {
+        composePendingFiles.splice(idx - uploadedLen, 1);
+      }
+      renderAttachmentList(chatComposeAttachments, composeUploaded.concat(composePendingFiles), "compose");
+      return;
+    }
+
+    if (target === "gate") {
+      var panel = removeBtn.closest(".human-gate-panel");
+      if (!panel) return;
+      var state = getGateState(panel);
+      var gateUploadedLen = state.uploaded.length;
+      if (idx < gateUploadedLen) {
+        state.uploaded.splice(idx, 1);
+      } else {
+        state.pending.splice(idx - gateUploadedLen, 1);
+      }
+      renderGateAttachments(panel);
+    }
+  });
+
+  document.body.addEventListener("click", function (e) {
+    var attachBtn = e.target.closest(".human-gate-btn--attach");
+    if (!attachBtn) return;
+    var panel = attachBtn.closest(".human-gate-panel");
+    if (!panel) return;
+    var input = panel.querySelector(".human-gate-panel__file-input");
+    if (input) input.click();
+  });
+
+  document.body.addEventListener("change", function (e) {
+    if (!e.target.classList.contains("human-gate-panel__file-input")) return;
+    var panel = e.target.closest(".human-gate-panel");
+    if (!panel) return;
+    addGateFiles(panel, e.target.files);
+    e.target.value = "";
+  });
+
+  document.body.addEventListener("input", function (e) {
+    if (!e.target.classList || !e.target.classList.contains("human-gate-panel__textarea")) return;
+    var panel = e.target.closest(".human-gate-panel");
+    if (panel) _evalGateContinue(panel);
+  });
+
+  document.body.addEventListener("paste", function (e) {
+    if (!e.target.classList || !e.target.classList.contains("human-gate-panel__textarea")) return;
+    var panel = e.target.closest(".human-gate-panel");
+    if (!panel) return;
+    var files = (e.clipboardData && e.clipboardData.files) || [];
+    if (!files.length) return;
+    e.preventDefault();
+    addGateFiles(panel, files);
+  });
+
+  document.body.addEventListener("dragover", function (e) {
+    if (!e.target.classList || !e.target.classList.contains("human-gate-panel__textarea")) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+  });
+
+  document.body.addEventListener("drop", function (e) {
+    if (!e.target.classList || !e.target.classList.contains("human-gate-panel__textarea")) return;
+    var panel = e.target.closest(".human-gate-panel");
+    if (!panel) return;
+    e.preventDefault();
+    addGateFiles(panel, (e.dataTransfer && e.dataTransfer.files) || []);
+  });
+
+  document.body.addEventListener("click", function (e) {
     var panel = e.target.closest(".human-gate-panel");
     if (!panel) return;
 
@@ -610,9 +1033,12 @@ document.addEventListener("DOMContentLoaded", function () {
     var secretKey = getSecretKey();
     if (!sessionId || !secretKey) return;
 
-    function sendRespond(action, text) {
+    function sendRespond(action, text, attachmentIds) {
       var body = new URLSearchParams({ action: action });
       if (text) body.append("text", text);
+      (attachmentIds || []).forEach(function (id) {
+        if (id) body.append("attachment_ids", id);
+      });
       return fetch("/chat/sessions/" + sessionId + "/respond/", {
         method: "POST",
         headers: {
@@ -621,37 +1047,58 @@ document.addEventListener("DOMContentLoaded", function () {
           "Content-Type": "application/x-www-form-urlencoded",
         },
         body: body.toString(),
-      }).then(function (r) { return r.json(); });
+      }).then(function (r) {
+        return r.json().then(function (data) {
+          if (!r.ok) throw new Error(data.error || "Action failed");
+          return data;
+        });
+      });
     }
 
     if (e.target.closest(".human-gate-btn--approve")) {
-      panel.remove();
-      sendRespond("approve", "").then(function (d) {
-        if (d.status === "ok") startRun("");
-      });
-    } else if (e.target.closest(".human-gate-btn--feedback")) {
+      setGateDecision(panel, "APPROVED");
+    } else if (e.target.closest(".human-gate-btn--reject")) {
+      setGateDecision(panel, "REJECTED");
+    } else if (e.target.closest(".human-gate-btn--continue")) {
+      var continueBtn = panel.querySelector(".human-gate-btn--continue");
       var ta = panel.querySelector(".human-gate-panel__textarea");
       var text = ta ? ta.value.trim() : "";
-      if (!text) { ta && ta.focus(); return; }
-      panel.remove();
-      var fbTs = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-      var fbHtml = renderMarkdown(text);
-      appendBubble(
-        '<div class="chat-bubble chat-bubble--human">'
-        + '<div class="chat-bubble__meta">'
-        + '<span class="chat-bubble__name">You</span>'
-        + '<span class="chat-bubble__time">' + fbTs + '</span>'
-        + '</div>'
-        + '<div class="chat-bubble__content">' + fbHtml + '</div>'
-        + '</div>'
-      );
-      sendRespond("feedback", text).then(function (d) {
-        if (d.status === "ok") startRun(d.task || text);
+      // Text is mandatory for ALL gate modes — attachments alone are not enough.
+      // Approve/Reject buttons prepend their decision to the textarea, satisfying this.
+      if (!text) {
+        if (ta) { ta.focus(); ta.classList.add("input--shake"); setTimeout(function () { ta.classList.remove("input--shake"); }, 400); }
+        return;
+      }
+      // Prevent double-submit while an async file upload is in-flight.
+      // Without this guard, clicking Continue twice (or clicking during upload)
+      // fires multiple appendHumanBubble + sendRespond calls.
+      if (panel.dataset.submitting === "1") return;
+      panel.dataset.submitting = "1";
+      if (continueBtn) continueBtn.disabled = true;
+      ensureGateAttachmentsUploaded(panel, sessionId).then(function (attachmentIds) {
+        var state = getGateState(panel);
+        var bubbleAttachments = state.uploaded.slice();
+        panel.remove();
+        if (text || bubbleAttachments.length) {
+          appendHumanBubble(text || "Attached files", bubbleAttachments);
+        }
+        sendRespond("continue", text, attachmentIds).then(function (d) {
+          if (d.status === "ok") startRun(d.task || "", d.attachment_ids || []);
+        }).catch(function (err) {
+          appendBubble('<div class="chat-bubble chat-bubble--error">Error: ' + err.message + '</div>');
+        });
+      }).catch(function (err) {
+        // Upload failed — restore interactive state so the user can retry.
+        panel.dataset.submitting = "";
+        if (continueBtn) continueBtn.disabled = false;
+        appendBubble('<div class="chat-bubble chat-bubble--error">Error: ' + err.message + '</div>');
       });
     } else if (e.target.closest(".human-gate-btn--stop")) {
       panel.remove();
       sendRespond("stop", "").then(function () {
         appendStatusBadge("stopped");
+      }).catch(function (err) {
+        appendBubble('<div class="chat-bubble chat-bubble--error">Error: ' + err.message + '</div>');
       });
     }
   });

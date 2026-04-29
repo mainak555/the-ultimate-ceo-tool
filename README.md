@@ -1,4 +1,5 @@
-# Product Discovery
+# The Ultimate CEO Tool
+### From vision to reality
 
 Agent-based product roadmap planning tool — OKR to Product Backlog.  
 Django SPA with HTMX, SCSS, and MongoDB (PyMongo).
@@ -34,17 +35,308 @@ Open **http://127.0.0.1:8000** in your browser.
 
 ---
 
+## Human-In-The-Loop (HITL) Gate
+
+When Human Gate is enabled for a project, the run pauses after each round and
+shows a unified decision panel:
+
+- Top decision buttons: `Approve` or `Reject`
+- Notes textarea: `Approve`/`Reject` are optional shortcuts that auto-prefix
+  `APPROVED` or `REJECTED` followed by a blank line; you can add
+	optional extra context for the agents
+- Bottom actions: `Continue` (resume with optional notes) or `Stop`
+
+HITL notes sent with `Continue` are rendered as markdown in both live chat
+and persisted session history.
+
+Single-assistant contract:
+
+- With exactly one assistant, the project runs in **chat mode**.
+- Team Setup is hidden in configuration for this mode.
+- Human Gate is mandatory.
+- The run pauses after each assistant turn and continues only when the human
+	selects `Continue`; conversation ends when the human selects `Stop`.
+- `max_iterations` is not used as an auto-completion condition in
+	single-assistant chat mode.
+- **`Continue` requires a message or attachment** in single-assistant mode.
+	The button starts disabled and enables only when text is typed or files are attached.
+	An empty continue is rejected at the backend with HTTP 400.
+
+Multi-assistant gate contract:
+
+- Gate pauses after each full agent round (all agents have spoken once).
+- `Continue` may be sent with an empty notes textarea — agents resume their
+	internal collaboration with the accumulated history as context.
+- `Stop` triggers a graceful termination: the current agent finishes its turn,
+	the message is persisted, then the run ends cleanly.
+
+---
+
+## Chat Attachments
+
+Home chat composer and HITL gate textarea support:
+
+- attach button file picker
+- drag and drop
+- paste from clipboard
+
+### Supported file types
+
+| Category | Extensions |
+|---|---|
+| **Images** | `png`, `jpg`, `jpeg`, `webp`, `gif`, `bmp`, `svg`, `heic`, `heif`, `tif`, `tiff` |
+| **Documents** | `pdf`, `docx`, `doc` |
+| **Spreadsheets** | `xlsx`, `xls`, `csv` |
+| **Presentations** | `pptx`, `ppt` |
+| **Text / Data** | `txt`, `md`, `json` |
+
+Max file size: **20 MB** per file. Max files per message: **10**.
+
+### Upload flow
+
+1. **Select** — Use the attach button, drag-and-drop onto the composer, or paste from clipboard. The file is validated immediately (type, size, count).
+2. **Upload** — The file is uploaded to Blob Storage (Azure in current implementation) in the background *before* the message is sent. A chip appears in the composer with a loading indicator during upload.
+3. **Bind** — Once the upload succeeds the chip is bound with an `attachment_id`. Multiple files upload in parallel and each binds independently.
+4. **Send** — When you press **Send** (or **Continue** in the HITL gate), the bound `attachment_id`s are submitted alongside your message text. The server validates session ownership for every ID.
+5. **Agent context** — The server assembles the full agent task: extracted text from documents is appended as an `--- Attachments:` block; image bytes are injected as vision frames. The agent receives the complete content without truncation.
+
+If an upload fails the chip is removed and an error is shown — no partial IDs are ever submitted.
+
+### How attachments reach the agent
+
+**Text files** (PDF, Word, Excel, CSV, PPTX, TXT, MD, JSON) — content is extracted
+lazily the first time an agent run references the attachment:
+
+1. The app checks Redis for a cached copy
+   (`REDIS_ATTACHMENT_TTL_SECONDS`, default 24 h).
+2. Cache **hit** → text returned immediately (< 1 ms).
+3. Cache **miss + success** → bytes downloaded from Azure Blob, text extracted,
+   stored in Redis, then returned. Full content is passed — no truncation.
+   Genuinely empty documents (e.g. scanned PDFs with no text layer) are cached
+   to avoid repeated blob downloads.
+4. Cache **miss + exception** → blob download or extraction error: result is
+   **not** stored in Redis. The next agent run retries the extraction, so
+   transient failures do not become permanent.
+
+For Excel files, every sheet is extracted with its name as a heading and
+rows formatted as tab-separated values, preserving the tabular structure
+for the model.
+
+**Images** — downloaded from blob on each run and passed as raw pixel data
+via `MultiModalMessage` to vision-capable models. Set `"vision": true` in
+`agent_models.json` for the model being used (see [Models & `model_info`](#models--model_info)).
+
+### Storage
+
+All blobs are stored under `sessions/{session_id}/attachments/{attachment_id}/{filename}`
+in **Azure Blob** (current implementation — swappable via `ATTACHMENT_STORAGE_PROVIDER`).
+MongoDB stores only metadata — no file content in the database.
+Blobs, Redis cache, and metadata rows are all cleaned up when a session is deleted.
+
+Storage abstraction pattern:
+
+- **Strategy**: provider-specific byte operations (`StorageStrategy`)
+- **Factory**: runtime provider selection (`build_storage_strategy()`)
+- **Repository-style metadata access**: attachment metadata queries scoped by `session_id`
+
+---
+
+## Active Session Coordination (Redis)
+
+Active chat runs are coordinated through Redis by `session_id` while the run is
+in progress:
+
+- Exactly one worker can hold the active run lease for a session.
+- A heartbeat renews the lease while streaming.
+- `/chat/sessions/<id>/stop/` sets a Redis cancel signal so cancellation works
+	across containers/pods.
+- If Redis is unavailable, run start fails fast and does not transition the
+	session into `running`.
+
+MongoDB remains the durable source of truth for discussion history and
+persisted AutoGen team resume state (`chat_sessions.agent_state`).
+
+---
+
 ## Docker
 
-```bash
-# Build
-docker build -t product-discovery .
+The repository ships three deployment topologies under `deployments/`:
 
-# Run (uses .env file for configuration)
+| Topology | Use when | MCP location |
+| --- | --- | --- |
+| [`deployments/standalone/`](deployments/standalone/README.md) | Single-container hosts (Vercel, HF Spaces, fly.io, local dev) | Node bundled in the app image; stdio MCP servers in-process |
+| [`deployments/compose/`](deployments/compose/README.md) | Docker Compose / single VM | Python-only `app` + Node-based `mcp-gateway` sidecar |
+| [`deployments/k8s/`](deployments/k8s/README.md) | Kubernetes (Helm) | Same sidecar split, full Helm chart |
+
+Quick local build/run (standalone topology — Python + Node bundled):
+
+```bash
+docker build -f deployments/standalone/Dockerfile -t product-discovery .
 docker run -p 8000:8000 --env-file .env product-discovery
 ```
 
-The container runs `uvicorn` (ASGI) by default, which is required for SSE streaming.
+The container runs `uvicorn` (ASGI) by default, which is required for SSE
+streaming of agent output.
+
+---
+
+## Models & `model_info`
+
+The model catalog lives in [`agent_models.json`](agent_models.json). Each key
+is the model name shown in the UI; the value declares the provider, optional
+endpoint/version overrides, and — crucially — a `model_info` capability map.
+
+```jsonc
+{
+  "gpt-5.4-mini": {
+    "provider": "azure_openai",
+    "api_version": "2024-12-01-preview",
+    "model": "gpt-5.4-mini-2026-03-17",
+    "model_info": {
+      "function_calling": true,
+      "json_output": true,
+      "structured_output": true,
+      "vision": true,
+      "family": "gpt-5"
+    }
+  }
+}
+```
+
+`model_info` advertises model capabilities to AutoGen. The factory default
+is conservative — every flag is `false` — so any provider that always
+forwards `model_info` (Azure OpenAI, Azure Anthropic, Google Gemini) **must**
+declare overrides per model in `agent_models.json`, otherwise the model will
+behave as if it has no capabilities at all.
+
+| Field | Set `true` when… |
+| --- | --- |
+| `function_calling` | The model supports tool / function calling |
+| `json_output` | The model can return JSON-mode responses |
+| `structured_output` | The model supports a JSON schema for structured output |
+| `vision` | The model accepts image inputs |
+| `family` | Identifier such as `gpt-5`, `gpt-4.1`, `claude-sonnet-4`, `deepseek-v3` |
+
+### `function_calling` is required for MCP tools
+
+Whenever an agent has `mcp_tools` set to `shared` or `dedicated`, AutoGen
+forwards the attached `McpWorkbench` tools to the model client. If the
+resolved `model_info.function_calling` is `false`, the underlying client
+raises:
+
+```text
+ValueError: Model does not support function calling
+```
+
+So when introducing a new model that should be usable with MCP tools, the
+model's catalog entry **must** declare `"function_calling": true`. Models
+that do not support tool calling (some reasoning, audio, embedding) must be
+paired only with agents whose `mcp_tools = "none"`.
+
+For the `openai` and `anthropic` direct providers, AutoGen has an internal
+table of known model names (e.g. `gpt-4o`, `claude-3-7-sonnet`), so
+`model_info` can be omitted for those; for any custom or unrecognized name,
+declare it explicitly.
+
+See [`docs/agent_factory.md`](docs/agent_factory.md) for the full provider
+registry, environment variable conventions, and per-provider field
+references.
+
+---
+
+## MCP (Model Context Protocol) Tools
+
+Assistant agents can be augmented with MCP tools, configured per-project and
+per-agent. Each agent's `mcp_tools` field is one of:
+
+- `none` — no tools attached.
+- `shared` — uses the project-level `shared_mcp_tools` JSON.
+- `dedicated` — uses a per-agent `mcp_configuration` JSON.
+
+Both JSON fields share the same shape:
+
+```jsonc
+{
+  "mcpServers": {
+    "fs":    { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "/data"] },
+    "fetch": { "transport": "http", "url": "http://mcp-gateway:9000/fetch/mcp" }
+  }
+}
+```
+
+Supported transports: **stdio** (`{command, args, env}`) and **streamable HTTP**
+(`{transport: "http", url, headers}`). SSE is intentionally unsupported.
+
+For the standalone deployment, the app image bundles Node so stdio MCP
+servers can run in-process. For compose / k8s, a separate `mcp-gateway`
+container hosts MCP servers and exposes them over streamable HTTP.
+
+**Tracing** — every MCP tool call is automatically traced as a child span of
+the calling agent's run. AutoGen's `McpWorkbench` wraps each invocation in an
+OpenTelemetry `execute_tool <tool_name>` span (GenAI semantic conventions:
+`gen_ai.operation.name=execute_tool`, `gen_ai.system=autogen`,
+`gen_ai.tool.name`, `gen_ai.tool.call.id`), and our global tracer provider
+ships those spans to the configured OTLP backend (Langfuse) alongside the
+Django request, agent, and LLM spans — all stitched into a single trace via
+the `X-Request-ID` header. No extra wiring is required; the toggle is
+`OTEL_INSTRUMENT_AGENTS` (default `on`). Server `args` / `env` / `headers`
+are never logged or set as span attributes (see AGENTS rule 52).
+
+**Secrets** — `mcp_secrets` is the single global secret store for MCP in a
+project. It is shared by both:
+
+- project-level `shared_mcp_tools`, and
+- per-assistant `mcp_configuration` when `mcp_tools = dedicated`.
+
+Never embed raw API keys or tokens directly in either MCP JSON field. Store
+them in `mcp_secrets` (`{KEY: value}`, `KEY` must be `UPPER_SNAKE`) and
+reference them via `{KEY_NAME}` placeholders.
+
+Example (one global `mcp_secrets` consumed by both Shared and Dedicated MCP):
+
+```jsonc
+{
+	"mcp_secrets": {
+		"GITHUB_PAT": "ghp_xxx",
+		"NOTION_TOKEN": "secret_xxx"
+	},
+	"shared_mcp_tools": {
+		"mcpServers": {
+			"github": {
+				"transport": "http",
+				"url": "http://mcp-gateway:9000/github/mcp",
+				"headers": {
+					"Authorization": "Bearer {GITHUB_PAT}"
+				}
+			}
+		}
+	},
+	"agents": [
+		{
+			"name": "research_assistant",
+			"mcp_tools": "dedicated",
+			"mcp_configuration": {
+				"mcpServers": {
+					"notion": {
+						"command": "npx",
+						"args": ["-y", "@notionhq/notion-mcp-server"],
+						"env": {
+							"NOTION_TOKEN": "{NOTION_TOKEN}"
+						}
+					}
+				}
+			}
+		}
+	]
+}
+```
+
+Values are masked in the edit form, hidden in the readonly view, and
+substituted at runtime only inside `agents/mcp_tools.py`. The OTel
+`fingerprint` attribute is computed over the placeholder form so it stays
+stable across secret rotations.
+
+Full documentation: [docs/mcp_integration.md](docs/mcp_integration.md).
 
 ---
 
@@ -55,6 +347,13 @@ The container runs `uvicorn` (ASGI) by default, which is required for SSE stream
 | `APP_SECRET_KEY` | Admin password for write access | *(required)* |
 | `MONGODB_URI` | MongoDB connection string | `mongodb://localhost:27017` |
 | `MONGODB_NAME` | MongoDB database name | `product_discovery` |
+| `REDIS_URI` | Redis connection string used for active run coordination | `redis://localhost:6379/0` |
+| `REDIS_NAMESPACE` | Redis key namespace prefix | `product_discovery` |
+| `REDIS_RUN_LEASE_TTL_SECONDS` | Active run lease TTL (seconds) | `300` |
+| `REDIS_RUN_HEARTBEAT_SECONDS` | Lease heartbeat interval (seconds) | `20` |
+| `REDIS_CANCEL_SIGNAL_TTL_SECONDS` | Cancel signal TTL (seconds) | `120` |
+| `REDIS_ATTACHMENT_TTL_SECONDS` | How long extracted attachment text is kept in Redis (seconds). Raise this if sessions span multiple days. | `86400` (24 h) |
+| `MAX_AGENT_STATE_BYTES` | Maximum byte size of serialised AutoGen agent state stored in MongoDB. Raise for long sessions with many attachments or embedded images. MongoDB's document limit is 16 MB (shared with `discussions[]`). | `1000000` (1 MB) |
 | `DEBUG` | Django debug mode | `True` |
 | `ALLOWED_HOSTS` | Comma-separated allowed hosts | `localhost,127.0.0.1` |
 | `LOG_LEVEL` | Console log level (`DEBUG`/`INFO`/`WARNING`/`ERROR`). `DEBUG` upgrades `OTEL_CONSOLE_EXPORTER` default to `all`. | `INFO` |
@@ -78,6 +377,22 @@ The container runs `uvicorn` (ASGI) by default, which is required for SSE stream
 | `AZURE_OPENAI_API_URL` | Endpoint fallback for `azure_openai` models when `endpoint` is omitted in `agent_models.json` | *(required if JSON `endpoint` is missing)* |
 | `AZURE_ANTHROPIC_API_KEY` | API key for Azure AI Foundry Anthropic deployments | *(required for `azure_anthropic` models)* |
 | `AZURE_ANTHROPIC_API_URL` | Endpoint fallback for `azure_anthropic` models when `endpoint` is omitted in `agent_models.json` | *(required if JSON `endpoint` is missing)* |
+| `ATTACHMENT_STORAGE_PROVIDER` | Attachment storage backend selector | `azure` |
+| `AZURE_STORAGE_CONTAINER_SAS_URL` | Azure Blob container SAS URL (includes token in query string) used for chat attachments | *(required when attachments are enabled)* |
+
+Attachment SAS guidance:
+
+- Use a container-scoped SAS URL (not account-level keys).
+- Include permissions required by the attachment pipeline: create/write/read/list/delete.
+- Prefer short TTL and rotation for operational safety.
+
+Redis URI examples:
+
+- ACL username + password:
+	- `REDIS_URI=redis://REDIS_USER:REDIS_PASS@REDIS_HOST:REDIS_PORT/REDIS_DB`
+	- Example with db `0`: `REDIS_URI=redis://user:password@REDIS_HOST:REDIS_PORT/0`
+- Password-only auth (older/default setup, no username):
+	- `REDIS_URI=redis://:password@REDIS_HOST:REDIS_PORT/0`
 
 ---
 
@@ -90,6 +405,40 @@ propagated `X-Request-ID` header. Logs and traces are intentionally split:
 
 - **Logs** — JSON to stderr, every line carries `request_id`, `trace_id`, `span_id`. Lifecycle events + `WARNING`+ only; per-call HTTP success detail lives on spans.
 - **Traces** — full request/response payloads (redacted, truncated at 32 KB) shipped to the configured OTLP backend (Langfuse today; pluggable). `OTEL_CONSOLE_EXPORTER=error` additionally dumps any failed span to stderr with its full attribute set + stacktrace.
+
+### Trace model for agent runs
+
+Each `POST /chat/sessions/<id>/run/` (a single agent round) produces its own
+**root trace** (`agents.session.run`). This trace is intentionally severed
+from the Django HTTP request span so every round is independently queryable in
+Langfuse with a distinct `trace_id`. The root span's W3C traceparent string is
+stored in Redis (alongside the run lease) and reattached inside the SSE
+generator body, so all `agents.*` log lines and child spans (`autogen.event.*`,
+`mcp.tool.*`, `@traced_function` service calls) share the same `trace_id`.
+
+A human-gate resume starts a fresh `/run/` call and therefore a new
+`agents.session.run` trace — each round of a multi-round conversation appears
+as a separate trace. You can filter Langfuse by `session_id` attribute to see
+all rounds for a session.
+
+```
+agents.session.run                              [root — fresh trace_id per round]
+├─ @traced_function on service entry            [always on]
+│   └─ service.* mutation
+└─ AutoGen agent run                            [bridge · OTEL_INSTRUMENT_AGENTS]
+   ├─ autogen.event.<type>    (LLM call)
+   │  └─ HTTP POST <provider> (LLM API)         [auto · OTEL_INSTRUMENT_HTTP]
+   ├─ mcp.tool.request <name>                   [ToolCallRequestEvent · DEBUG]
+   └─ mcp.tool.result <name>                    [ToolCallExecutionEvent · DEBUG]
+```
+
+When Redis or OTel is unavailable the run continues normally; log lines show
+`trace_id: "-"` (same as the pre-feature default) and no error is raised.
+
+A single chat turn produces one trace; spans nest by call stack — Django
+request → service mutation → agent run → LLM call / `execute_tool` (MCP) →
+outbound HTTP. See the trace-hierarchy diagram in
+[docs/observability.md#trace-hierarchy](docs/observability.md#trace-hierarchy).
 
 Outbound integration clients (Trello, Jira, and future providers) must use the
 shared helper `core/http_tracing.py` (`instrument_http_response`) so request,

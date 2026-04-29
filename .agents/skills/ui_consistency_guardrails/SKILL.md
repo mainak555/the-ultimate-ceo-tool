@@ -14,6 +14,8 @@ Preserve a consistent visual language across Config, Home, and export modals.
 3. Card/modal spacing: preserve established padding, border radius, and hierarchy rhythm.
 4. Typography: keep existing text scale and label hierarchy unless design system change is intentional.
 5. **Textarea hint text is mandatory**: every `<textarea>` in a config form must be followed by `<small class="form-hint">` with a plain-language description of the field's purpose. The hint must name the integration and type (e.g. "Prompt used by the extraction agent to parse the discussion into Jira Service Desk requests."). No textarea may be left without a hint.
+6. **Human gate control order is fixed**: top row = optional decision shortcuts (`Approve`, `Reject`), middle = optional notes textarea (shortcut click prefill uses `APPROVED`/`REJECTED` + blank line), bottom row = execution (`Continue`, `Stop`). Do not reintroduce interaction-mode branching.
+7. **Single-assistant config contract is fixed**: when assistant count is exactly 1, the config UI must hide Team Setup and force Human Gate enabled (chat mode). When assistant count is 2+, Team Setup is visible again and normal team controls apply.
 
 ## Export Modal Guardrails
 1. Keep baseline split layout and action order consistent across providers.
@@ -36,3 +38,4 @@ Preserve a consistent visual language across Config, Home, and export modals.
 7. Confirm editable item card backgrounds are visually consistent between Trello/Jira/future providers.
 8. Confirm item heading count badges use `export-modal__count-badge` and reflect current rendered item count.
 9. Confirm dropdowns in export item editors do not show duplicate labels (for example repeated `Epic`).
+10. Confirm config form reflects single-assistant chat mode: Team section hidden, Human Gate forced on, and explanatory hint shown.

@@ -237,6 +237,11 @@ a:hover { text-decoration: underline; }
 .input--sm { padding: $space-xs $space-sm; font-size: $font-size-sm; }
 
 .input--textarea { resize: vertical; }
+.input--mono {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: $font-size-sm;
+  line-height: 1.45;
+}
 
 select.input {
   appearance: auto;
@@ -303,6 +308,21 @@ select.input {
 .form-hint--block {
   display: block;
   margin-bottom: $space-lg;
+}
+
+.form-hint--compact {
+  display: block;
+  margin-bottom: $space-sm;
+}
+
+.form-row--two-col {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+@media (max-width: 768px) {
+  .form-row--two-col {
+    grid-template-columns: 1fr;
+  }
 }
 
 .form-hint--info {
@@ -380,6 +400,38 @@ select.input {
   border: 1px solid $color-border;
   border-radius: $radius-lg;
   padding: $space-lg;
+}
+
+// ---------------------------------------------------------------------------
+// MCP Secrets — shared key/value/delete row pattern
+// (See .agents/skills/key_value_form_pattern/SKILL.md)
+// ---------------------------------------------------------------------------
+.mcp-secrets {
+  &__subsection {
+    margin-top: $space-md;
+    padding-top: $space-md;
+    border-top: 1px solid $color-border;
+  }
+
+  &__subsection-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: $space-xs;
+  }
+
+  &__rows {
+    display: flex;
+    flex-direction: column;
+    gap: $space-xs;
+  }
+
+  &__row {
+    display: grid;
+    grid-template-columns: 1fr 2fr auto;
+    gap: $space-xs;
+    align-items: center;
+  }
 }
 
 .agent-card {
@@ -726,6 +778,13 @@ select.input {
   line-height: 1;
 }
 
+.chat-welcome__logo {
+  display: block;
+  width: 96px;
+  height: 96px;
+  object-fit: contain;
+}
+
 .chat-welcome__title {
   font-size: 1.5rem;
   font-weight: 700;
@@ -882,6 +941,131 @@ select.input {
   justify-content: center;
   font-size: 1rem;
   line-height: 1;
+}
+
+.chat-attach-btn {
+  flex-shrink: 0;
+  width: 2.25rem;
+  height: 2.25rem;
+  min-width: 2.25rem;
+  border-radius: 50%;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.chat-attachment-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: $space-xs;
+}
+
+.chat-attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: $space-xs;
+  background: lighten($color-bg, 1.5%);
+  border: 1px solid $color-border;
+  border-radius: $radius;
+  padding: 0.25rem 0.4rem;
+}
+
+.chat-attachment-chip__thumb {
+  width: 1.35rem;
+  height: 1.35rem;
+  object-fit: cover;
+  border-radius: $radius;
+  border: 1px solid $color-border;
+
+  &--icon {
+    object-fit: contain;
+    padding: 0.1rem;
+    border: none;
+  }
+}
+
+.chat-attachment-chip__file {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.3rem;
+  color: $color-text;
+  text-decoration: none;
+}
+
+.chat-attachment-chip__name {
+  font-size: $font-size-sm;
+  font-weight: 600;
+}
+
+.chat-attachment-chip__meta {
+  font-size: $font-size-sm;
+  color: $color-text-muted;
+}
+
+.chat-attachment-chip__remove {
+  border: none;
+  background: transparent;
+  color: $color-text-muted;
+  cursor: pointer;
+  padding: 0;
+  width: 1rem;
+  height: 1rem;
+  line-height: 1rem;
+  text-align: center;
+
+  &:hover {
+    color: $color-error;
+  }
+}
+
+.chat-message-attachments {
+  margin-top: $space-sm;
+  display: flex;
+  flex-wrap: wrap;
+  gap: $space-sm;
+}
+
+.chat-message-attachment {
+  display: inline-flex;
+  align-items: center;
+  gap: $space-xs;
+  text-decoration: none;
+  color: $color-text;
+  background: lighten($color-bg, 1.5%);
+  border: 1px solid $color-border;
+  border-radius: $radius;
+  padding: 0.3rem 0.5rem;
+
+  &:hover {
+    border-color: $color-primary;
+  }
+}
+
+.chat-message-attachment__thumb {
+  width: 3.2rem;
+  height: 2.2rem;
+  object-fit: cover;
+  border-radius: $radius;
+  border: 1px solid $color-border;
+
+  &--icon {
+    width: 1.8rem;
+    height: 1.8rem;
+    object-fit: contain;
+    padding: 0.1rem;
+    border: none;
+  }
+}
+
+.chat-message-attachment__name {
+  font-size: $font-size-sm;
+  max-width: 14rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 // ---------------------------------------------------------------------------
@@ -1583,11 +1767,50 @@ select.input {
     line-height: 1.5;
   }
 
-  &__textarea {
-    width: 100%;
+  // Compose-style bordered row: [+ attach] [textarea] — mirrors .chat-input-row
+  &__input-row {
+    display: flex;
+    align-items: flex-end;
+    gap: $space-sm;
+    background: $color-surface;
+    border: 1px solid $color-border;
+    border-radius: $radius;
+    padding: $space-xs $space-sm;
     margin-bottom: $space-sm;
-    resize: vertical;
+
+    &:focus-within {
+      border-color: $color-primary;
+      box-shadow: 0 0 0 2px rgba($color-primary, 0.12);
+    }
+  }
+
+  &__textarea {
+    flex: 1;
+    border: none;
+    background: transparent;
+    resize: none;
     font-size: $font-size-base;
+    color: $color-text;
+    line-height: 1.5;
+    min-height: 4.5rem;   // ~3 rows
+    max-height: 10rem;
+    overflow-y: auto;
+    padding: 2px 0;
+    font-family: $font-family;
+
+    &:focus { outline: none; }
+    &::placeholder { color: $color-text-muted; }
+  }
+
+  &__decision-row {
+    display: flex;
+    gap: $space-sm;
+    flex-wrap: wrap;
+    margin-bottom: $space-sm;
+  }
+
+  &__attachment-list {
+    margin-bottom: $space-sm;
   }
 
   &__actions {
@@ -1595,6 +1818,20 @@ select.input {
     gap: $space-sm;
     flex-wrap: wrap;
   }
+}
+
+.human-gate-btn.is-active {
+  box-shadow: 0 0 0 2px rgba($color-primary, 0.22);
+}
+
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  25%       { transform: translateX(-4px); }
+  75%       { transform: translateX(4px); }
+}
+
+.input--shake {
+  animation: shake 0.3s ease;
 }
 
 // ---------------------------------------------------------------------------

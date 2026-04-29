@@ -115,6 +115,106 @@ document.addEventListener("DOMContentLoaded", function () {
     fields.hidden = !enabled;
   }
 
+  function syncMcpDedicatedVisibility() {
+    document.querySelectorAll(".js-mcp-tools-select").forEach(function (sel) {
+      var idx = sel.getAttribute("data-agent-index");
+      var card = sel.closest(".agent-card");
+      if (!card) return;
+      var wrap = card.querySelector(".js-mcp-dedicated-wrap[data-agent-index='" + idx + "']") ||
+                 card.querySelector(".js-mcp-dedicated-wrap");
+      if (!wrap) return;
+      var isDedicated = sel.value === "dedicated";
+      wrap.hidden = !isDedicated;
+      wrap.querySelectorAll("textarea").forEach(function (ta) {
+        ta.disabled = !isDedicated;
+      });
+    });
+  }
+
+  function tryParseJson(value, label) {
+    var text = (value || "").trim();
+    if (!text) return { ok: true, empty: true };
+    try {
+      JSON.parse(text);
+      return { ok: true, empty: false };
+    } catch (err) {
+      return { ok: false, error: label + ": " + err.message };
+    }
+  }
+
+  function validateMcpJsonOnSubmit(form) {
+    var errors = [];
+    form.querySelectorAll(".js-mcp-tools-select").forEach(function (sel) {
+      if (sel.value !== "dedicated") return;
+      var card = sel.closest(".agent-card");
+      var nameInput = card ? card.querySelector("[name$='[name]']") : null;
+      var agentLabel = nameInput && nameInput.value ? nameInput.value : ("agent #" + (sel.getAttribute("data-agent-index") || "?"));
+      var ta = card ? card.querySelector(".js-mcp-dedicated-json") : null;
+      if (!ta) return;
+      var result = tryParseJson(ta.value, "Dedicated MCP for " + agentLabel);
+      if (!result.ok) errors.push(result.error);
+      else if (result.empty) errors.push("Dedicated MCP for " + agentLabel + ": JSON configuration is required.");
+    });
+    var sharedTa = form.querySelector(".js-shared-mcp-json");
+    if (sharedTa) {
+      var sharedResult = tryParseJson(sharedTa.value, "Shared MCP Tools");
+      if (!sharedResult.ok) errors.push(sharedResult.error);
+    }
+
+    // Validate MCP secret keys: UPPER_SNAKE, unique, value present
+    var keyRe = /^[A-Z][A-Z0-9_]*$/;
+    var seenKeys = Object.create(null);
+    var definedKeys = Object.create(null);
+    form.querySelectorAll(".mcp-secrets__row").forEach(function (row) {
+      var keyInput = row.querySelector(".js-mcp-secret-key");
+      var valInput = row.querySelector(".js-mcp-secret-value");
+      var key = keyInput ? (keyInput.value || "").trim() : "";
+      var val = valInput ? valInput.value : "";
+      if (!key && !val) return;
+      if (!key) {
+        errors.push("MCP Secrets: a row has a value but no key.");
+        return;
+      }
+      if (!keyRe.test(key)) {
+        errors.push("MCP Secrets: '" + key + "' must be UPPER_SNAKE_CASE.");
+        return;
+      }
+      if (seenKeys[key]) {
+        errors.push("MCP Secrets: duplicate key '" + key + "'.");
+        return;
+      }
+      seenKeys[key] = true;
+      if (val === "") {
+        errors.push("MCP Secrets: '" + key + "' value is empty.");
+        return;
+      }
+      definedKeys[key] = true;
+    });
+
+    // Warn on unresolved {KEY} placeholders in shared + dedicated MCP JSON
+    var placeholderRe = /\{([A-Z][A-Z0-9_]*)\}/g;
+    var jsonTextareas = [];
+    if (sharedTa) jsonTextareas.push(sharedTa);
+    form.querySelectorAll(".js-mcp-dedicated-json").forEach(function (ta) {
+      jsonTextareas.push(ta);
+    });
+    var referenced = Object.create(null);
+    jsonTextareas.forEach(function (ta) {
+      var text = ta.value || "";
+      var m;
+      while ((m = placeholderRe.exec(text)) !== null) {
+        referenced[m[1]] = true;
+      }
+    });
+    Object.keys(referenced).forEach(function (k) {
+      if (!definedKeys[k]) {
+        errors.push("MCP configuration references undefined secret '{" + k + "}'.");
+      }
+    });
+
+    return errors;
+  }
+
   function listAgentNames() {
     var container = document.getElementById("agents-container");
     if (!container) return [];
@@ -127,28 +227,111 @@ document.addEventListener("DOMContentLoaded", function () {
     return names;
   }
 
+  function getAssistantCount() {
+    var container = document.getElementById("agents-container");
+    if (!container) return 0;
+    return container.querySelectorAll(".agent-card").length;
+  }
+
+  function syncSingleAssistantMode() {
+    var assistantCount = getAssistantCount();
+    var isSingleAssistant = assistantCount === 1;
+
+    var humanGateEnabled = document.getElementById("human-gate-enabled");
+    var humanGateDefaultHint = document.getElementById("human-gate-default-hint");
+    var humanGateSingleHint = document.getElementById("human-gate-single-assistant-hint");
+    var teamFieldset = document.getElementById("team-settings-fieldset");
+    var teamDisabledHint = document.getElementById("team-settings-disabled-hint");
+    var teamTypeSelect = document.getElementById("team_type");
+
+    if (humanGateEnabled) {
+      if (isSingleAssistant) {
+        humanGateEnabled.checked = true;
+      }
+      humanGateEnabled.disabled = isSingleAssistant;
+
+      var forcedInput = document.getElementById("human-gate-enabled-forced");
+      if (isSingleAssistant && !forcedInput) {
+        forcedInput = document.createElement("input");
+        forcedInput.type = "hidden";
+        forcedInput.id = "human-gate-enabled-forced";
+        forcedInput.name = "human_gate[enabled]";
+        forcedInput.value = "on";
+        humanGateEnabled.insertAdjacentElement("afterend", forcedInput);
+      } else if (!isSingleAssistant && forcedInput) {
+        forcedInput.remove();
+      }
+    }
+
+    if (humanGateDefaultHint) {
+      humanGateDefaultHint.hidden = isSingleAssistant;
+    }
+    if (humanGateSingleHint) {
+      humanGateSingleHint.hidden = !isSingleAssistant;
+    }
+
+    if (teamFieldset) {
+      teamFieldset.hidden = isSingleAssistant;
+      teamFieldset.querySelectorAll("input, select, textarea").forEach(function (field) {
+        field.disabled = isSingleAssistant;
+      });
+    }
+    if (teamDisabledHint) {
+      teamDisabledHint.hidden = !isSingleAssistant;
+    }
+
+    if (isSingleAssistant && teamTypeSelect && teamTypeSelect.value === "selector") {
+      teamTypeSelect.value = "round_robin";
+    }
+  }
+
   function syncExportAgentCheckboxes() {
-    var wrapper = document.getElementById("integrations-export-agents");
-    if (!wrapper) return;
-
-    var checkedValues = new Set();
-    wrapper.querySelectorAll("input[name='integrations[trello][export_agents]']:checked").forEach(function (checkbox) {
-      checkedValues.add(checkbox.value);
-    });
-
     var names = listAgentNames();
-    var html = "";
-    names.forEach(function (name) {
-      var checked = checkedValues.has(name) ? " checked" : "";
-      html += '<div class="form-group form-group--inline">';
-      html += '<label>';
-      html += '<input type="checkbox" name="integrations[trello][export_agents]" value="' + name + '"' + checked + '>';
-      html += ' ' + name;
-      html += '</label>';
-      html += '</div>';
-    });
 
-    wrapper.innerHTML = html;
+    // Sync Trello export_agents checkboxes
+    var trelloWrapper = document.getElementById("integrations-export-agents");
+    if (trelloWrapper) {
+      var trelloChecked = new Set();
+      trelloWrapper.querySelectorAll("input[name='integrations[trello][export_agents]']:checked").forEach(function (checkbox) {
+        trelloChecked.add(checkbox.value);
+      });
+      var trelloHtml = "";
+      names.forEach(function (name) {
+        var checked = trelloChecked.has(name) ? " checked" : "";
+        trelloHtml += '<div class="form-group form-group--inline">';
+        trelloHtml += '<label>';
+        trelloHtml += '<input type="checkbox" name="integrations[trello][export_agents]" value="' + name + '"' + checked + '>';
+        trelloHtml += ' ' + name;
+        trelloHtml += '</label>';
+        trelloHtml += '</div>';
+      });
+      trelloWrapper.innerHTML = trelloHtml;
+    }
+
+    // Sync Jira export_agents checkboxes for each type
+    [
+      { id: "jira-software-export-agents",    field: "integrations[jira][software][export_agents]" },
+      { id: "jira-service-desk-export-agents", field: "integrations[jira][service_desk][export_agents]" },
+      { id: "jira-business-export-agents",    field: "integrations[jira][business][export_agents]" }
+    ].forEach(function (cfg) {
+      var wrapper = document.getElementById(cfg.id);
+      if (!wrapper) return;
+      var checkedValues = new Set();
+      wrapper.querySelectorAll("input[name='" + cfg.field + "']:checked").forEach(function (checkbox) {
+        checkedValues.add(checkbox.value);
+      });
+      var html = "";
+      names.forEach(function (name) {
+        var checked = checkedValues.has(name) ? " checked" : "";
+        html += '<div class="form-group form-group--inline">';
+        html += '<label>';
+        html += '<input type="checkbox" name="' + cfg.field + '" value="' + name + '"' + checked + '>';
+        html += ' ' + name;
+        html += '</label>';
+        html += '</div>';
+      });
+      wrapper.innerHTML = html;
+    });
   }
 
   function syncFormState() {
@@ -157,11 +340,13 @@ document.addEventListener("DOMContentLoaded", function () {
       return;
     }
 
+    syncSingleAssistantMode();
     syncHumanGateFields();
     syncMaxIterationsLimit();
     syncTeamTypeFields();
     syncIntegrationsFields();
     syncExportAgentCheckboxes();
+    syncMcpDedicatedVisibility();
     updateSubmitState();
     syncProviderConfigState("trello");
   }
@@ -179,6 +364,10 @@ document.addEventListener("DOMContentLoaded", function () {
 
       card.querySelectorAll("[name]").forEach(function (el) {
         el.name = el.name.replace(/agents\[\d+\]/, "agents[" + idx + "]");
+      });
+
+      card.querySelectorAll("[data-agent-index]").forEach(function (el) {
+        el.setAttribute("data-agent-index", idx);
       });
     });
   }
@@ -270,10 +459,64 @@ document.addEventListener("DOMContentLoaded", function () {
       syncIntegrationsFields();
       syncProviderConfigState("trello");
     }
+    if (e.target.classList && e.target.classList.contains("js-mcp-tools-select")) {
+      syncMcpDedicatedVisibility();
+    }
+  });
+
+  document.body.addEventListener("htmx:beforeRequest", function (e) {
+    var elt = e.detail && e.detail.elt;
+    if (!elt || !elt.matches || !elt.matches("form.config-form")) return;
+    var errors = validateMcpJsonOnSubmit(elt);
+    if (errors.length) {
+      e.preventDefault();
+      alert("MCP configuration is invalid:\n\n• " + errors.join("\n• "));
+    }
   });
 
   document.body.addEventListener("htmx:afterSwap", function () {
     syncFormState();
+  });
+
+  // ---- MCP Secrets KV rows ----
+  function reindexMcpSecrets() {
+    var container = document.getElementById("mcp-secrets-rows");
+    if (!container) return;
+    container.querySelectorAll(".mcp-secrets__row").forEach(function (row, idx) {
+      row.setAttribute("data-secret-index", idx);
+      var k = row.querySelector(".js-mcp-secret-key");
+      var v = row.querySelector(".js-mcp-secret-value");
+      if (k) k.name = "mcp_secrets[" + idx + "][key]";
+      if (v) v.name = "mcp_secrets[" + idx + "][value]";
+    });
+  }
+
+  document.body.addEventListener("click", function (e) {
+    if (e.target.matches(".js-add-mcp-secret")) {
+      var container = document.getElementById("mcp-secrets-rows");
+      if (!container) return;
+      var idx = container.querySelectorAll(".mcp-secrets__row").length;
+      var html =
+        '<div class="mcp-secrets__row" data-secret-index="' + idx + '">' +
+          '<input type="text" class="input input--sm js-mcp-secret-key" ' +
+            'name="mcp_secrets[' + idx + '][key]" placeholder="GITHUB_PAT" ' +
+            'pattern="^[A-Z][A-Z0-9_]*$" autocomplete="off">' +
+          '<input type="password" class="input input--sm js-mcp-secret-value" ' +
+            'name="mcp_secrets[' + idx + '][value]" placeholder="secret value" ' +
+            'autocomplete="new-password">' +
+          '<button type="button" class="chat-session-item__delete js-delete-mcp-secret" ' +
+            'aria-label="Remove secret" title="Remove secret">×</button>' +
+        '</div>';
+      container.insertAdjacentHTML("beforeend", html);
+      return;
+    }
+    if (e.target.matches(".js-delete-mcp-secret")) {
+      var row = e.target.closest(".mcp-secrets__row");
+      if (row) {
+        row.remove();
+        reindexMcpSecrets();
+      }
+    }
   });
 
   syncFormState();

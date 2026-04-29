@@ -58,6 +58,7 @@ import json
 import logging
 import os
 import re
+from datetime import datetime, timezone
 from contextlib import contextmanager
 from threading import Lock
 from typing import Any, Callable, Iterator
@@ -112,8 +113,16 @@ def _stringify_payload(value: Any) -> str:
     """Convert payload values to raw strings for span attributes."""
     if isinstance(value, str):
         return value
+
+    def _json_default(obj: Any) -> str:
+        if isinstance(obj, datetime):
+            if obj.tzinfo is None:
+                obj = obj.replace(tzinfo=timezone.utc)
+            return obj.isoformat()
+        raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
+
     try:
-        return json.dumps(value, ensure_ascii=False)
+        return json.dumps(value, ensure_ascii=False, default=_json_default)
     except Exception:
         return str(value)
 
@@ -196,10 +205,16 @@ def set_payload_attribute(span: Any, key: str, value: Any) -> None:
 # AutoGen event-log → span bridge (kept from previous implementation)
 # ---------------------------------------------------------------------------
 class AutoGenEventSpanBridgeHandler(logging.Handler):
-    """Convert AutoGen structured event logs into OTel spans."""
+    """Convert AutoGen structured event logs into OTel spans.
+
+    Accepts DEBUG-level records so that ``ToolCallRequestEvent`` and
+    ``ToolCallExecutionEvent`` — which AutoGen emits at DEBUG — are captured
+    alongside the INFO-level ``LLMCallEvent`` records from the model client.
+    """
 
     def __init__(self) -> None:
-        super().__init__(level=logging.INFO)
+        # Must be DEBUG: autogen_agentchat.events logs tool events at DEBUG.
+        super().__init__(level=logging.DEBUG)
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
@@ -209,41 +224,134 @@ class AutoGenEventSpanBridgeHandler(logging.Handler):
             return
 
         tracer = trace.get_tracer("autogen.events.bridge")
-        raw_message = record.getMessage()
 
+        # autogen_agentchat.events records carry Pydantic BaseAgentEvent
+        # instances as record.msg; their __str__ is a Pydantic repr, NOT JSON.
+        # autogen_core.events records (LLMCallEvent etc.) define __str__ to
+        # return json.dumps(...) — use getMessage() for those.
         event_data: dict[str, Any]
+        original_msg = record.msg
+        if hasattr(original_msg, "model_dump"):
+            try:
+                event_data = original_msg.model_dump()
+            except Exception:
+                event_data = {"message": str(original_msg)}
+        else:
+            raw_message = record.getMessage()
+            try:
+                parsed = json.loads(raw_message)
+                event_data = parsed if isinstance(parsed, dict) else {"message": raw_message}
+            except Exception:
+                event_data = {"message": raw_message}
+
+        # Canonical raw representation for the span metadata attribute.
         try:
-            parsed = json.loads(raw_message)
-            event_data = parsed if isinstance(parsed, dict) else {"message": raw_message}
+            raw_message = json.dumps(event_data)
         except Exception:
-            event_data = {"message": raw_message}
+            raw_message = str(event_data)
 
-        event_type = str(event_data.get("type", "event")).lower()
-        span_name = f"autogen.event.{event_type}"
+        event_type_raw = str(event_data.get("type", "event"))
+        event_type = event_type_raw.lower()
 
-        attrs: dict[str, Any] = {
+        # Base attributes shared by every span this event produces.
+        # `source` names the emitting agent on agentchat events;
+        # `agent_id` is the legacy field used by autogen_core events.
+        base_attrs: dict[str, Any] = {
             "gen_ai.system": "autogen",
-            "autogen.event.type": event_data.get("type", "event"),
+            "autogen.event.type": event_type_raw,
             "autogen.event.logger": record.name,
             "autogen.event.level": record.levelname,
             "langfuse.observation.metadata.autogen_event_raw": raw_message,
         }
-
-        if "agent_id" in event_data and event_data.get("agent_id") is not None:
-            attrs["autogen.agent.id"] = str(event_data["agent_id"])
+        source = event_data.get("source") or event_data.get("agent_id")
+        if source is not None:
+            base_attrs["autogen.agent.id"] = str(source)
         if "prompt_tokens" in event_data:
-            attrs["gen_ai.usage.prompt_tokens"] = int(event_data["prompt_tokens"])
+            base_attrs["gen_ai.usage.prompt_tokens"] = int(event_data["prompt_tokens"])
         if "completion_tokens" in event_data:
-            attrs["gen_ai.usage.completion_tokens"] = int(event_data["completion_tokens"])
+            base_attrs["gen_ai.usage.completion_tokens"] = int(event_data["completion_tokens"])
 
-        with tracer.start_as_current_span(span_name) as span:
-            for key, value in attrs.items():
-                if value is None:
+        def _apply_base(span: Any) -> None:
+            for k, v in base_attrs.items():
+                if v is None:
                     continue
                 try:
-                    span.set_attribute(key, value)
+                    span.set_attribute(k, v)
                 except Exception:
                     continue
+
+        # ------------------------------------------------------------------
+        # ToolCallRequestEvent — LLM requested one or more tool calls.
+        # AutoGen shape (ToolCallRequestEvent.content: List[FunctionCall]):
+        #   {"type": "ToolCallRequestEvent", "source": "<agent>",
+        #    "content": [{"id": "call_xxx", "name": "<tool>", "arguments": "..."}]}
+        # One span per item so each tool call is independently visible.
+        # Logged at DEBUG by autogen_agentchat — bridge is set to DEBUG.
+        # ------------------------------------------------------------------
+        if event_type == "toolcallrequestevent":
+            content = event_data.get("content") or [{}]
+            for item in content:
+                tool_name = str(item.get("name") or "unknown_tool")
+                call_id = str(item.get("id") or "")
+                arguments = item.get("arguments")
+                with tracer.start_as_current_span(f"mcp.tool.request {tool_name}") as span:
+                    _apply_base(span)
+                    try:
+                        span.set_attribute("gen_ai.tool.name", tool_name)
+                        if call_id:
+                            span.set_attribute("gen_ai.tool.call.id", call_id)
+                    except Exception:
+                        pass
+                    if arguments is not None:
+                        # input.value surfaces in Langfuse "Input" panel
+                        set_payload_attribute(span, "input.value", arguments)
+                        set_payload_attribute(span, "gen_ai.tool.arguments", arguments)
+                    if record.levelno >= logging.ERROR:
+                        span.set_status(Status(StatusCode.ERROR, raw_message[:300]))
+            return
+
+        # ------------------------------------------------------------------
+        # ToolCallExecutionEvent — tool returned a response to the agent.
+        # AutoGen shape (ToolCallExecutionEvent.content: List[FunctionExecutionResult]):
+        #   {"type": "ToolCallExecutionEvent", "source": "<agent>",
+        #    "content": [{"call_id": "call_xxx", "name": "<tool>",
+        #                 "content": "<result>", "is_error": false}]}
+        # Logged at DEBUG by autogen_agentchat — bridge is set to DEBUG.
+        # is_error=True marks the span ERROR so failures surface immediately.
+        # ------------------------------------------------------------------
+        if event_type == "toolcallexecutionevent":
+            content = event_data.get("content") or [{}]
+            for item in content:
+                tool_name = str(item.get("name") or "unknown_tool")
+                call_id = str(item.get("call_id") or "")
+                result = item.get("content")
+                is_error = bool(item.get("is_error", False))
+                with tracer.start_as_current_span(f"mcp.tool.result {tool_name}") as span:
+                    _apply_base(span)
+                    try:
+                        span.set_attribute("gen_ai.tool.name", tool_name)
+                        if call_id:
+                            span.set_attribute("gen_ai.tool.call.id", call_id)
+                        span.set_attribute("gen_ai.tool.is_error", is_error)
+                    except Exception:
+                        pass
+                    if result is not None:
+                        # output.value surfaces in Langfuse "Output" panel
+                        set_payload_attribute(span, "output.value", result)
+                        set_payload_attribute(span, "gen_ai.tool.result", result)
+                    if is_error:
+                        span.set_status(
+                            Status(StatusCode.ERROR, str(result)[:300] if result else "tool_error")
+                        )
+                    elif record.levelno >= logging.ERROR:
+                        span.set_status(Status(StatusCode.ERROR, raw_message[:300]))
+            return
+
+        # ------------------------------------------------------------------
+        # Generic events (LLMCallEvent, ThoughtEvent, streaming chunks, etc.)
+        # ------------------------------------------------------------------
+        with tracer.start_as_current_span(f"autogen.event.{event_type}") as span:
+            _apply_base(span)
 
             messages = event_data.get("messages")
             if messages is not None:
@@ -252,15 +360,16 @@ class AutoGenEventSpanBridgeHandler(logging.Handler):
             if response is not None:
                 set_payload_attribute(span, "output.value", response)
 
+            # Fallback: top-level tool fields emitted by non-standard events.
             if "tool_name" in event_data:
                 try:
-                    span.set_attribute("gen_ai.tool.name", str(event_data.get("tool_name")))
+                    span.set_attribute("gen_ai.tool.name", str(event_data["tool_name"]))
                 except Exception:
                     pass
             if "arguments" in event_data:
-                set_payload_attribute(span, "gen_ai.tool.arguments", event_data.get("arguments"))
+                set_payload_attribute(span, "gen_ai.tool.arguments", event_data["arguments"])
             if "result" in event_data:
-                set_payload_attribute(span, "gen_ai.tool.result", event_data.get("result"))
+                set_payload_attribute(span, "gen_ai.tool.result", event_data["result"])
 
             if record.levelno >= logging.ERROR:
                 span.set_status(Status(StatusCode.ERROR, raw_message[:300]))
@@ -276,15 +385,12 @@ def _install_autogen_event_bridge() -> None:
 
     for logger_name in ("autogen_core.events", "autogen_agentchat.events"):
         event_logger = logging.getLogger(logger_name)
-        # We need INFO records to reach the bridge handler (which converts
-        # them to spans) but we DO NOT want them on console. Logger-level
-        # filtering happens before per-handler filtering, so the logger must
-        # be at INFO. To keep console quiet we drop any pre-attached stream
-        # handlers (config wires the shared console handler here for ERROR
-        # propagation; the bridge replaces that — ERROR records are still
-        # surfaced because the bridge sets span status to ERROR and Django's
-        # error middleware logs at the request layer).
-        event_logger.setLevel(logging.INFO)
+        # Must be DEBUG: autogen_agentchat.events logs ToolCallRequestEvent
+        # and ToolCallExecutionEvent at DEBUG level. Lowering to DEBUG here
+        # does not affect other namespaces because propagate=False below
+        # prevents these records from reaching the root logger / console.
+        # autogen_core.events records (LLMCallEvent) are INFO — unaffected.
+        event_logger.setLevel(logging.DEBUG)
         event_logger.propagate = False
         # Strip any non-bridge handlers (notably the shared console handler
         # added by Django LOGGING) so AutoGen INFO payload events do not
@@ -361,6 +467,88 @@ def traced_function(
                 return fn(*args, **kwargs)
         return wrapper
     return decorator
+
+
+def start_root_span(
+    name: str,
+    attributes: dict[str, Any] | None = None,
+) -> tuple[Any, str | None]:
+    """Start a new OTel root span (no parent) and return ``(span, traceparent)``.
+
+    The span is created with an empty context — intentionally severing the
+    active Django request span as parent — so every call produces a fresh
+    ``trace_id``. This is the correct model for agent session runs: each
+    ``/run/`` round is its own trace, independently queryable in Langfuse.
+
+    The returned ``traceparent`` is the W3C header string
+    (``00-<trace_id>-<span_id>-01``) extracted from the span's context via
+    ``propagate.inject``. It can be stored in Redis (see
+    ``agents/session_coordination.py``) and reattached inside the SSE
+    ``event_stream()`` generator after the Django middleware ``finally`` block
+    clears the request span context.
+
+    The caller is responsible for calling ``span.end()`` after the run
+    completes. ``@traced_function`` spans created while the span is attached
+    (via ``otel_context.attach(trace.set_span_in_context(span))``) will
+    automatically nest as children.
+
+    Returns ``(None, None)`` when OTel is unavailable or tracing is disabled
+    (no ``LANGFUSE_*`` / OTLP exporter configured).
+    """
+    try:
+        from opentelemetry import propagate, trace
+        from opentelemetry.context import Context
+    except Exception:
+        return None, None
+
+    tracer = trace.get_tracer("product-discovery")
+    # Context() is an empty immutable context — no active span — so the new
+    # span becomes a root with a fresh trace_id (no Django request parent).
+    span = tracer.start_span(name, context=Context())
+
+    if not span.is_recording():
+        # TracerProvider not configured (tracing disabled).
+        try:
+            span.end()
+        except Exception:  # noqa: BLE001
+            pass
+        return None, None
+
+    if attributes:
+        for k, v in (attributes or {}).items():
+            try:
+                span.set_attribute(k, v)
+            except Exception:  # noqa: BLE001
+                pass
+
+    # Extract W3C traceparent from the span so it can be stored externally.
+    carrier: dict[str, str] = {}
+    try:
+        propagate.inject(carrier, context=trace.set_span_in_context(span))
+    except Exception:  # noqa: BLE001
+        pass
+
+    return span, carrier.get("traceparent") or None
+
+
+def context_from_traceparent(traceparent: str) -> Any | None:
+    """Reconstruct an OTel context from a W3C ``traceparent`` string.
+
+    Returns a context containing the remote span described by ``traceparent``.
+    Attaching this context and then making ``span`` current via
+    ``trace.set_span_in_context`` restores the full parent chain so child
+    spans nest correctly in the OTLP backend.
+
+    Returns ``None`` when ``traceparent`` is empty/malformed or OTel is
+    unavailable.
+    """
+    if not traceparent:
+        return None
+    try:
+        from opentelemetry import propagate
+        return propagate.extract({"traceparent": traceparent})
+    except Exception:  # noqa: BLE001
+        return None
 
 
 # ---------------------------------------------------------------------------

@@ -257,6 +257,33 @@ This merges to:
 | `vision`            | Model accepts image inputs                       |
 | `family`            | Set to `"gpt-4o"`, `"claude"`, etc. if known     |
 
+### `function_calling` is required for MCP tools
+
+Whenever an assistant agent has `mcp_tools` set to `shared` or `dedicated`,
+the team builder attaches one or more `McpWorkbench` instances to the agent.
+At call time AutoGen forwards those tools to the model client, and the
+underlying OpenAI/Anthropic/Azure clients raise:
+
+```text
+ValueError: Model does not support function calling
+```
+
+…unless the resolved `model_info.function_calling` is `True`. The factory
+default is `False`, so for any provider that requires `model_info` (Azure
+OpenAI, Azure Anthropic, Google Gemini), the catalog entry **must** declare
+`"function_calling": true` for that model to be usable with MCP tools.
+
+For `openai` and `anthropic` direct providers, `model_info` is only injected
+when present in the JSON entry — AutoGen falls back to its internal table for
+known model names (e.g. `gpt-4o`, `claude-3-7-sonnet`). Custom or
+unrecognized model identifiers must declare `model_info` explicitly to opt
+into function calling.
+
+If a model legitimately does not support function calling (some reasoning,
+audio, or embedding models), the correct configuration is to keep
+`mcp_tools = "none"` on every agent that uses it — do not set
+`function_calling: true` on a model that cannot honor it.
+
 ---
 
 ## Adding a New Provider

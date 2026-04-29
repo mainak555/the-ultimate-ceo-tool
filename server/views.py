@@ -8,17 +8,26 @@ Each view:
 """
 
 import asyncio
+import io
 import json
+import logging
+from urllib.parse import quote
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from django.http import HttpResponse, StreamingHttpResponse
+from django.http import FileResponse, HttpResponse, StreamingHttpResponse
 from django.shortcuts import render
 from django.template.loader import render_to_string
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST, require_http_methods
 
 from . import services
+from . import attachment_service
+from .logging_utils import bind_request_id, clear_request_id, get_request_id
+from core.tracing import context_from_traceparent, start_root_span
+
+
+logger = logging.getLogger(__name__)
 
 
 SUPPORTED_EXPORT_PROVIDERS = ("trello", "jira", "pdf", "n8n")
@@ -68,7 +77,8 @@ def _parse_form_agents(post_data):
     Extract agent list from the flat POST form data.
 
     Form fields use bracket notation:
-      agents[0][name], agents[0][model], agents[0][system_prompt], ...
+      agents[0][name], agents[0][model], agents[0][system_prompt],
+      agents[0][temperature], agents[0][mcp_tools], agents[0][mcp_configuration], ...
     """
     agents = []
     idx = 0
@@ -79,6 +89,8 @@ def _parse_form_agents(post_data):
             "model": post_data.get(f"{prefix}[model]", "").strip(),
             "system_prompt": post_data.get(f"{prefix}[system_prompt]", "").strip(),
             "temperature": post_data.get(f"{prefix}[temperature]", "0.7").strip() or "0.7",
+            "mcp_tools": (post_data.get(f"{prefix}[mcp_tools]", "none") or "none").strip().lower(),
+            "mcp_configuration": post_data.get(f"{prefix}[mcp_configuration]", ""),
         })
         idx += 1
 
@@ -152,10 +164,6 @@ def _build_project_data(post_data, existing_project=None):
         "human_gate": {
             "enabled": human_gate_enabled,
             "name": post_data.get("human_gate[name]", "").strip(),
-            "interaction_mode": post_data.get(
-                "human_gate[interaction_mode]",
-                "approve_reject",
-            ).strip(),
         },
         "team": {
             "type": post_data.get("team[type]", "round_robin").strip(),
@@ -166,7 +174,30 @@ def _build_project_data(post_data, existing_project=None):
             "allow_repeated_speaker": post_data.get("team[allow_repeated_speaker]"),
         },
         "integrations": integrations,
+        "shared_mcp_tools": post_data.get("shared_mcp_tools", ""),
+        "mcp_secrets": _parse_mcp_secrets(post_data),
     }
+
+
+def _parse_mcp_secrets(post_data):
+    """
+    Extract MCP secrets dict from POST form fields.
+
+    Form fields: mcp_secrets[N][key], mcp_secrets[N][value]
+    Returns {KEY: value}. Skips rows with empty key.
+    """
+    secrets = {}
+    idx = 0
+    while (
+        f"mcp_secrets[{idx}][key]" in post_data
+        or f"mcp_secrets[{idx}][value]" in post_data
+    ):
+        key = post_data.get(f"mcp_secrets[{idx}][key]", "").strip()
+        value = post_data.get(f"mcp_secrets[{idx}][value]", "")
+        if key:
+            secrets[key] = value
+        idx += 1
+    return secrets
 
 
 def _normalize_export_agents(raw_agents):
@@ -176,6 +207,106 @@ def _normalize_export_agents(raw_agents):
     if not isinstance(raw_agents, list):
         return []
     return [name.strip() for name in raw_agents if isinstance(name, str) and name.strip()]
+
+
+def _parse_attachment_ids(post_data):
+    """Return de-duplicated attachment IDs from form POST data."""
+    values = []
+    values.extend(post_data.getlist("attachment_ids"))
+    values.extend(post_data.getlist("attachment_ids[]"))
+    clean = []
+    seen = set()
+    for raw in values:
+        aid = (raw or "").strip()
+        if not aid or aid in seen:
+            continue
+        clean.append(aid)
+        seen.add(aid)
+    return clean
+
+
+_ATTACHMENT_ICON_EXTENSIONS = {
+    "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx",
+    "csv", "txt", "json", "xml", "md",
+}
+
+
+def _enrich_attachments_for_display(session_id, attachments):
+    """Attach session-scoped URLs for attachment previews/downloads."""
+    out = []
+    for item in attachments or []:
+        if not isinstance(item, dict):
+            continue
+        row = dict(item)
+        aid = (row.get("id") or "").strip()
+        if not aid:
+            continue
+        url = f"/chat/sessions/{session_id}/attachments/{aid}/content/"
+        row["content_url"] = url
+        if row.get("is_image"):
+            row["thumbnail_url"] = url
+        else:
+            ext = (row.get("extension") or "").lower()
+            icon = ext if ext in _ATTACHMENT_ICON_EXTENSIONS else "document"
+            row["thumbnail_url"] = f"/static/server/assets/icons/file-{icon}.svg"
+        out.append(row)
+    return out
+
+
+def _build_agent_task_for_run(task_text: str, session_id: str, attachment_ids):
+    """Return the task to pass to ``team.run_stream``.
+
+    * No attachments → return ``task_text`` unchanged (plain ``str``).
+    * Images present → download bytes, wrap as ``autogen_core.Image`` objects,
+      and return a ``MultiModalMessage`` whose ``content`` list is
+      ``[task_text, img1, img2, ...]``.  This gives vision-capable models
+      actual pixel data.
+    * Non-image attachments are already incorporated into ``task_text`` via
+      the ``---\\nAttachments:`` block produced by
+      ``build_attachment_context_block``.
+    """
+    if not attachment_ids:
+        return task_text
+
+    try:
+        images = attachment_service.load_images_for_agents(
+            session_id=session_id, attachment_ids=attachment_ids
+        )
+    except Exception:
+        logger.exception("views.load_images_failed", extra={"session_id": session_id})
+        images = []
+
+    if not images:
+        return task_text
+
+    # Build MultiModalMessage — lazy import to avoid cost at module load.
+    try:
+        import PIL.Image
+        from autogen_core import Image as AutoGenImage
+        from autogen_agentchat.messages import MultiModalMessage
+    except Exception:
+        logger.warning(
+            "views.multimodal_import_failed",
+            extra={"session_id": session_id},
+        )
+        return task_text
+
+    content: list = [task_text]
+    for filename, raw, _mime in images:
+        try:
+            pil_img = PIL.Image.open(io.BytesIO(raw))
+            content.append(AutoGenImage(pil_img))
+        except Exception:
+            logger.warning(
+                "views.image_decode_failed",
+                extra={"session_id": session_id, "filename": filename},
+            )
+
+    if len(content) == 1:
+        # All image loads failed — fall back to plain text.
+        return task_text
+
+    return MultiModalMessage(content=content, source="user")
 
 
 def _build_export_meta(project):
@@ -239,8 +370,10 @@ def _filter_export_providers(export_meta, agent_name):
 def _build_history_messages(session, export_meta):
     """Attach visible export providers to assistant messages for history rendering."""
     history_messages = []
+    session_id = session.get("session_id", "") if isinstance(session, dict) else ""
     for msg in (session.get("discussions") if isinstance(session, dict) else []) or []:
         row = dict(msg)
+        row["attachments"] = _enrich_attachments_for_display(session_id, row.get("attachments") or [])
         if row.get("role") != "user":
             if row.get("id"):
                 row["visible_export_providers"] = _filter_export_providers(
@@ -586,14 +719,108 @@ def chat_session_update(request, session_id):
 # SSE helpers
 # ---------------------------------------------------------------------------
 
+def _json_default(value):
+    """JSON serializer fallback for datetime payload values."""
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.isoformat()
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+
+def _json_dumps(payload) -> str:
+    """Serialize JSON payloads with datetime support."""
+    return json.dumps(payload, default=_json_default)
+
 def _sse(event: str, data: dict) -> str:
     """Format a single SSE frame."""
-    return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+    return f"event: {event}\ndata: {_json_dumps(data)}\n\n"
 
 
 def _json_error(message: str, status: int) -> HttpResponse:
     """Return a standard JSON error response."""
-    return HttpResponse(json.dumps({"error": message}), status=status, content_type="application/json")
+    return HttpResponse(_json_dumps({"error": message}), status=status, content_type="application/json")
+
+
+def _friendly_run_error(exc: Exception) -> str:
+    """Return a user-readable error string for agent run failures.
+
+    AutoGen's BaseGroupChat wraps agent exceptions as::
+
+        raise RuntimeError(str(message.error))
+
+    so the outer ``exc`` is always a ``RuntimeError`` whose ``str()`` begins
+    with the original exception class name, e.g.::
+
+        "BadRequestError: Error code: 400 - {'error': {...}}\nTraceback:..."
+
+    We unwrap the inner ``BadRequestError`` (direct OR wrapped in RuntimeError)
+    so the chat UI shows an actionable message rather than a raw JSON blob.
+    """
+    import json as _json
+
+    # Helper: parse a BadRequestError-like object into a friendly string.
+    def _format_bad_request(err_obj) -> str:
+        try:
+            body = getattr(err_obj, "body", None) or {}
+            inner = body.get("error", {}) if isinstance(body, dict) else {}
+            code = inner.get("code") or ""
+            api_msg = inner.get("message") or str(err_obj)
+            # Azure wraps the Anthropic error as a JSON string inside 'message'.
+            if isinstance(api_msg, str) and api_msg.startswith("{"):
+                try:
+                    api_msg = _json.loads(api_msg).get("error", {}).get("message") or api_msg
+                except Exception:  # noqa: BLE001
+                    pass
+            return (
+                f"Model API error ({code}): {api_msg}. "
+                "The model could not complete the tool-call reflection step. "
+                "Start a new session to continue (the session state has been reset)."
+            )
+        except Exception:  # noqa: BLE001
+            return str(err_obj)
+
+    # 1. Direct BadRequestError (openai package).
+    try:
+        from openai import BadRequestError as _OAIBadRequest
+        if isinstance(exc, _OAIBadRequest):
+            return _format_bad_request(exc)
+    except ImportError:
+        pass
+
+    # 2. RuntimeError wrapping a BadRequestError — AutoGen's run_stream raises:
+    #      raise RuntimeError(str(message.error))
+    #    str(exc) begins with "BadRequestError: Error code: 400 - ..."
+    exc_str = str(exc)
+    if isinstance(exc, RuntimeError) and "BadRequestError" in exc_str and "invalid_prompt" in exc_str:
+        # Extract the JSON body from the string representation.
+        # Pattern: "Error code: 400 - {...}"
+        import re as _re
+        match = _re.search(r"Error code: \d+ - (\{.*)", exc_str, _re.DOTALL)
+        if match:
+            try:
+                body = _json.loads(match.group(1).split("\nTraceback")[0])
+                inner = body.get("error", {})
+                code = inner.get("code") or "invalid_prompt"
+                api_msg = inner.get("message") or "invalid prompt"
+                if isinstance(api_msg, str) and api_msg.startswith("{"):
+                    try:
+                        api_msg = _json.loads(api_msg).get("error", {}).get("message") or api_msg
+                    except Exception:  # noqa: BLE001
+                        pass
+                return (
+                    f"Model API error ({code}): {api_msg}. "
+                    "The model could not complete the tool-call reflection step. "
+                    "Start a new session to continue (the session state has been reset)."
+                )
+            except Exception:  # noqa: BLE001
+                pass
+        return (
+            "The model rejected the tool-call reflection prompt (invalid_prompt). "
+            "Start a new session to continue (the session state has been reset)."
+        )
+
+    return exc_str
 
 
 # ---------------------------------------------------------------------------
@@ -610,7 +837,8 @@ async def chat_session_run(request, session_id):
     Returns a text/event-stream SSE response.
 
     Body fields:
-      task  — the user message / feedback text (empty string = resume approve)
+            task  — the user message / optional gate notes (empty string = resume)
+            attachment_ids — optional repeated form field values
     """
     if not _has_valid_secret(request):
         return _json_error("Unauthorized", 403)
@@ -627,18 +855,120 @@ async def chat_session_run(request, session_id):
     if project is None:
         return _json_error("Project not found", 404)
 
-    task = request.POST.get("task", "").strip()
+    # Runtime needs unmasked MCP secrets for placeholder substitution; the
+    # normalized project carries SECRET_MASK values for UI safety.
+    raw_project = await asyncio.to_thread(services.get_project_raw, session["project_id"])
+    if isinstance(raw_project, dict):
+        project["mcp_secrets"] = raw_project.get("mcp_secrets") or {}
 
-    # First run must have a task; resume (approve) may send empty string
+    task = request.POST.get("task", "").strip()
+    attachment_ids = _parse_attachment_ids(request.POST)
+
+    # First run must have a task; gate resume may send empty string
     is_first_run = session["status"] == "idle" and not session.get("discussions")
-    if is_first_run and not task:
+    if is_first_run and not task and not attachment_ids:
         return _json_error("'task' is required to start a conversation.", 400)
 
-    await asyncio.to_thread(services.set_session_status, session_id, "running")
+    # Single-assistant chat mode: empty Continue is invalid (no new context for agent).
+    # Attachments alone are not sufficient — a text message is required.
+    is_single_assistant_gate = (
+        project.get("human_gate", {}).get("enabled", False)
+        and len(project.get("agents") or []) == 1
+    )
+    if is_single_assistant_gate and not is_first_run and not task:
+        return _json_error("A message is required to continue.", 400)
+
+    from agents.session_coordination import (
+        SessionCoordinationError,
+        acquire_run_lease,
+        clear_cancel_signal,
+        ensure_redis_available,
+        get_heartbeat_interval_seconds,
+        get_instance_id,
+        is_cancel_signaled,
+        release_run_lease,
+        renew_run_lease,
+    )
+
+    owner_id = get_instance_id()
+
+    redis_ok = await asyncio.to_thread(ensure_redis_available)
+    if not redis_ok:
+        return _json_error("Active session coordinator is unavailable.", 503)
+
+    try:
+        acquired = await asyncio.to_thread(acquire_run_lease, session_id, owner_id)
+    except SessionCoordinationError:
+        logger.exception(
+            "agents.session.redis_unavailable",
+            extra={"session_id": session_id, "phase": "acquire_lease"},
+        )
+        return _json_error("Active session coordinator is unavailable.", 503)
+
+    if not acquired:
+        return _json_error("Session is already running on another worker.", 409)
+
+    try:
+        await asyncio.to_thread(clear_cancel_signal, session_id)
+        moved_to_running = await asyncio.to_thread(services.try_set_session_running, session_id)
+        if not moved_to_running:
+            try:
+                await asyncio.to_thread(release_run_lease, session_id, owner_id)
+            except SessionCoordinationError:
+                logger.exception(
+                    "agents.session.redis_unavailable",
+                    extra={"session_id": session_id, "phase": "release_conflict"},
+                )
+            return _json_error("Session status changed before run start.", 409)
+    except SessionCoordinationError:
+        await asyncio.to_thread(release_run_lease, session_id, owner_id)
+        logger.exception(
+            "agents.session.redis_unavailable",
+            extra={"session_id": session_id, "phase": "prepare_run"},
+        )
+        return _json_error("Active session coordinator is unavailable.", 503)
+
+    # Capture request_id now — middleware clears it before event_stream() runs.
+    _captured_request_id = get_request_id()
+
+    # Create a fresh root OTel span for this run.  Empty context → no parent →
+    # fresh trace_id every round, so each /run/ call is independently queryable.
+    # Store the W3C traceparent in Redis so event_stream() can reattach it after
+    # the Django middleware finally-block clears the request span context.
+    from agents.session_coordination import (
+        clear_run_traceparent,
+        store_run_traceparent,
+    )
+    _run_span, _run_traceparent = start_root_span(
+        "agents.session.run", {"session_id": session_id}
+    )
+    if _run_traceparent:
+        await asyncio.to_thread(store_run_traceparent, session_id, _run_traceparent)
 
     async def event_stream():
+        nonlocal task
+        # Re-bind request_id (cleared by middleware before the body is consumed).
+        _rid_token = bind_request_id(_captured_request_id)
+        # Reattach the run's root OTel span as the active span so every
+        # agents.* log line and every @traced_function span inherits the same
+        # trace_id.  context_from_traceparent reconstructs the parent context
+        # from the stored Redis value; set_span_in_context then makes the
+        # recording span current so child spans nest under it.
+        _otel_parent_token = None
+        _otel_span_token = None
+        if _run_span is not None and _run_traceparent:
+            try:
+                from opentelemetry import context as otel_context, trace
+                _parent_ctx = context_from_traceparent(_run_traceparent)
+                if _parent_ctx is not None:
+                    _otel_parent_token = otel_context.attach(_parent_ctx)
+                _otel_span_token = otel_context.attach(
+                    trace.set_span_in_context(_run_span)
+                )
+            except Exception:  # noqa: BLE001
+                pass
         from autogen_agentchat.base import TaskResult
-        from autogen_agentchat.messages import TextMessage
+        from autogen_agentchat.messages import TextMessage, ToolCallSummaryMessage
         from agents.runtime import (
             evict_team,
             get_or_build_team,
@@ -647,120 +977,288 @@ async def chat_session_run(request, session_id):
             save_team_state,
         )
 
-        team, _, cache_miss = get_or_build_team(session_id, project)
-        if cache_miss:
-            saved_state = await asyncio.to_thread(services.get_agent_state, session_id)
-            if saved_state:
+        heartbeat_stop = asyncio.Event()
+        heartbeat_task = None
+        lease_lost = False
+
+        async def _lease_heartbeat(cancel_token):
+            nonlocal lease_lost
+            interval_s = get_heartbeat_interval_seconds()
+            while True:
                 try:
-                    await load_team_state(team, saved_state)
-                except Exception:
-                    evict_team(session_id)
-                    await asyncio.to_thread(services.set_session_status, session_id, "stopped")
-                    yield _sse("error", {"message": "Unable to restart: state version mismatch."})
+                    await asyncio.wait_for(heartbeat_stop.wait(), timeout=interval_s)
+                    return
+                except asyncio.TimeoutError:
+                    pass
+
+                try:
+                    renewed = await asyncio.to_thread(renew_run_lease, session_id, owner_id)
+                except SessionCoordinationError:
+                    lease_lost = True
+                    cancel_token.cancel()
                     return
 
-        # Issue a fresh cancellation token for this run
-        cancel_token = reset_cancel_token(session_id)
-
-        has_gate = project.get("human_gate", {}).get("enabled", False)
-        max_iter = project.get("team", {}).get("max_iterations", 5)
-
-        # Export integration metadata for client-side export actions.
-        export_meta = _build_export_meta(project)
-
-        pending_messages = []
-
-        async def checkpoint_state() -> None:
-            state = await save_team_state(team)
-            await asyncio.to_thread(services.save_agent_state, session_id, state)
-
-        # Persist the human's message (initial task or gate feedback) to discussions.
-        if task:
-            human_name = project.get("human_gate", {}).get("name") or "You"
-            pending_messages.append({
-                "id": str(uuid4()),
-                "agent_name": human_name,
-                "role": "user",
-                "content": task,
-                "timestamp": datetime.now(timezone.utc).strftime("%H:%M"),
-            })
+                if not renewed:
+                    lease_lost = True
+                    cancel_token.cancel()
+                    return
 
         try:
-            async for msg in team.run_stream(
-                task=task if task else None,
-                cancellation_token=cancel_token,
-            ):
-                if isinstance(msg, TaskResult):
-                    # Persist accumulated messages
-                    if pending_messages:
-                        await asyncio.to_thread(services.append_messages, session_id, pending_messages)
-                        pending_messages = []
-
-                    await checkpoint_state()
-
-                    # Re-fetch to get current_round after potential $inc
-                    updated = await asyncio.to_thread(services.get_chat_session, session_id)
-                    current_round = updated["current_round"] if updated else 0
-
-                    if has_gate and current_round < max_iter:
-                        await asyncio.to_thread(services.set_session_status, session_id, "awaiting_input")
-                        gate_data = {
-                            "mode": project["human_gate"]["interaction_mode"],
-                            "round": current_round + 1,
-                            "max_rounds": max_iter,
-                            "human_name": project["human_gate"]["name"],
-                        }
-                        if export_meta:
-                            gate_data["export"] = export_meta
-                        yield _sse("gate", gate_data)
-                    else:
-                        await asyncio.to_thread(services.set_session_status, session_id, "completed")
-                        evict_team(session_id)
-                        done_data = {"status": "completed", "round": current_round}
-                        if export_meta:
-                            done_data["export"] = export_meta
-                        yield _sse("done", done_data)
-
-                elif isinstance(msg, TextMessage) and msg.source != "user":
-                    ts = datetime.now(timezone.utc).strftime("%H:%M")
-                    record = {
-                        "id": str(uuid4()),
-                        "agent_name": msg.source,
-                        "role": "assistant",
-                        "content": msg.content,
-                        "timestamp": ts,
-                    }
-                    pending_messages.append(record)
-                    sse_record = dict(record)
-                    # Attach export info for the client to decide button rendering
-                    if export_meta:
-                        sse_record["export"] = export_meta
-                    yield _sse("message", sse_record)
-
-        except asyncio.CancelledError:
-            if pending_messages:
-                await asyncio.to_thread(services.append_messages, session_id, pending_messages)
             try:
-                await checkpoint_state()
-            except Exception:
-                # Stop should still succeed even if persistence fails here.
-                pass
-            await asyncio.to_thread(services.set_session_status, session_id, "stopped")
-            evict_team(session_id)
-            yield _sse("stopped", {"status": "stopped"})
-
-        except Exception as exc:
-            await asyncio.to_thread(services.set_session_status, session_id, "idle")
-            evict_team(session_id)
-            yield _sse("error", {"message": str(exc)})
-
-        finally:
-            # Guard: if session is still "running" (e.g. client disconnected mid-stream),
-            # reset to "idle" so it can be re-run.
-            stuck = await asyncio.to_thread(services.get_chat_session, session_id)
-            if stuck and stuck["status"] == "running":
+                team, _, cache_miss = get_or_build_team(session_id, project)
+                if cache_miss:
+                    saved_state = await asyncio.to_thread(services.get_agent_state, session_id)
+                    if saved_state:
+                        try:
+                            await load_team_state(team, saved_state)
+                        except Exception:
+                            evict_team(session_id)
+                            await asyncio.to_thread(services.set_session_status, session_id, "stopped")
+                            yield _sse("error", {"message": "Unable to restart: state version mismatch."})
+                            return
+            except Exception as exc:
                 await asyncio.to_thread(services.set_session_status, session_id, "idle")
                 evict_team(session_id)
+                yield _sse("error", {"message": str(exc)})
+                return
+
+            # Issue a fresh cancellation token for this run
+            cancel_token = reset_cancel_token(session_id)
+
+            has_gate = project.get("human_gate", {}).get("enabled", False)
+            max_iter = project.get("team", {}).get("max_iterations", 5)
+            is_single_assistant_chat_mode = (
+                has_gate and len(project.get("agents") or []) == 1
+            )
+
+            # Export integration metadata for client-side export actions.
+            export_meta = _build_export_meta(project)
+
+            pending_messages = []
+
+            async def checkpoint_state() -> None:
+                state = await save_team_state(team)
+                try:
+                    await asyncio.to_thread(services.save_agent_state, session_id, state)
+                except ValueError as _exc:
+                    # State exceeds the MongoDB document-size budget (typically
+                    # because image bytes are embedded in the AutoGen message
+                    # history).  Log a warning and continue — the current run
+                    # completes normally; only session resume will be unavailable.
+                    logger.warning(
+                        "agents.session.state_too_large",
+                        extra={"session_id": session_id, "error": str(_exc)},
+                    )
+
+            # Persist the human's message (initial task or gate notes) to discussions.
+            if task or attachment_ids:
+                human_name = project.get("human_gate", {}).get("name") or "You"
+                human_message_id = str(uuid4())
+                attachments = await asyncio.to_thread(
+                    attachment_service.bind_attachments_to_message,
+                    session_id=session_id,
+                    message_id=human_message_id,
+                    attachment_ids=attachment_ids,
+                )
+                text_with_context = task + await asyncio.to_thread(
+                    attachment_service.build_attachment_context_block,
+                    session_id=session_id,
+                    attachment_ids=attachment_ids,
+                )
+                # Build the actual task for the agent: plain str or MultiModalMessage
+                # when vision images are attached.
+                task_for_agent = await asyncio.to_thread(
+                    _build_agent_task_for_run,
+                    text_with_context,
+                    session_id,
+                    attachment_ids,
+                )
+                attachments_for_display = _enrich_attachments_for_display(session_id, attachments)
+                pending_messages.append({
+                    "id": human_message_id,
+                    "agent_name": human_name,
+                    "role": "user",
+                    # Store only the user's raw typed text — not the attachment
+                    # context block.  Extracted attachment text is an ephemeral
+                    # runtime artefact built from Blob → Redis on each run; it
+                    # must not be persisted in discussions[].
+                    "content": task,
+                    "attachments": attachments_for_display,
+                    "timestamp": datetime.now(timezone.utc),  # BSON Date in MongoDB
+                })
+                task = task_for_agent
+            else:
+                task_for_agent = task
+
+            heartbeat_task = asyncio.create_task(_lease_heartbeat(cancel_token))
+
+            try:
+                async for msg in team.run_stream(
+                    task=task_for_agent if task_for_agent else None,
+                    cancellation_token=cancel_token,
+                ):
+                    try:
+                        if await asyncio.to_thread(is_cancel_signaled, session_id):
+                            cancel_token.cancel()
+                    except SessionCoordinationError:
+                        lease_lost = True
+                        cancel_token.cancel()
+
+                    if isinstance(msg, TaskResult):
+                        # Persist accumulated messages
+                        if pending_messages:
+                            await asyncio.to_thread(services.append_messages, session_id, pending_messages)
+                            pending_messages = []
+
+                        await checkpoint_state()
+
+                        # Re-fetch to get current_round after potential $inc
+                        updated = await asyncio.to_thread(services.get_chat_session, session_id)
+                        current_round = updated["current_round"] if updated else 0
+
+                        if has_gate and (
+                            is_single_assistant_chat_mode or current_round < max_iter
+                        ):
+                            await asyncio.to_thread(services.set_session_status, session_id, "awaiting_input")
+                            gate_data = {
+                                "round": current_round + 1,
+                                "max_rounds": None if is_single_assistant_chat_mode else max_iter,
+                                "human_name": project["human_gate"]["name"],
+                                "chat_mode": "single_assistant" if is_single_assistant_chat_mode else "team",
+                            }
+                            if export_meta:
+                                gate_data["export"] = export_meta
+                            yield _sse("gate", gate_data)
+                        else:
+                            await asyncio.to_thread(services.set_session_status, session_id, "completed")
+                            evict_team(session_id)
+                            done_data = {"status": "completed", "round": current_round}
+                            if export_meta:
+                                done_data["export"] = export_meta
+                            yield _sse("done", done_data)
+
+                    elif isinstance(msg, TextMessage) and msg.source != "user":
+                        ts_dt = datetime.now(timezone.utc)  # BSON Date for MongoDB
+                        ts_iso = ts_dt.isoformat()           # ISO string for SSE JSON
+                        record = {
+                            "id": str(uuid4()),
+                            "agent_name": msg.source,
+                            "role": "assistant",
+                            "content": msg.content,
+                            "timestamp": ts_dt,
+                        }
+                        pending_messages.append(record)
+                        sse_record = dict(record)
+                        sse_record["timestamp"] = ts_iso
+                        # Attach export info for the client to decide button rendering
+                        if export_meta:
+                            sse_record["export"] = export_meta
+                        yield _sse("message", sse_record)
+
+                    elif isinstance(msg, ToolCallSummaryMessage) and msg.source != "user":
+                        # Emitted when reflect_on_tool_use is False or unavailable.
+                        # Persist and stream so tool results are visible in the chat
+                        # even without a full reflection LLM call.
+                        ts_dt = datetime.now(timezone.utc)
+                        ts_iso = ts_dt.isoformat()
+                        record = {
+                            "id": str(uuid4()),
+                            "agent_name": msg.source,
+                            "role": "assistant",
+                            "content": msg.content,
+                            "timestamp": ts_dt,
+                        }
+                        pending_messages.append(record)
+                        sse_record = dict(record)
+                        sse_record["timestamp"] = ts_iso
+                        if export_meta:
+                            sse_record["export"] = export_meta
+                        yield _sse("message", sse_record)
+
+            except asyncio.CancelledError:
+                if pending_messages:
+                    await asyncio.to_thread(services.append_messages, session_id, pending_messages)
+                try:
+                    await checkpoint_state()
+                except Exception:
+                    # Stop should still succeed even if persistence fails here.
+                    pass
+                await asyncio.to_thread(services.set_session_status, session_id, "stopped")
+                evict_team(session_id)
+                if lease_lost:
+                    yield _sse("error", {"message": "Run lease lost; session stopped."})
+                else:
+                    yield _sse("stopped", {"status": "stopped"})
+
+            except Exception as exc:
+                logger.exception(
+                    "agents.session.run_error",
+                    extra={"session_id": session_id, "exc_type": type(exc).__name__},
+                )
+                await asyncio.to_thread(services.set_session_status, session_id, "idle")
+                evict_team(session_id)
+                # AutoGen's BaseGroupChat wraps exceptions as:
+                #   raise RuntimeError(str(message.error))
+                # so exc is always RuntimeError whose str() begins with the
+                # original exception class name (e.g. "BadRequestError: ...").
+                # We check both the direct type and the string representation.
+                user_msg = _friendly_run_error(exc)
+                yield _sse("error", {"message": user_msg})
+
+            finally:
+                heartbeat_stop.set()
+                if heartbeat_task:
+                    try:
+                        await heartbeat_task
+                    except Exception:  # noqa: BLE001
+                        pass
+
+                # Guard: if session is still "running" (e.g. client disconnected mid-stream),
+                # reset to "idle" so it can be re-run.
+                stuck = await asyncio.to_thread(services.get_chat_session, session_id)
+                if stuck and stuck["status"] == "running":
+                    await asyncio.to_thread(services.set_session_status, session_id, "idle")
+                    evict_team(session_id)
+        finally:
+            try:
+                await asyncio.to_thread(release_run_lease, session_id, owner_id)
+            except SessionCoordinationError:
+                logger.exception(
+                    "agents.session.redis_unavailable",
+                    extra={"session_id": session_id, "phase": "release_lease"},
+                )
+            try:
+                await asyncio.to_thread(clear_cancel_signal, session_id)
+            except SessionCoordinationError:
+                logger.exception(
+                    "agents.session.redis_unavailable",
+                    extra={"session_id": session_id, "phase": "clear_cancel"},
+                )
+            # Detach OTel contexts (reverse order), end the root span, clear
+            # the Redis traceparent key, and restore request_id.
+            if _otel_span_token is not None:
+                try:
+                    from opentelemetry import context as otel_context
+                    otel_context.detach(_otel_span_token)
+                except Exception:  # noqa: BLE001
+                    pass
+            if _otel_parent_token is not None:
+                try:
+                    from opentelemetry import context as otel_context
+                    otel_context.detach(_otel_parent_token)
+                except Exception:  # noqa: BLE001
+                    pass
+            if _run_span is not None:
+                try:
+                    _run_span.end()
+                except Exception:  # noqa: BLE001
+                    pass
+            try:
+                await asyncio.to_thread(clear_run_traceparent, session_id)
+            except Exception:  # noqa: BLE001
+                pass
+            # Restore request_id ContextVar to pre-generator default.
+            clear_request_id(_rid_token)
 
     response = StreamingHttpResponse(
         event_stream(),
@@ -784,8 +1282,8 @@ def chat_session_respond(request, session_id):
     Human gate decision endpoint.
 
     Body:
-      action — "approve" | "feedback" | "stop"
-      text   — feedback text (only for action=feedback)
+            action — "continue" | "stop"
+            text   — optional user context to inject before continuing
     """
     if not _has_valid_secret(request):
         return _json_error("Unauthorized", 403)
@@ -799,22 +1297,22 @@ def chat_session_respond(request, session_id):
 
     action = request.POST.get("action", "").strip()
     text = request.POST.get("text", "").strip()
+    attachment_ids = _parse_attachment_ids(request.POST)
 
     if action == "stop":
         from agents.runtime import evict_team
         services.set_session_status(session_id, "stopped")
         evict_team(session_id)
-        return HttpResponse(json.dumps({"status": "stopped"}), content_type="application/json")
+        return HttpResponse(_json_dumps({"status": "stopped"}), content_type="application/json")
 
-    if action in ("approve", "feedback"):
+    if action == "continue":
         services.set_session_status(session_id, "idle")
-        task = text if action == "feedback" else ""
         return HttpResponse(
-            json.dumps({"status": "ok", "task": task}),
+            _json_dumps({"status": "ok", "task": text, "attachment_ids": attachment_ids}),
             content_type="application/json",
         )
 
-    return HttpResponse(json.dumps({"error": "Invalid action"}), status=400,
+    return HttpResponse(_json_dumps({"error": "Invalid action"}), status=400,
                         content_type="application/json")
 
 
@@ -853,7 +1351,7 @@ def chat_session_restart(request, session_id):
 
     services.set_session_status(session_id, "idle")
     task = text if mode == "continue_with_context" else ""
-    return HttpResponse(json.dumps({"status": "ok", "task": task, "mode": mode}), content_type="application/json")
+    return HttpResponse(_json_dumps({"status": "ok", "task": task, "mode": mode}), content_type="application/json")
 
 
 # ---------------------------------------------------------------------------
@@ -872,6 +1370,73 @@ def chat_session_stop(request, session_id):
     if not _has_valid_secret(request):
         return _json_error("Unauthorized", 403)
 
+    from agents.session_coordination import SessionCoordinationError, ensure_redis_available, signal_cancel
+
+    if not ensure_redis_available():
+        return _json_error("Active session coordinator is unavailable.", 503)
+
+    try:
+        signal_cancel(session_id)
+    except SessionCoordinationError:
+        logger.exception(
+            "agents.session.redis_unavailable",
+            extra={"session_id": session_id, "phase": "signal_cancel"},
+        )
+        return _json_error("Active session coordinator is unavailable.", 503)
+
     from agents.runtime import cancel_team
     cancel_team(session_id)
-    return HttpResponse(json.dumps({"status": "cancelling"}), content_type="application/json")
+    return HttpResponse(_json_dumps({"status": "cancelling"}), content_type="application/json")
+
+
+@csrf_exempt
+@require_POST
+def chat_session_upload_attachments(request, session_id):
+    """Upload one or more files for a session and return attachment descriptors."""
+    if not _has_valid_secret(request):
+        return _json_error("Unauthorized", 403)
+
+    session = services.get_chat_session(session_id)
+    if session is None:
+        return _json_error("Session not found", 404)
+
+    files = list(request.FILES.getlist("files"))
+    try:
+        uploaded = attachment_service.upload_session_attachments(session=session, files=files)
+    except ValueError as exc:
+        return _json_error(str(exc), 400)
+    except Exception:
+        logger.exception("attachments.upload_failed", extra={"session_id": session_id})
+        return _json_error("Attachment upload failed.", 500)
+
+    enriched = _enrich_attachments_for_display(session_id, uploaded)
+    return HttpResponse(_json_dumps({"status": "ok", "attachments": enriched}), content_type="application/json")
+
+
+@require_GET
+def chat_session_attachment_content(request, session_id, attachment_id):
+    """Return raw attachment bytes for inline image thumbnails and download links."""
+    session = services.get_chat_session(session_id)
+    if session is None:
+        return HttpResponse("Session not found.", status=404)
+
+    try:
+        raw, mime_type, filename = attachment_service.get_attachment_content(
+            session_id=session_id,
+            attachment_id=attachment_id,
+        )
+    except ValueError:
+        return HttpResponse("Attachment not found.", status=404)
+    except Exception:
+        logger.exception(
+            "attachments.content_failed",
+            extra={"session_id": session_id, "attachment_id": attachment_id},
+        )
+        return HttpResponse("Attachment retrieval failed.", status=500)
+
+    response = FileResponse(
+        io.BytesIO(raw),
+        content_type=(mime_type or "application/octet-stream"),
+    )
+    response["Content-Disposition"] = f"inline; filename=\"{quote(filename)}\""
+    return response

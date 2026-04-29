@@ -68,17 +68,18 @@ def store_project_token(project_id, token):
         raise ValueError(f"Invalid project ID '{project_id}'.")
 
     col = get_collection("project_settings")
-    now = datetime.now(timezone.utc).isoformat()
+    now_dt = datetime.now(timezone.utc)  # BSON Date stored in MongoDB
+    now_iso = now_dt.isoformat()          # ISO string returned to caller / JSON
     result = col.update_one(
         {"_id": oid},
         {"$set": {
             "integrations.trello.token": token,
-            "integrations.trello.token_generated_at": now,
+            "integrations.trello.token_generated_at": now_dt,
         }},
     )
     if result.matched_count == 0:
         raise ValueError("Project not found.")
-    return {"token_generated_at": now}
+    return {"token_generated_at": now_iso}
 
 
 def get_project_token(project_id):
@@ -97,7 +98,12 @@ def get_project_token(project_id):
     token = trello.get("token")
     if not token:
         return None
-    return {"token": token, "token_generated_at": trello.get("token_generated_at", "")}
+    tga = trello.get("token_generated_at", "")
+    if hasattr(tga, "isoformat"):
+        if tga.tzinfo is None:
+            tga = tga.replace(tzinfo=timezone.utc)
+        tga = tga.isoformat()
+    return {"token": token, "token_generated_at": tga}
 
 
 def is_project_token_valid(project_id):
@@ -249,10 +255,6 @@ def create_list(session_id, name, board_id):
 PRIORITY_VALUES = {"low": "Low", "medium": "Medium", "high": "High", "critical": "Critical"}
 
 
-def _utc_iso_now():
-    return datetime.now(timezone.utc).isoformat()
-
-
 def _coerce_confidence(value):
     try:
         out = float(value)
@@ -379,7 +381,7 @@ def normalize_export_items(items):
 def _build_export_payload(items, source):
     return {
         "schema_version": "2026-04-21",
-        "updated_at": _utc_iso_now(),
+        "updated_at": datetime.now(timezone.utc),
         "exported": False,
         "source": (source or "manual").strip() or "manual",
         "cards": normalize_export_items(items),
@@ -401,18 +403,18 @@ def save_push_result(session_id, discussion_id, list_id, push_result):
     """Persist push outcome into existing trello export payload."""
     payload = get_saved_export(session_id, discussion_id) or {
         "schema_version": "2026-04-21",
-        "updated_at": _utc_iso_now(),
+        "updated_at": datetime.now(timezone.utc),
         "exported": False,
         "source": "manual",
         "cards": [],
     }
     payload["last_push"] = {
-        "pushed_at": _utc_iso_now(),
+        "pushed_at": datetime.now(timezone.utc),
         "list_id": list_id,
         "result": push_result,
     }
     payload["exported"] = True
-    payload["updated_at"] = _utc_iso_now()
+    payload["updated_at"] = datetime.now(timezone.utc)
     return services.set_discussion_export_payload(session_id, discussion_id, "trello", payload)
 
 

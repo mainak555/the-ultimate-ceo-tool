@@ -1,8 +1,25 @@
 import logging
+import atexit
 
 from django.apps import AppConfig
 
 logger = logging.getLogger(__name__)
+_shutdown_hook_registered = False
+
+
+def _shutdown_runtime_resources() -> None:
+    """Best-effort process shutdown cleanup for runtime/MCP resources."""
+    try:
+        from agents.runtime import evict_all_teams
+        evict_all_teams()
+    except Exception:
+        logger.exception("agents.shutdown_failed", extra={"phase": "evict_all_teams"})
+
+    try:
+        from agents.mcp_tools import close_all_workbenches
+        close_all_workbenches()
+    except Exception:
+        logger.exception("agents.shutdown_failed", extra={"phase": "close_all_workbenches"})
 
 
 class ServerConfig(AppConfig):
@@ -10,6 +27,12 @@ class ServerConfig(AppConfig):
 
     def ready(self):
         """One-shot startup hooks: tracing init and stale-session reset."""
+        global _shutdown_hook_registered
+
+        if not _shutdown_hook_registered:
+            atexit.register(_shutdown_runtime_resources)
+            _shutdown_hook_registered = True
+
         # Initialize OpenTelemetry tracing (env-gated). This wires the OTLP
         # exporter (currently Langfuse), Django/requests/pymongo auto-
         # instrumentation, and the AutoGen event-log -> span bridge.

@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 from pymongo.errors import DuplicateKeyError
 
 from .db import get_collection, ensure_indexes, CHAT_SESSIONS_COLLECTION
+from . import attachment_service
 from .model_catalog import (
     get_agent_model_names,
     default_system_prompt_hint,
@@ -28,6 +29,42 @@ from .model_catalog import (
 )
 from .schemas import validate_project, validate_chat_session
 
+
+def _utc_now() -> datetime:
+    """Return current UTC datetime (timezone-aware). Used for all BSON Date writes."""
+    return datetime.now(timezone.utc)
+
+
+def _coerce_dt_to_iso(value) -> str:
+    """Convert a BSON datetime (or already-string value) to an ISO 8601 string.
+
+    Handles:
+    - datetime objects (from PyMongo, aware or naive-UTC)
+    - strings (already ISO or legacy bare 'HH:MM' — returned unchanged)
+    - None / missing → empty string
+    """
+    if value is None:
+        return ""
+    if hasattr(value, "isoformat"):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.isoformat()
+    return str(value) if value else ""
+
+
+def _json_default(value):
+    """Serialize datetime values for JSON-only boundaries."""
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.isoformat()
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+
+def _json_size_bytes(value) -> int:
+    """Return UTF-8 byte size of JSON payload with datetime-safe serialization."""
+    return len(json.dumps(value, ensure_ascii=True, default=_json_default).encode("utf-8"))
+
 from core.tracing import traced_function
 
 
@@ -35,7 +72,14 @@ class ProjectDeletionBlocked(ValueError):
     """Raised when a project cannot be deleted due to dependent records."""
 
 
-MAX_AGENT_STATE_BYTES = 900_000
+from django.conf import settings as _django_settings
+
+# Read from settings (env var MAX_AGENT_STATE_BYTES, default 1 MB).
+# Agent state lives inside the chat_sessions MongoDB document (16 MB hard limit
+# shared with discussions[]).  AutoGen serializes the full message history
+# including base64 image bytes, so image-heavy sessions can exceed the default;
+# raise MAX_AGENT_STATE_BYTES in the environment for those deployments.
+MAX_AGENT_STATE_BYTES: int = getattr(_django_settings, "MAX_AGENT_STATE_BYTES", 1_000_000)
 
 
 def _coerce_temperature(value):
@@ -78,6 +122,31 @@ SUPPORTED_EXPORT_PROVIDERS = ("trello", "jira", "pdf", "n8n")
 def _mask_secret(value):
     """Return SECRET_MASK if value is non-empty, else empty string."""
     return SECRET_MASK if value else ""
+
+
+_VALID_MCP_SCOPES = ("none", "shared", "dedicated")
+
+
+def _normalize_mcp_scope(value):
+    """Return one of 'none' | 'shared' | 'dedicated'. Defaults to 'none'."""
+    if not isinstance(value, str):
+        return "none"
+    scope = value.strip().lower()
+    return scope if scope in _VALID_MCP_SCOPES else "none"
+
+
+def _normalize_mcp_dict(value):
+    """Return a dict for stored MCP configuration; non-dicts and falsy values become {}."""
+    if isinstance(value, dict):
+        return value
+    return {}
+
+
+def _mask_mcp_secrets(raw):
+    """Return {KEY: SECRET_MASK} for every stored MCP secret key. Non-dict → {}."""
+    if not isinstance(raw, dict):
+        return {}
+    return {k: SECRET_MASK for k in raw.keys() if isinstance(k, str) and k}
 
 
 def _normalize_export_agents(raw_trello, raw_integrations):
@@ -124,9 +193,6 @@ def normalize_project(project):
                 raw_human_gate = {
                     "enabled": True,
                     "name": raw_agent.get("name") or "Architect",
-                    "interaction_mode": "feedback"
-                    if (raw_agent.get("interaction_mode") or "").strip() == "feedback"
-                    else "approve_reject",
                 }
             continue
 
@@ -142,6 +208,8 @@ def normalize_project(project):
             "temperature": _coerce_temperature(
                 raw_agent.get("temperature", llm_config.get("temperature", 0.7))
             ),
+            "mcp_tools": _normalize_mcp_scope(raw_agent.get("mcp_tools")),
+            "mcp_configuration": _normalize_mcp_dict(raw_agent.get("mcp_configuration")),
         })
 
     if not assistants:
@@ -150,20 +218,18 @@ def normalize_project(project):
             "model": default_model,
             "system_prompt": default_prompt,
             "temperature": 0.7,
+            "mcp_tools": "none",
+            "mcp_configuration": {},
         }]
 
     human_gate = {
         "enabled": False,
         "name": "",
-        "interaction_mode": "approve_reject",
     }
     if isinstance(raw_human_gate, dict):
         human_gate = {
             "enabled": bool(raw_human_gate.get("enabled", True)),
             "name": (raw_human_gate.get("name") or "").strip(),
-            "interaction_mode": (
-                raw_human_gate.get("interaction_mode") or "approve_reject"
-            ).strip() or "approve_reject",
         }
 
     raw_team = project.get("team") or {}
@@ -188,7 +254,7 @@ def normalize_project(project):
         trello["app_name"] = (raw_trello.get("app_name") or "").strip()
         trello["api_key"] = _mask_secret(raw_trello.get("api_key"))
         trello["token"] = _mask_secret(raw_trello.get("token"))
-        trello["token_generated_at"] = (raw_trello.get("token_generated_at") or "").strip()
+        trello["token_generated_at"] = _coerce_dt_to_iso(raw_trello.get("token_generated_at") or "")
         trello["default_workspace_id"] = (raw_trello.get("default_workspace_id") or "").strip()
         trello["default_workspace_name"] = (raw_trello.get("default_workspace_name") or raw_trello.get("default_workspace") or "").strip()
         trello["default_board_id"] = (raw_trello.get("default_board_id") or "").strip()
@@ -241,10 +307,14 @@ def normalize_project(project):
         "project_id": str(project["_id"]) if project.get("_id") else "",
         "project_name": project.get("project_name", ""),
         "objective": project.get("objective", ""),
+        "created_at": _coerce_dt_to_iso(project.get("created_at")),
+        "updated_at": _coerce_dt_to_iso(project.get("updated_at")),
         "agents": assistants,
         "human_gate": human_gate,
         "team": team,
         "integrations": integrations,
+        "shared_mcp_tools": _normalize_mcp_dict(project.get("shared_mcp_tools")),
+        "mcp_secrets": _mask_mcp_secrets(project.get("mcp_secrets")),
         "has_chat_sessions": False,
     }
 
@@ -322,6 +392,9 @@ def create_project(data):
     ensure_indexes()
     col = get_collection("project_settings")
     doc = cleaned.copy()
+    now = _utc_now()
+    doc["created_at"] = now
+    doc["updated_at"] = now
     try:
         col.insert_one(doc)
     except DuplicateKeyError:
@@ -370,6 +443,10 @@ def update_project(project_id, data):
 
     cleaned = validate_project(data)
 
+    # Preserve original created_at; stamp updated_at as BSON Date
+    cleaned["created_at"] = existing.get("created_at") or _utc_now()
+    cleaned["updated_at"] = _utc_now()
+
     try:
         result = col.replace_one({"_id": oid}, cleaned)
     except DuplicateKeyError:
@@ -395,34 +472,46 @@ def update_project(project_id, data):
 def _restore_masked_secrets(data, existing):
     """Replace SECRET_MASK placeholders in data with actual values from the DB."""
     integrations = data.get("integrations")
-    if not isinstance(integrations, dict):
-        return
+    if isinstance(integrations, dict):
+        existing_integrations = existing.get("integrations") or {}
 
-    existing_integrations = existing.get("integrations") or {}
+        # Trello secrets
+        trello = integrations.get("trello")
+        existing_trello = existing_integrations.get("trello") or {}
+        if isinstance(trello, dict):
+            if trello.get("api_key") == SECRET_MASK:
+                trello["api_key"] = existing_trello.get("api_key", "")
+            token_value = trello.get("token", "")
+            if token_value == SECRET_MASK or (not token_value and existing_trello.get("token")):
+                trello["token"] = existing_trello.get("token", "")
+            # Preserve token_generated_at from DB when not explicitly set
+            if not trello.get("token_generated_at"):
+                trello["token_generated_at"] = existing_trello.get("token_generated_at", "")
 
-    # Trello secrets
-    trello = integrations.get("trello")
-    existing_trello = existing_integrations.get("trello") or {}
-    if isinstance(trello, dict):
-        if trello.get("api_key") == SECRET_MASK:
-            trello["api_key"] = existing_trello.get("api_key", "")
-        token_value = trello.get("token", "")
-        if token_value == SECRET_MASK or (not token_value and existing_trello.get("token")):
-            trello["token"] = existing_trello.get("token", "")
-        # Preserve token_generated_at from DB when not explicitly set
-        if not trello.get("token_generated_at"):
-            trello["token_generated_at"] = existing_trello.get("token_generated_at", "")
+        # Jira secrets (per type)
+        jira = integrations.get("jira")
+        existing_jira = existing_integrations.get("jira") or {}
+        if isinstance(jira, dict):
+            for jira_type in ("software", "service_desk", "business"):
+                type_cfg = jira.get(jira_type)
+                existing_type = existing_jira.get(jira_type) or {}
+                if isinstance(type_cfg, dict):
+                    if type_cfg.get("api_key") == SECRET_MASK:
+                        type_cfg["api_key"] = existing_type.get("api_key", "")
 
-    # Jira secrets (per type)
-    jira = integrations.get("jira")
-    existing_jira = existing_integrations.get("jira") or {}
-    if isinstance(jira, dict):
-        for jira_type in ("software", "service_desk", "business"):
-            type_cfg = jira.get(jira_type)
-            existing_type = existing_jira.get(jira_type) or {}
-            if isinstance(type_cfg, dict):
-                if type_cfg.get("api_key") == SECRET_MASK:
-                    type_cfg["api_key"] = existing_type.get("api_key", "")
+    # MCP secrets — restore masked values from existing project doc.
+    # Submitted dict is authoritative for which keys exist (deletions persist).
+    mcp_secrets = data.get("mcp_secrets")
+    if isinstance(mcp_secrets, dict):
+        existing_secrets = existing.get("mcp_secrets") or {}
+        for key, value in list(mcp_secrets.items()):
+            if value == SECRET_MASK:
+                if key in existing_secrets:
+                    mcp_secrets[key] = existing_secrets[key]
+                else:
+                    # Mask submitted with no prior value → drop (validation
+                    # would otherwise reject empty value).
+                    mcp_secrets.pop(key, None)
 
 
 @traced_function("service.project.delete")
@@ -476,6 +565,8 @@ def clone_project(project_id):
         "human_gate": source["human_gate"],
         "team": source["team"],
         "integrations": raw_integrations,
+        "shared_mcp_tools": raw.get("shared_mcp_tools") or {},
+        "mcp_secrets": raw.get("mcp_secrets") or {},
     }
     return create_project(data)
 
@@ -484,27 +575,94 @@ def clone_project(project_id):
 # Chat Session CRUD
 # ---------------------------------------------------------------------------
 
+def _normalize_discussion(msg):
+    """Return a copy of a discussion dict with timestamp coerced to ISO string.
+
+    Handles both new BSON Date values (datetime objects returned by PyMongo)
+    and old bare "HH:MM" string values already stored in MongoDB.
+    """
+    if not isinstance(msg, dict):
+        return msg
+    ts = msg.get("timestamp", "")
+    if hasattr(ts, "isoformat"):
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        ts = ts.isoformat()
+    row = dict(msg, timestamp=ts)
+    attachments = []
+    for item in row.get("attachments", []) or []:
+        if not isinstance(item, dict):
+            continue
+        att = dict(item)
+        uploaded_at = att.get("uploaded_at")
+        if hasattr(uploaded_at, "isoformat"):
+            if uploaded_at.tzinfo is None:
+                uploaded_at = uploaded_at.replace(tzinfo=timezone.utc)
+            att["uploaded_at"] = uploaded_at.isoformat()
+        attachments.append(att)
+    if attachments:
+        row["attachments"] = attachments
+    # Coerce export payload datetimes (updated_at, last_push.pushed_at) to ISO strings.
+    exports = row.get("exports")
+    if isinstance(exports, dict):
+        coerced_exports = {}
+        for provider_key, provider_val in exports.items():
+            if not isinstance(provider_val, dict):
+                coerced_exports[provider_key] = provider_val
+                continue
+            # Handles both flat (trello) and nested (jira.software/service_desk/business) shapes.
+            if any(isinstance(v, dict) for v in provider_val.values()):
+                # Nested shape: e.g. jira -> {software: {...}, service_desk: {...}}
+                coerced_provider = {}
+                for sub_key, sub_val in provider_val.items():
+                    if isinstance(sub_val, dict):
+                        coerced_provider[sub_key] = _coerce_export_payload_dates(sub_val)
+                    else:
+                        coerced_provider[sub_key] = sub_val
+                coerced_exports[provider_key] = coerced_provider
+            else:
+                coerced_exports[provider_key] = _coerce_export_payload_dates(provider_val)
+        row["exports"] = coerced_exports
+    return row
+
+
+def _coerce_export_payload_dates(payload):
+    """Return a shallow copy of an export payload dict with datetime fields coerced to ISO strings."""
+    if not isinstance(payload, dict):
+        return payload
+    out = dict(payload)
+    out["updated_at"] = _coerce_dt_to_iso(out.get("updated_at"))
+    last_push = out.get("last_push")
+    if isinstance(last_push, dict):
+        lp = dict(last_push)
+        lp["pushed_at"] = _coerce_dt_to_iso(lp.get("pushed_at"))
+        out["last_push"] = lp
+    return out
+
+
 def normalize_chat_session(doc):
     """Convert a MongoDB chat_sessions document for display."""
     if not doc:
         return None
     created_at = doc.get("created_at", "")
     if hasattr(created_at, "strftime"):
-        created_at = created_at.strftime("%Y-%m-%d %H:%M")
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=timezone.utc)
+        created_at = created_at.isoformat()
     agent_state = doc.get("agent_state")
     state_meta = {}
     if isinstance(agent_state, dict):
         state_meta = {
             "source": agent_state.get("source", ""),
             "version": agent_state.get("version", ""),
-            "saved_at": agent_state.get("saved_at", ""),
+            "saved_at": _coerce_dt_to_iso(agent_state.get("saved_at", "")),
         }
     return {
         "session_id": str(doc["_id"]),
         "project_id": doc.get("project_id", ""),
         "description": doc.get("description", ""),
         "created_at": created_at,
-        "discussions": doc.get("discussions", []),
+        "discussions": [_normalize_discussion(m) for m in doc.get("discussions", [])],
         "status": doc.get("status", "idle"),
         "current_round": doc.get("current_round", 0),
         "has_agent_state": isinstance(agent_state, dict) and isinstance(agent_state.get("state"), dict),
@@ -573,6 +731,22 @@ def set_session_status(session_id, status):
     if status == "awaiting_input":
         update["$inc"] = {"current_round": 1}
     col.update_one({"_id": oid}, update)
+
+
+@traced_function("service.chat.try_set_running")
+def try_set_session_running(session_id):
+    """Atomically set status to running only from idle/awaiting_input."""
+    try:
+        oid = ObjectId(session_id)
+    except (InvalidId, TypeError):
+        return False
+
+    col = get_collection(CHAT_SESSIONS_COLLECTION)
+    result = col.update_one(
+        {"_id": oid, "status": {"$in": ["idle", "awaiting_input"]}},
+        {"$set": {"status": "running"}},
+    )
+    return result.modified_count == 1
 
 
 @traced_function("service.chat.append_messages")
@@ -719,12 +893,21 @@ def save_agent_state(session_id, state):
     payload = {
         "source": "autogen_team_state",
         "version": str(state.get("version") or ""),
-        "saved_at": datetime.now(timezone.utc).isoformat(),
+        "saved_at": _utc_now(),  # BSON Date — coerced to ISO string on read
         "state": state,
     }
-    payload_size = len(json.dumps(payload, ensure_ascii=True).encode("utf-8"))
+    try:
+        payload_size = _json_size_bytes(payload)
+    except TypeError as e:
+        raise TypeError(f"Serialization failed: {e}")
+    except ValueError as e:
+        raise TypeError(f"JSON format error: {e}")
+    
     if payload_size > MAX_AGENT_STATE_BYTES:
-        raise ValueError("Agent state is too large to persist.")
+        raise ValueError(
+            f"Agent state is too large to persist "
+            f"({payload_size:,} bytes; limit {MAX_AGENT_STATE_BYTES:,} bytes)."
+        )
 
     col = get_collection(CHAT_SESSIONS_COLLECTION)
     result = col.update_one({"_id": oid}, {"$set": {"agent_state": payload}})
@@ -789,6 +972,7 @@ def delete_chat_session(session_id):
         oid = ObjectId(session_id)
     except (InvalidId, TypeError):
         raise ValueError(f"Invalid session ID '{session_id}'.")
+    attachment_service.delete_session_attachments(session_id)
     col = get_collection(CHAT_SESSIONS_COLLECTION)
     result = col.delete_one({"_id": oid})
     if result.deleted_count == 0:

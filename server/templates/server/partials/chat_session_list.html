@@ -42,7 +42,7 @@
             Restartable
           </span>
         {% endif %}
-        <span class="chat-session-item__date">{{ session.created_at }}</span>
+        <span class="chat-session-item__date"><time class="local-time" data-utc="{{ session.created_at }}">{{ session.created_at }}</time></span>
       </div>
     </li>
   {% endfor %}

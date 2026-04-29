@@ -1,0 +1,67 @@
+# Compose deployment with MCP gateway sidecar.
+#
+# Profiles:
+#   default              app + mcp-gateway (Mongo provided externally via env)
+#   --profile local-mongo  also start a local Mongo container (dev only)
+
+services:
+  app:
+    build:
+      context: ../..
+      dockerfile: deployments/compose/Dockerfile.app
+    image: product-discovery:app
+    env_file:
+      - ../../.env
+    environment:
+      # Default to internal mongo if local-mongo profile is active; user can override.
+      MONGODB_URI: ${MONGODB_URI:-mongodb://mongo:27017}
+      MONGODB_NAME: ${MONGODB_NAME:-product_discovery}
+      REDIS_URI: ${REDIS_URI:-redis://redis:6379/0}
+      REDIS_NAMESPACE: ${REDIS_NAMESPACE:-product_discovery}
+    ports:
+      - "8000:8000"
+    depends_on:
+      - mcp-gateway
+      - redis
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+
+  mcp-gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile.mcp-gateway
+    image: product-discovery:mcp-gateway
+    environment:
+      MCP_GATEWAY_PORT: "9000"
+      MCP_CONFIG_PATH: "/config/mcp.json"
+    volumes:
+      # Replace with your own mcp.json. See mcp.json.example.
+      - ./mcp.json:/config/mcp.json:ro
+      # Filesystem MCP example needs a host-mounted data dir
+      - ./mcp-data:/data
+    ports:
+      - "9000:9000"
+    restart: unless-stopped
+
+  # Optional reference Mongo for local development. Production deployments
+  # should use a managed Mongo cluster and remove this service.
+  mongo:
+    image: mongo:7
+    profiles: ["local-mongo"]
+    volumes:
+      - mongo-data:/data/db
+    ports:
+      - "27017:27017"
+    restart: unless-stopped
+
+volumes:
+  mongo-data:
+  redis-data:

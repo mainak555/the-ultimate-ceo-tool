@@ -17,9 +17,11 @@ All routes are under the `server` app namespace.
 | `POST` | `/projects/<project_id>/clone/` | `project_clone` | Clone project as `<name> - Copy` |
 | `GET` | `/chat/sessions/` | `chat_session_list` | List chat sessions for a project (HTMX partial) |
 | `POST` | `/chat/sessions/create/` | `chat_session_create` | Create a chat session |
-| `POST` | `/chat/sessions/<session_id>/run/` | `chat_session_run` | Start or continue a run (SSE stream) |
+| `POST` | `/chat/sessions/<session_id>/run/` | `chat_session_run` | Start or continue a run (SSE stream; Redis-coordinated active lease) |
 | `POST` | `/chat/sessions/<session_id>/restart/` | `chat_session_restart` | Restart from persisted AutoGen team state |
-| `POST` | `/chat/sessions/<session_id>/respond/` | `chat_session_respond` | Human gate decision (approve/feedback/stop) |
+| `POST` | `/chat/sessions/<session_id>/respond/` | `chat_session_respond` | Human gate decision (continue/stop with optional notes) |
+| `POST` | `/chat/sessions/<session_id>/attachments/` | `chat_session_upload_attachments` | Upload chat attachments for a session (multipart) |
+| `GET` | `/chat/sessions/<session_id>/attachments/<attachment_id>/content/` | `chat_session_attachment_content` | Inline/download attachment content (used for thumbnails) |
 | `POST` | `/chat/sessions/<session_id>/stop/` | `chat_session_stop` | Stop an in-progress run |
 | `GET` | `/chat/sessions/<session_id>/` | `chat_session_detail` | Load chat history panel for one session |
 | `POST` | `/chat/sessions/<session_id>/delete/` | `chat_session_delete` | Delete a chat session |
@@ -101,13 +103,18 @@ This keeps provider behavior consistent while allowing provider-specific payload
 - `agents[0][temperature]` — float string
 - `human_gate[enabled]` — `"on"` if checked
 - `human_gate[name]` — string
-- `human_gate[interaction_mode]` — `approve_reject | feedback`
 - `team[type]` — `round_robin` | `selector`
 - `team[max_iterations]` — integer string
 - `team[model]` — model name (required when `team[type]=selector`)
 - `team[system_prompt]` — routing prompt string; supports `{roles}`, `{history}`, `{participants}` (required when `team[type]=selector`)
 - `team[temperature]` — float string (default `0.0`; only used for selector)
 - `team[allow_repeated_speaker]` — `"on"` if checked (default on; only used for selector)
+
+Single-assistant chat mode semantics:
+- When exactly one assistant is configured, `human_gate[enabled]` is required.
+- `team[type]=selector` is invalid with one assistant.
+- Team Setup controls may be hidden in the UI for one-assistant projects; server-side validation remains authoritative.
+- On save, the persisted project document may omit the `team` object in one-assistant mode.
 
 **Success response**: HTML partial (`config_form.html`) with `HX-Trigger: refreshSidebar`
 
@@ -152,8 +159,7 @@ Model runtime notes:
   ],
   "human_gate": {
     "enabled": true,
-    "name": "Architect",
-    "interaction_mode": "approve_reject"
+    "name": "Architect"
   },
   "team": {
     "type": "round_robin | selector",
@@ -196,3 +202,52 @@ Restart endpoint contract:
   - Requires a persisted `agent_state`
   - Session must be `completed` or `stopped`
   - If `load_state()` fails due to schema/version drift, restart stops with an explicit version mismatch error
+
+Human gate response endpoint contract:
+
+- `POST /chat/sessions/<session_id>/respond/`
+- Body fields:
+  - `action`: `continue` or `stop`
+  - `text`: optional note/context (used when `action=continue`)
+  - `attachment_ids`: optional repeated values bound to the next resumed user message
+- Behavior:
+  - `continue`: sets session status to `idle` and returns `{status:"ok", task:"<text>", attachment_ids:[...]}`
+  - `stop`: sets session status to `stopped`, evicts the runtime team, returns `{status:"stopped"}`
+
+Run endpoint attachment contract:
+
+- `POST /chat/sessions/<session_id>/run/`
+- Body fields:
+  - `task`: optional text (required on first run unless attachments are provided)
+  - `attachment_ids`: optional repeated values
+- Behavior:
+  - Non-image attachments: text is extracted lazily (Redis-cached, first call downloads from Azure Blob). Full extracted text is appended to the agent task as an `--- Attachments:` block — no truncation.
+  - Image attachments: bytes are downloaded from Azure Blob and passed as `autogen_core.Image` objects inside a `MultiModalMessage` to vision-capable models. Requires `"vision": true` in the model's `agent_models.json` entry.
+
+Attachment upload/content contract:
+
+- `POST /chat/sessions/<session_id>/attachments/`
+  - Content-Type: `multipart/form-data`
+  - File field: repeated `files`
+  - Response: `{status:"ok", attachments:[{id, filename, mime_type, size_bytes, is_image, extension, content_url, thumbnail_url?}]}`
+- `GET /chat/sessions/<session_id>/attachments/<attachment_id>/content/`
+  - Returns raw file content for inline rendering (image thumbnails) and download/open in a new tab.
+
+Azure storage auth note:
+
+- Attachment blob access uses `AZURE_STORAGE_CONTAINER_SAS_URL` (container SAS URL including query token).
+- SAS permissions must cover upload/read/list/delete operations used by the attachment pipeline.
+
+Active run coordination contract:
+
+- `POST /chat/sessions/<session_id>/run/` acquires a Redis lease keyed by
+  `session_id` before transitioning to `running`.
+- Returns `409` when another worker already owns the active run lease.
+- Returns `503` when Redis coordination is unavailable (fail-fast; no run start).
+- `POST /chat/sessions/<session_id>/stop/` writes a Redis cancel signal so
+  cancellation propagates across workers/pods.
+- MongoDB remains the durable source for `discussions` and `agent_state`.
+
+Run behavior by mode:
+- Multi-assistant gated runs pause after each full round and may auto-complete when `current_round` reaches `team.max_iterations`.
+- Single-assistant chat mode pauses after each assistant turn and does not use `team.max_iterations` for auto-completion; the human `stop` action terminates the conversation.

@@ -53,12 +53,32 @@ Converts a single saved agent dict into a runtime spec:
 
 Reads `project["team"]["type"]` and builds the appropriate AutoGen team.
 
-#### Termination strategy (both team types)
+#### Termination strategy
+
+All termination uses a custom `AgentMessageTermination` class (defined in `team_builder.py`)
+that counts only messages where `source != "user"`. This avoids the off-by-one present in
+AutoGen's built-in `MaxMessageTermination`, which counts the initial task message and would
+consume one agent turn on every `run_stream()` call.
 
 | `human_gate.enabled` | Termination |
 |----------------------|-------------|
-| `false` | `MaxMessageTermination(n_agents × max_iterations)` — runs all rounds automatically |
-| `true` | `MaxMessageTermination(n_agents)` — stops after one full round; caller resumes per round |
+| `false` | `AgentMessageTermination(n_agents × max_iterations)` — runs all rounds automatically |
+| `true` | `AgentMessageTermination(n_agents) \| ExternalTermination()` — stops after one full agent round or when Stop is pressed (graceful); see Stop Mechanism below |
+
+`ExternalTermination` is stored in `project["_runtime"]["external_termination"]` after `build_team()` so
+`runtime.cancel_team()` can call `.set()` for a graceful stop.
+
+AutoGen automatically calls `termination.reset()` after each round fires, so `AgentMessageTermination._count`
+and `ExternalTermination._setted` both reset cleanly between gate rounds without manual intervention.
+
+#### Stop mechanism (human-gated runs)
+
+When the user presses **Stop**:
+1. `cancel_team(session_id)` calls `ExternalTermination.set()` first — graceful signal.
+2. `CancellationToken.cancel()` follows — hard interrupt for any in-flight LLM call.
+3. The graceful signal fires at the next turn boundary; the current agent message (if any) is
+   fully written before `TaskResult` is yielded, so no message is lost.
+4. `evict_team(session_id)` removes the team and `ExternalTermination` from all caches.
 
 ---
 
@@ -72,11 +92,15 @@ Uses `RoundRobinGroupChat`. Agents speak in the fixed order they are listed in t
 - `team.max_iterations`
 - `human_gate.enabled`
 
+For single-assistant projects, `RoundRobinGroupChat` is the only valid team runtime.
+
 ---
 
 ### `selector`
 
 Uses `SelectorGroupChat`. A dedicated model client selects the next speaker each turn based on the selector prompt, conversation history, and agent descriptions.
+
+`SelectorGroupChat` requires at least two participants.
 
 **Config fields used:**
 
@@ -138,9 +162,33 @@ The default example is stored in `server/model_catalog.SELECTOR_AGENT_PROMPT` an
 
 ---
 
+## `AgentMessageTermination` — Custom Condition
+
+Defined in `agents/team_builder.py`. Replaces AutoGen's `MaxMessageTermination` everywhere in this project.
+
+**Why it exists**: `MaxMessageTermination` counts every `BaseChatMessage`, including the
+initial `TextMessage(source="user")` task. With `MaxMessageTermination(N)`, only `N-1`
+agent turns occur per round. `AgentMessageTermination(N)` filters to messages where
+`source != "user"`, giving exactly `N` agent turns.
+
+**Interface** (duck-type compatible with `TerminationCondition`):
+- `terminated: bool` — true once the limit is reached
+- `async __call__(messages) -> StopMessage | None` — accumulates count, returns `StopMessage` when limit is hit
+- `async reset() -> None` — resets count to 0 (called automatically by AutoGen when fired)
+- `__or__(other) -> _Or` — supports `AgentMessageTermination(N) | ExternalTermination()` syntax
+
+---
+
 ## Runtime Cache — `runtime.py`
 
 Teams are kept alive in a process-local dict (`_TEAM_CACHE`) keyed by `session_id`. This preserves AutoGen's internal conversation history between rounds in human-gated runs.
+
+Active run ownership is coordinated through Redis (`agents/session_coordination.py`):
+
+- One active run lease per `session_id`.
+- Lease heartbeat renewal while SSE streaming is active.
+- Cross-instance cancel signal used by `/chat/sessions/<id>/stop/`.
+- Run start is fail-fast when Redis is unavailable.
 
 The runtime also persists native AutoGen team state to `chat_sessions.agent_state` using:
 
@@ -150,16 +198,17 @@ The runtime also persists native AutoGen team state to `chat_sessions.agent_stat
 ```
 session_id → AutoGen team instance
 session_id → CancellationToken
+session_id → ExternalTermination  (gated runs only; graceful stop signal)
 ```
 
 ### Key functions
 
 | Function | When to call |
 |----------|-------------|
-| `get_or_build_team(session_id, project)` | Before every `run_stream()` call. Builds on miss, returns cached on hit |
-| `reset_cancel_token(session_id)` | Before every `run_stream()` call to issue a fresh token |
-| `cancel_team(session_id)` | To stop a running stream (e.g. user cancels) |
-| `evict_team(session_id)` | After session completes or is abandoned; frees memory |
+| `get_or_build_team(session_id, project)` | Before every `run_stream()` call. Builds on miss, returns cached on hit. Stashes `ExternalTermination` on cache miss |
+| `reset_cancel_token(session_id)` | Before every `run_stream()` call to issue a fresh `CancellationToken`. `ExternalTermination` resets automatically when fired |
+| `cancel_team(session_id)` | To stop a running stream. Calls `ExternalTermination.set()` (graceful) then `CancellationToken.cancel()` (hard fallback) |
+| `evict_team(session_id)` | After session completes or is abandoned; clears `_TEAM_CACHE`, `_CANCEL_TOKENS`, `_EXTERNAL_TERMINATIONS`, and MCP workbenches |
 
 ### Cache lifetime
 
@@ -168,11 +217,51 @@ session_id → CancellationToken
 - **Server restart**: Cache is lost. If persisted `agent_state` exists, the team is rebuilt and `load_state()` restores it.
 - **State mismatch**: If `load_state()` fails due to schema/version drift, restart is rejected with an explicit "state version mismatch" error (no fallback rebuild path).
 
+Redis coordination keys are ephemeral and are not used for resume state.
+Durable resume data always comes from MongoDB `chat_sessions.agent_state`.
+
+### Horizontal scaling
+
+`_TEAM_CACHE` and `_CANCEL_TOKENS` are **process-local**. AutoGen team objects
+contain live asyncio tasks, agent instances, and MCP workbench connections —
+they cannot be serialised to Redis, Memcached, or any shared store.
+
+**Required: session-affinity (sticky sessions) at the load balancer / ingress.**
+
+Every SSE streaming request and every HITL resume POST for a given `session_id`
+must be routed to the same container instance. Without stickiness, a resume
+request landing on a different replica causes a cache miss, the team is rebuilt
+from scratch, and the in-progress turn counter resets.
+
+| Deployment | Sticky session mechanism |
+|---|---|
+| **Nginx** | `ip_hash;` or `hash $cookie_sessionid consistent;` in upstream block |
+| **Docker Compose (multi-replica)** | Add `nginx` reverse proxy with `ip_hash` in front of scaled `app` replicas |
+| **Kubernetes Ingress (nginx-ingress)** | `nginx.ingress.kubernetes.io/affinity: "cookie"` + `nginx.ingress.kubernetes.io/session-cookie-name: "SERVERID"` annotations |
+| **Kubernetes Service** | `sessionAffinity: ClientIP` on the `ClusterIP` Service (coarser — IP-level only) |
+| **AWS ALB** | Target group stickiness enabled with duration-based cookies |
+
+**Cancel across instances** still works without stickiness: the stop endpoint
+writes a Redis cancel key; the owning container's heartbeat loop polls this key
+and calls `cancel_team()` locally via `session_coordination.py`.
+
+**Crash / restart recovery:**
+
+1. Owning container dies — Redis lease expires after `REDIS_RUN_LEASE_TTL_SECONDS`.
+2. Next request for the session arrives on any instance — cache miss.
+3. `get_or_build_team()` builds a fresh team; `load_state()` restores it from
+   MongoDB `chat_sessions.agent_state` checkpoint.
+4. New instance acquires the Redis lease and resumes SSE streaming.
+
+> **Do not use Memcached as an alternative to Redis.** Memcached has no
+> server-side scripting, no atomic CAS, and no Lua — the lease/heartbeat
+> atomicity in `session_coordination.py` requires Redis.
+
 ---
 
 ## Human Gate Flow
 
-The human gate pauses execution after each full round (`n_agents` messages). The `views.chat_session_run` SSE handler manages the state machine:
+The `views.chat_session_run` SSE handler manages the state machine:
 
 ```
 idle ──► running ──► awaiting_input ──► running ──► ... ──► completed
@@ -180,9 +269,15 @@ idle ──► running ──► awaiting_input ──► running ──► ... 
                          └──── (resume) ────┘
 ```
 
-- **Approve / Resume**: POST `/chat/sessions/<id>/run/` with an empty `task`. The view passes `task=None` to `run_stream()` so AutoGen continues from its current state.
-- **Feedback**: POST with non-empty `task`. The message is persisted as a `user` role entry in `discussions` and passed to `run_stream(task=...)` as a new instruction.
+- **Continue**: POST `/chat/sessions/<id>/respond/` with `action=continue` and optional `text`. The server returns `{status:"ok", task:"..."}` and the UI calls `/run/` with that task.
+- **Decision + Notes**: `Approve` / `Reject` are optional shortcuts. If clicked, the UI prepends `APPROVED` or `REJECTED` followed by a blank line in the notes textarea. Continue can still be sent without selecting either shortcut. Any non-empty continue text is persisted as a `user` role entry in `discussions` and passed to `run_stream(task=...)`.
+- **Stop**: POST `/chat/sessions/<id>/respond/` with `action=stop` transitions session to `stopped` and evicts the cached team.
 - **First run**: `task` must be non-empty — a 400 is returned if `discussions` is empty and no task was provided.
+
+Mode-specific pause behavior:
+
+- **Multi-assistant (`n_agents >= 2`)**: gate pauses after each full round and completion can occur when `current_round` reaches `max_iterations`.
+- **Single-assistant (`n_agents == 1`) chat mode**: gate pauses after every assistant turn and does not auto-complete via `max_iterations`; the human `Stop` action controls termination.
 
 ---
 

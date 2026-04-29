@@ -85,7 +85,7 @@ verbosity per concern without code changes. All toggles accept
 |---|---|---|---|---|
 | **HTTP / API** (Django + outbound `requests`) | `OTEL_INSTRUMENT_HTTP` | `on` | One span per Django request; one span per outbound HTTP call (Trello, Jira, Langfuse export, etc.) | Disable in narrow load tests where you only care about agent latency. |
 | **Database** (pymongo) | `OTEL_INSTRUMENT_MONGO` | `off` | One span per Mongo command (`find`, `update_one`, etc.) | Enable when diagnosing slow queries, connection storms, or unexpected reads. Off by default because trace volume balloons quickly. |
-| **LLM / Agents** (AutoGen event bridge) | `OTEL_INSTRUMENT_AGENTS` | `on` | `autogen.event.LLMCall`, `autogen.event.ToolCall`, prompts, model responses, token usage | Disable when running purely-deterministic flows (Trello/Jira pushes without an agent run) and you want to suppress LLM payloads from the OTLP backend. |
+| **LLM / Agents** (AutoGen event bridge) | `OTEL_INSTRUMENT_AGENTS` | `on` | `autogen.event.<type>` (LLM calls, thought events, streaming chunks); `mcp.tool.request <name>` (one span per tool call requested, with `input.value` + `gen_ai.tool.arguments`); `mcp.tool.result <name>` (one span per tool execution result, with `output.value` + `gen_ai.tool.result`; `StatusCode.ERROR` when `is_error=true`); token usage on LLM spans. Note: `ToolCallRequestEvent` and `ToolCallExecutionEvent` are emitted at DEBUG by autogen_agentchat — the bridge and event loggers run at DEBUG to capture them. | Disable when running purely-deterministic flows (Trello/Jira pushes without an agent run) and you want to suppress LLM payloads from the OTLP backend. |
 | **Service mutations** (manual `@traced_function`) | *(none — always on)* | n/a | `service.project.create`, `service.chat.create`, `service.trello.export.push`, `service.jira.<type>.push_issues`, etc. | Always emitted because each callsite is explicitly chosen by the developer; spans are cheap and namespaced. |
 
 ### Common combinations
@@ -117,7 +117,45 @@ LOG_LEVEL=DEBUG
 | Outbound HTTP (Trello, Jira, future providers) | Auto (`RequestsInstrumentor`) + shared `core/http_tracing.py` helper (`instrument_http_response`) in client `_handle_api_response()`/fallback branches — gated by `OTEL_INSTRUMENT_HTTP` | `HTTP POST` with `<provider>.action`, `http.url` (redacted when needed), `http.status_code`, `input.value`, `output.value`, and `<provider>.error.*` on non-2xx |
 | MongoDB ops | Auto (`PymongoInstrumentor`) — gated by `OTEL_INSTRUMENT_MONGO` (default off) | `mongo.find`, `mongo.insert_one` |
 | Service-layer mutations | Manual `@traced_function` (always on) | `service.project.create`, `service.chat.create`, `service.trello.export.push`, `service.jira.<type>.push_issues` |
-| AutoGen agent runs | Event-log bridge — gated by `OTEL_INSTRUMENT_AGENTS` | `autogen.event.LLMCall`, `autogen.event.ToolCall` with full payloads |
+| Attachment pipeline | Manual `@traced_function` on attachment service operations | `service.attachments.upload`, `service.attachments.bind_to_message`, `service.attachments.delete_session` |
+| AutoGen agent runs | Event-log bridge — gated by `OTEL_INSTRUMENT_AGENTS` | `autogen.event.<type>` (LLM calls, thought events); `mcp.tool.request <name>` (ToolCallRequestEvent — `gen_ai.tool.name`, `gen_ai.tool.call.id`, `input.value` [Langfuse Input], `gen_ai.tool.arguments`); `mcp.tool.result <name>` (ToolCallExecutionEvent — `output.value` [Langfuse Output], `gen_ai.tool.result`, `gen_ai.tool.is_error`; ERROR status on `is_error=true`). Every span carries `autogen.agent.id` from the event `source` field. Both tool event types are emitted at DEBUG by autogen_agentchat; the bridge operates at DEBUG to capture them. |
+
+### Trace Hierarchy
+
+A single user action produces one trace, with spans nested by call stack so
+parent/child timing in Langfuse mirrors what actually happened. Typical chat
+turn that triggers an MCP-enabled agent:
+
+```
+Django request span                              [auto · OTEL_INSTRUMENT_HTTP]
+└─ @traced_function on view / service entry      [always on]
+   └─ service.* mutation                         [always on]
+      └─ AutoGen agent run                       [bridge · OTEL_INSTRUMENT_AGENTS]
+         ├─ autogen.event.<type>    (LLM call)   [bridge — gen_ai.usage.* token counts]
+         │  └─ HTTP POST <provider> (LLM API)    [auto · OTEL_INSTRUMENT_HTTP]
+         ├─ mcp.tool.request <name>              [bridge — ToolCallRequestEvent · DEBUG]
+         │    input.value (Langfuse Input), gen_ai.tool.name, gen_ai.tool.call.id, gen_ai.tool.arguments
+         ├─ execute_tool <name>     (MCP tool)   [autogen-core McpWorkbench]
+         │  └─ HTTP POST <mcp-gateway>           [auto · streamable HTTP only]
+         │                                        (stdio runs in child process — no HTTP span)
+         └─ mcp.tool.result <name>              [bridge — ToolCallExecutionEvent · DEBUG]
+              output.value (Langfuse Output), gen_ai.tool.name, gen_ai.tool.call.id, gen_ai.tool.result
+              gen_ai.tool.is_error  [StatusCode.ERROR when true]
+
+Sibling spans on the same trace:
+└─ mongo.<op>                                    [auto · OTEL_INSTRUMENT_MONGO, off by default]
+└─ HTTP <verb> <trello|jira>                     [auto + core/http_tracing.py]
+```
+
+Context flow:
+
+- The `X-Request-ID` header (or one we generate in `RequestIdMiddleware`) is
+  attached to every log line and forwarded on outbound HTTP, tying logs and
+  spans across hops.
+- AutoGen calls `trace.get_tracer("autogen-core")` (no explicit provider), so
+  it picks up our globally installed TracerProvider automatically — no extra
+  wiring is needed for LLM, tool, or MCP `execute_tool` spans to nest under
+  the calling agent's run.
 
 ---
 
@@ -132,7 +170,7 @@ LOG_LEVEL=DEBUG
   - `RequestIdFilter` — injects `request_id` from the `contextvars` set by `RequestIdMiddleware`.
   - `TraceContextFilter` — reads the active span and injects `trace_id` / `span_id`.
   - `EventOnlyConsoleFilter` — drops INFO records ending in `.api.call`. Per-call HTTP success detail lives on spans, not console.
-- AutoGen payload loggers (`autogen_core.events`, `autogen_agentchat.events`) are **owned by `core.tracing._install_autogen_event_bridge()`**, not by `config/settings.py` LOGGING. The bridge strips the shared `console` handler from those loggers and attaches `AutoGenEventSpanBridgeHandler` instead, so INFO payload events flow to spans (with redaction + truncation) and never reach console. ERROR records on those loggers set `Span.status = ERROR`, which is then surfaced through `OTEL_CONSOLE_EXPORTER=error` (if enabled) and through Django request logging at the outer layer.
+- AutoGen payload loggers (`autogen_core.events`, `autogen_agentchat.events`) are **owned by `core.tracing._install_autogen_event_bridge()`**, not by `config/settings.py` LOGGING. The bridge strips the shared `console` handler from those loggers and attaches `AutoGenEventSpanBridgeHandler` instead, so payload events flow to spans (with redaction + truncation) and never reach console. Both loggers are set to **DEBUG** so that `ToolCallRequestEvent` and `ToolCallExecutionEvent` (emitted at `DEBUG` by `autogen_agentchat`) are captured; `autogen_core.events` records (`LLMCallEvent`) are INFO and remain unaffected. `propagate=False` prevents these DEBUG records from flooding the root logger / console. ERROR records on those loggers set `Span.status = ERROR`, which is surfaced through `OTEL_CONSOLE_EXPORTER=error` (if enabled) and through Django request logging at the outer layer.
 
 ### Span dumps (opt-in)
 
@@ -148,6 +186,84 @@ Set `OTEL_CONSOLE_EXPORTER` for stderr span output:
 
 Wiring lives only in `_build_console_span_processor()` in
 `core/tracing.py`. Never add a second `ConsoleSpanExporter` elsewhere.
+
+---
+
+## Session Run Tracing (SSE event_stream)
+
+### The Problem
+
+Django's SSE `StreamingHttpResponse` returns the view synchronously.
+Middleware `finally` blocks (including OTel context teardown) execute
+*immediately after the view function returns* — before the ASGI server begins
+iterating the async generator body. By the time `event_stream()` actually
+runs, the Django request span context and all ContextVars are gone. Without
+special handling, every `agents.*` log line emitted inside the generator
+shows `trace_id: "-"` and `span_id: "-"`.
+
+### Solution: Redis-backed root span per run
+
+Each `POST /chat/sessions/<id>/run/` call:
+
+1. **Creates a new root OTel span** (`agents.session.run`) via
+   `core.tracing.start_root_span` using an **empty context** (no Django
+   request parent). An empty context guarantees a fresh `trace_id` for every
+   round — each run is independently queryable in Langfuse.
+2. **Stores the W3C traceparent string** in Redis under the key
+   `{namespace}:chat_session:{session_id}:run_trace` (TTL = run lease TTL)
+   via `agents.session_coordination.store_run_traceparent`. The key has the
+   same lifetime as the run lease and expires automatically on process death.
+3. Inside `event_stream()`, **reattaches the OTel context** in two steps:
+   - `context_from_traceparent(traceparent)` → reconstruct a remote parent
+     context (establishes the trace_id chain).
+   - `otel_context.attach(trace.set_span_in_context(span))` → make the
+     recording `agents.session.run` span the active span so all child spans
+     (`@traced_function`, `autogen.event.*`) nest under it.
+4. In the outermost `finally`, **ends the span**, detaches both OTel tokens
+   (in LIFO order), and calls `clear_run_traceparent` to delete the Redis
+   key.
+
+### Helper APIs
+
+| Location | Function | Purpose |
+|---|---|---|
+| `core/tracing.py` | `start_root_span(name, attrs)` | Returns `(span, traceparent_str \| None)`. Uses `Context()` to guarantee no parent. |
+| `core/tracing.py` | `context_from_traceparent(tp)` | Calls `propagate.extract({"traceparent": tp})`. Returns `None` on failure. |
+| `agents/session_coordination.py` | `store_run_traceparent(session_id, tp)` | `SET … EX lease_ttl`. Silent on Redis failure. |
+| `agents/session_coordination.py` | `get_run_traceparent(session_id)` | `GET`. Returns `None` on failure. |
+| `agents/session_coordination.py` | `clear_run_traceparent(session_id)` | `DEL`. Silent on failure. |
+
+### Failure behaviour
+
+Redis unavailability or OTel misconfiguration must never block a run:
+
+- `start_root_span` returns `(None, None)` → span and traceparent variables
+  are `None`; all downstream guards skip silently.
+- `store_run_traceparent` catches `Exception` and does nothing.
+- The OTel attach block inside `event_stream()` is wrapped in `try/except`.
+- Result: run continues normally; log lines show `trace_id: "-"` (same as
+  pre-feature behaviour).
+
+### Trace shape
+
+```
+agents.session.run                              [root — fresh trace_id per /run/]
+├─ @traced_function on service entry            [always on — child of run span]
+│   └─ service.* mutation                       [always on]
+└─ AutoGen agent run                            [bridge · OTEL_INSTRUMENT_AGENTS]
+   ├─ autogen.event.<type>    (LLM call)        [bridge]
+   │  └─ HTTP POST <provider> (LLM API)         [auto · OTEL_INSTRUMENT_HTTP]
+   ├─ mcp.tool.request <name>                   [bridge]
+   └─ mcp.tool.result <name>                    [bridge]
+```
+
+### request_id propagation
+
+`request_id` is captured into a closure variable *before* `event_stream()` is
+defined (while `RequestIdMiddleware` is still active), then rebound via
+`bind_request_id()` at the very start of the generator body and cleared in
+the outermost `finally`. This pattern is required for any SSE view that logs
+inside the generator body.
 
 ---
 
@@ -272,7 +388,7 @@ value before export.
 | MongoDB | `mongo.connect`, `mongo.connect_failed` |
 | Services | `project.created`, `project.updated`, `project.deleted`, `chat.session.started`, `chat.session.ended` |
 | HTTP errors | `trello.api.error`, `jira.api.error` (success no longer logged — lives on spans) |
-| Agent runtime | `agents.model_client.created`, `agents.team.built`, `agents.team.cancelled`, `agents.extraction.completed`, `agents.extraction.parse_failed` |
+| Agent runtime | `agents.model_client.created`, `agents.team.built`, `agents.team.cancelled`, `agents.extraction.completed`, `agents.extraction.parse_failed`, `agents.mcp.created`, `agents.mcp.closed`, `agents.mcp.failed`, `agents.session.lease_acquired`, `agents.session.lease_conflict`, `agents.session.lease_released`, `agents.session.cancel_signaled`, `agents.session.redis_unavailable` |
 
 Levels:
 - `INFO` — successful lifecycle events with structured `extra={...}`.
