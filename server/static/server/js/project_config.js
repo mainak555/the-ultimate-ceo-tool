@@ -286,27 +286,52 @@ document.addEventListener("DOMContentLoaded", function () {
   }
 
   function syncExportAgentCheckboxes() {
-    var wrapper = document.getElementById("integrations-export-agents");
-    if (!wrapper) return;
-
-    var checkedValues = new Set();
-    wrapper.querySelectorAll("input[name='integrations[trello][export_agents]']:checked").forEach(function (checkbox) {
-      checkedValues.add(checkbox.value);
-    });
-
     var names = listAgentNames();
-    var html = "";
-    names.forEach(function (name) {
-      var checked = checkedValues.has(name) ? " checked" : "";
-      html += '<div class="form-group form-group--inline">';
-      html += '<label>';
-      html += '<input type="checkbox" name="integrations[trello][export_agents]" value="' + name + '"' + checked + '>';
-      html += ' ' + name;
-      html += '</label>';
-      html += '</div>';
-    });
 
-    wrapper.innerHTML = html;
+    // Sync Trello export_agents checkboxes
+    var trelloWrapper = document.getElementById("integrations-export-agents");
+    if (trelloWrapper) {
+      var trelloChecked = new Set();
+      trelloWrapper.querySelectorAll("input[name='integrations[trello][export_agents]']:checked").forEach(function (checkbox) {
+        trelloChecked.add(checkbox.value);
+      });
+      var trelloHtml = "";
+      names.forEach(function (name) {
+        var checked = trelloChecked.has(name) ? " checked" : "";
+        trelloHtml += '<div class="form-group form-group--inline">';
+        trelloHtml += '<label>';
+        trelloHtml += '<input type="checkbox" name="integrations[trello][export_agents]" value="' + name + '"' + checked + '>';
+        trelloHtml += ' ' + name;
+        trelloHtml += '</label>';
+        trelloHtml += '</div>';
+      });
+      trelloWrapper.innerHTML = trelloHtml;
+    }
+
+    // Sync Jira export_agents checkboxes for each type
+    [
+      { id: "jira-software-export-agents",    field: "integrations[jira][software][export_agents]" },
+      { id: "jira-service-desk-export-agents", field: "integrations[jira][service_desk][export_agents]" },
+      { id: "jira-business-export-agents",    field: "integrations[jira][business][export_agents]" }
+    ].forEach(function (cfg) {
+      var wrapper = document.getElementById(cfg.id);
+      if (!wrapper) return;
+      var checkedValues = new Set();
+      wrapper.querySelectorAll("input[name='" + cfg.field + "']:checked").forEach(function (checkbox) {
+        checkedValues.add(checkbox.value);
+      });
+      var html = "";
+      names.forEach(function (name) {
+        var checked = checkedValues.has(name) ? " checked" : "";
+        html += '<div class="form-group form-group--inline">';
+        html += '<label>';
+        html += '<input type="checkbox" name="' + cfg.field + '" value="' + name + '"' + checked + '>';
+        html += ' ' + name;
+        html += '</label>';
+        html += '</div>';
+      });
+      wrapper.innerHTML = html;
+    });
   }
 
   function syncFormState() {

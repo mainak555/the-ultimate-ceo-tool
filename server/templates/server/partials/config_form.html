@@ -466,7 +466,7 @@
             <div id="jira-software-fields" {% if not project.integrations.jira.software.enabled %}hidden{% endif %}>
               <div class="form-group">
                 <label>Export Agents</label>
-                <div class="checkbox-grid">
+                <div class="checkbox-grid" id="jira-software-export-agents">
                   {% for agent in project.agents %}
                     <label>
                       <input type="checkbox"
@@ -590,7 +590,7 @@
             <div id="jira-service-desk-fields" {% if not project.integrations.jira.service_desk.enabled %}hidden{% endif %}>
               <div class="form-group">
                 <label>Export Agents</label>
-                <div class="checkbox-grid">
+                <div class="checkbox-grid" id="jira-service-desk-export-agents">
                   {% for agent in project.agents %}
                     <label>
                       <input type="checkbox"
@@ -714,7 +714,7 @@
             <div id="jira-business-fields" {% if not project.integrations.jira.business.enabled %}hidden{% endif %}>
               <div class="form-group">
                 <label>Export Agents</label>
-                <div class="checkbox-grid">
+                <div class="checkbox-grid" id="jira-business-export-agents">
                   {% for agent in project.agents %}
                     <label>
                       <input type="checkbox"

@@ -435,17 +435,15 @@ def validate_jira_type_config(raw_type, type_name, agent_names):
             f"'integrations.jira.{type_name}.api_key' is required when {type_name} is enabled."
         )
 
-    # Per-type export_agents
+    # Per-type export_agents — reset to [] if any entry no longer matches current agent names
+    # (handles rename/remove of assistant agents without blocking the save)
     raw_ea = raw_type.get("export_agents") or []
     if isinstance(raw_ea, str):
         raw_ea = [raw_ea] if raw_ea else []
     export_agents = [n.strip() for n in raw_ea if isinstance(n, str) and n.strip()]
     lower_names = [n.lower() for n in agent_names]
-    for ea in export_agents:
-        if ea.lower() not in lower_names:
-            raise ValueError(
-                f"'integrations.jira.{type_name}.export_agents' entry '{ea}' must match an existing agent name."
-            )
+    if any(ea.lower() not in lower_names for ea in export_agents):
+        export_agents = []
 
     cfg["site_url"] = site_url
     cfg["email"] = email
@@ -518,17 +516,15 @@ def validate_integrations(data, agent_names):
         if not api_key:
             raise ValueError("'integrations.trello.api_key' is required when Trello is enabled.")
 
-        # Validate export_agents list
+        # Validate export_agents list — reset to [] if any entry no longer matches current agent names
+        # (handles rename/remove of assistant agents without blocking the save)
         raw_ea = raw_trello.get("export_agents") or []
         if isinstance(raw_ea, str):
             raw_ea = [raw_ea] if raw_ea else []
         export_agents = [n.strip() for n in raw_ea if isinstance(n, str) and n.strip()]
         lower_names = [n.lower() for n in agent_names]
-        for ea in export_agents:
-            if ea.lower() not in lower_names:
-                raise ValueError(
-                    f"'integrations.trello.export_agents' entry '{ea}' must match an existing agent name."
-                )
+        if any(ea.lower() not in lower_names for ea in export_agents):
+            export_agents = []
 
         trello["export_agents"] = export_agents
         trello["app_name"] = app_name
