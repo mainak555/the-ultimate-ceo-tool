@@ -176,7 +176,36 @@ def _build_project_data(post_data, existing_project=None):
         "integrations": integrations,
         "shared_mcp_tools": post_data.get("shared_mcp_tools", ""),
         "mcp_secrets": _parse_mcp_secrets(post_data),
+        "mcp_oauth_configs": _parse_mcp_oauth_configs(post_data),
     }
+
+
+def _parse_mcp_oauth_configs(post_data):
+    """
+    Extract MCP OAuth configs dict from POST form fields.
+
+    Form fields: mcp_oauth_configs[N][server_name], [auth_url], [token_url],
+                 [client_id], [client_secret], [scopes]
+    Returns {server_name: {auth_url, token_url, client_id, client_secret, scopes}}
+    Skips rows with empty server_name.
+    """
+    configs = {}
+    idx = 0
+    while any(
+        f"mcp_oauth_configs[{idx}][{field}]" in post_data
+        for field in ("server_name", "auth_url", "token_url", "client_id", "client_secret")
+    ):
+        server_name = post_data.get(f"mcp_oauth_configs[{idx}][server_name]", "").strip()
+        if server_name:
+            configs[server_name] = {
+                "auth_url":      post_data.get(f"mcp_oauth_configs[{idx}][auth_url]", "").strip(),
+                "token_url":     post_data.get(f"mcp_oauth_configs[{idx}][token_url]", "").strip(),
+                "client_id":     post_data.get(f"mcp_oauth_configs[{idx}][client_id]", "").strip(),
+                "client_secret": post_data.get(f"mcp_oauth_configs[{idx}][client_secret]", ""),
+                "scopes":        post_data.get(f"mcp_oauth_configs[{idx}][scopes]", "").strip(),
+            }
+        idx += 1
+    return configs
 
 
 def _parse_mcp_secrets(post_data):

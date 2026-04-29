@@ -434,6 +434,210 @@ select.input {
   }
 }
 
+// MCP OAuth App Registration rows
+.mcp-oauth-configs {
+  &__row {
+    margin-left: $space-md;
+    padding-right: $space-sm;
+    border: 1px solid $color-border;
+    border-radius: $radius;
+    padding: $space-sm $space-md;
+    margin-bottom: $space-sm;
+    background: lighten($color-bg, 1.5%);
+  }
+
+  &__row-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: $space-sm;
+  }
+
+  &__row-actions {
+    display: flex;
+    align-items: center;
+    gap: $space-sm;
+  }
+}
+
+// OAuth status badge (config form — Test Authorization result)
+.mcp-oauth-status {
+  font-size: $font-size-sm;
+  font-weight: 600;
+
+  &--ok    { color: $color-success; }
+  &--error { color: $color-error; }
+}
+
+// MCP OAuth pre-run authorization modal
+.mcp-oauth-modal {
+  &__overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.45);
+    z-index: 1200;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  &__dialog {
+    background: $color-surface;
+    border-radius: $radius-lg;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.18);
+    padding: $space-xl;
+    width: 92vw;
+    max-width: 480px;
+    max-height: 80vh;
+    overflow-y: auto;
+  }
+
+  &__header {
+    margin-bottom: $space-md;
+  }
+
+  &__title {
+    font-size: $font-size-lg;
+    font-weight: 700;
+    margin: 0 0 $space-xs;
+    color: $color-text;
+  }
+
+  &__subtitle {
+    font-size: $font-size-sm;
+    color: $color-text-muted;
+    margin: 0;
+  }
+
+  &__server-list {
+    list-style: none;
+    padding: 0;
+    margin: 0 0 $space-md;
+    display: flex;
+    flex-direction: column;
+    gap: $space-xs;
+  }
+
+  &__server {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: $space-sm $space-md;
+    border: 1px solid $color-border;
+    border-radius: $radius;
+    background: lighten($color-bg, 1.5%);
+
+    &--authorized {
+      border-color: $color-success;
+      background: lighten($color-success, 52%);
+    }
+  }
+
+  &__server-name {
+    font-weight: 500;
+    font-size: $font-size-sm;
+  }
+
+  &__authorize-btn {
+    &:disabled {
+      color: $color-success;
+      border-color: $color-success;
+      cursor: default;
+      opacity: 1;
+    }
+  }
+
+  &__footer {
+    display: flex;
+    justify-content: flex-end;
+  }
+}
+
+// MCP OAuth shared outcome page (oauth_flow.html — popup window)
+.oauth-flow {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: $space-lg;
+  background: $color-bg;
+
+  &__card {
+    background: $color-surface;
+    border: 1px solid $color-border;
+    border-radius: $radius-lg;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.10);
+    padding: $space-xl;
+    width: 100%;
+    max-width: 480px;
+    text-align: center;
+    border-top: 4px solid $color-border;
+
+    &--success { border-top-color: $color-success; }
+    &--error   { border-top-color: $color-error;   }
+  }
+
+  &__icon {
+    font-size: 3rem;
+    line-height: 1;
+    margin-bottom: $space-sm;
+
+    .oauth-flow__card--success & { color: $color-success; }
+    .oauth-flow__card--error   & { color: $color-error;   }
+  }
+
+  &__title {
+    font-size: $font-size-lg;
+    font-weight: 700;
+    margin: 0 0 $space-md;
+    color: $color-text;
+  }
+
+  &__server {
+    font-size: $font-size-sm;
+    color: $color-text-muted;
+    margin: 0 0 $space-md;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: $space-xs;
+    flex-wrap: wrap;
+  }
+
+  &__server-label { color: $color-text-muted; }
+
+  &__flow-badge {
+    display: inline-block;
+    font-size: 0.6875rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 2px $space-xs;
+    border-radius: $radius;
+    border: 1px solid $color-border;
+    background: lighten($color-bg, 2%);
+    color: $color-text-muted;
+  }
+
+  &__message {
+    font-size: $font-size-sm;
+    color: $color-text;
+    margin: 0 0 $space-md;
+    word-break: break-word;
+  }
+
+  &__countdown {
+    font-size: $font-size-sm;
+    color: $color-text-muted;
+    margin: 0 0 $space-md;
+  }
+
+  &__footer {
+    display: flex;
+    justify-content: center;
+  }
+}
+
+
 .agent-card {
   border: 1px solid $color-border;
   border-radius: $radius;

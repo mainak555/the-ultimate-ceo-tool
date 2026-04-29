@@ -71,7 +71,7 @@ def get_or_build_team(
     cache_miss = session_id not in _TEAM_CACHE
     if cache_miss:
         logger.info("agents.team.cache_miss", extra={"session_id": session_id})
-        team = build_team(project)
+        team = build_team(project, session_id=session_id)
         _TEAM_CACHE[session_id] = team
         _CANCEL_TOKENS[session_id] = CT()
         # Track MCP workbenches for deterministic teardown on evict_team()

@@ -336,6 +336,34 @@ substituted at runtime only inside `agents/mcp_tools.py`. The OTel
 `fingerprint` attribute is computed over the placeholder form so it stays
 stable across secret rotations.
 
+### OAuth 2.0 for HTTP MCP servers
+
+Some HTTP MCP servers issue Bearer tokens via OAuth 2.0 instead of static API keys.
+Configure this per-server under **MCP OAuth App Registrations** in the project config form.
+
+```jsonc
+{
+  "mcp_oauth_configs": {
+    "my-api-server": {
+      "auth_url":      "https://provider.example.com/oauth/authorize",
+      "token_url":     "https://provider.example.com/oauth/token",
+      "client_id":     "app-client-id",
+      "client_secret": "app-client-secret",
+      "scopes":        "read write"
+    }
+  }
+}
+```
+
+- **`server_name`** must match a key inside your `mcpServers` JSON (shared or dedicated).
+- Register the callback URL `{BASE_URL}/mcp/oauth/callback/` with your OAuth provider.
+- Before each agent run, the UI checks token status and shows an **Authorize** modal if any server needs consent. Clicking the button opens a popup; after the user grants access the run starts automatically.
+- **Test Authorization** (config form) validates credentials without starting a run.
+- Tokens are session-scoped and expire per the provider's `expires_in` / JWT `exp`. There is no mid-session refresh (v1) — re-authorize for the next run if a token expires.
+- `client_secret` is stored masked and never sent to the browser after the first save.
+- The OAuth start endpoint (`/mcp/oauth/start/`) is opened from a popup window, which cannot set request headers — it accepts the admin secret as `X-App-Secret-Key` **or** `?skey=<APP_SECRET_KEY>`. Always serve the app over TLS and scrub query strings from access logs (or accept the leak as in-scope for an admin-only deployment).
+- Every branch of the OAuth start + callback handlers emits structured `agents.mcp.oauth_*` log events plus three nested OpenTelemetry spans (`mcp.oauth.start`, `mcp.oauth.callback`, `mcp.oauth.token_exchange`) so popup-window failures are diagnosable from the server console alone.
+
 Full documentation: [docs/mcp_integration.md](docs/mcp_integration.md).
 
 ---

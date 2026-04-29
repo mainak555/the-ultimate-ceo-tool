@@ -251,6 +251,150 @@ def clear_run_traceparent(session_id: str) -> None:
         pass
 
 
+# ---------------------------------------------------------------------------
+# MCP OAuth 2.0 — session-scoped token storage (run-time)
+# ---------------------------------------------------------------------------
+
+_MCP_OAUTH_TOKEN_TTL_DEFAULT: Final[int] = 3600  # 1 hour fallback
+
+
+def _mcp_oauth_token_key(session_id: str, server_name: str) -> str:
+    return f"{_namespace()}:mcp_oauth:{session_id}:{server_name}:token"
+
+
+def _mcp_oauth_state_key(state: str) -> str:
+    return f"{_namespace()}:mcp_oauth_state:{state}:meta"
+
+
+def _mcp_oauth_test_key(project_id: str, server_name: str) -> str:
+    return f"{_namespace()}:mcp_oauth_test:{project_id}:{server_name}:status"
+
+
+def set_mcp_oauth_token(
+    session_id: str,
+    server_name: str,
+    access_token: str,
+    ttl_seconds: int = _MCP_OAUTH_TOKEN_TTL_DEFAULT,
+) -> None:
+    """Store a run-time OAuth access token for a specific MCP server + session.
+
+    The token is stored under a session-scoped Redis key with the given TTL so
+    it is automatically evicted when the token expires. Silent on Redis failure
+    — the run will simply require re-authorization on the next run.
+    """
+    import json as _json
+
+    key = _mcp_oauth_token_key(session_id, server_name)
+    try:
+        _get_client().set(
+            key,
+            _json.dumps({"access_token": access_token}),
+            ex=max(60, ttl_seconds),
+        )
+    except Exception:  # noqa: BLE001
+        logger.warning(
+            "agents.mcp.oauth_token_store_failed",
+            extra={"session_id": session_id, "server_name": server_name},
+        )
+
+
+def get_mcp_oauth_token(session_id: str, server_name: str) -> str | None:
+    """Return the stored OAuth access token for a session+server, or None if missing/expired."""
+    import json as _json
+
+    key = _mcp_oauth_token_key(session_id, server_name)
+    try:
+        raw = _get_client().get(key)
+        if not raw:
+            return None
+        return _json.loads(raw).get("access_token")
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def purge_mcp_oauth_tokens(session_id: str) -> None:
+    """Delete all MCP OAuth tokens for a session (called on session delete).
+
+    Uses SCAN to avoid a KEYS call on large Redis instances.
+    Silent on Redis failure.
+    """
+    pattern = f"{_namespace()}:mcp_oauth:{session_id}:*:token"
+    try:
+        client = _get_client()
+        cursor = 0
+        while True:
+            cursor, keys = client.scan(cursor=cursor, match=pattern, count=100)
+            if keys:
+                client.delete(*keys)
+            if cursor == 0:
+                break
+    except Exception:  # noqa: BLE001
+        pass
+
+
+# ---------------------------------------------------------------------------
+# MCP OAuth 2.0 — PKCE state (short-lived, delete-on-read)
+# ---------------------------------------------------------------------------
+
+_MCP_OAUTH_STATE_TTL: Final[int] = 300  # 5 minutes
+
+
+def set_mcp_oauth_state(state: str, metadata: dict) -> None:
+    """Store PKCE + context metadata for an OAuth flow. TTL = 5 minutes.
+
+    metadata keys: session_id | project_id (one of), server_name, mode, code_verifier
+    """
+    import json as _json
+
+    key = _mcp_oauth_state_key(state)
+    try:
+        _get_client().set(key, _json.dumps(metadata), ex=_MCP_OAUTH_STATE_TTL)
+    except Exception:  # noqa: BLE001
+        logger.warning(
+            "agents.mcp.oauth_state_store_failed",
+            extra={"server_name": metadata.get("server_name", "")},
+        )
+
+
+def get_and_delete_mcp_oauth_state(state: str) -> dict | None:
+    """Return stored OAuth state metadata and atomically delete the key (one-time use)."""
+    import json as _json
+
+    key = _mcp_oauth_state_key(state)
+    try:
+        raw = _get_client().getdel(key)
+        if not raw:
+            return None
+        return _json.loads(raw)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+# ---------------------------------------------------------------------------
+# MCP OAuth 2.0 — test-mode status (config-form Test Authorization)
+# ---------------------------------------------------------------------------
+
+_MCP_OAUTH_TEST_TTL: Final[int] = 300  # 5 minutes
+
+
+def set_mcp_oauth_test_status(project_id: str, server_name: str) -> None:
+    """Mark that a test-mode OAuth flow succeeded for this project+server (5-minute TTL)."""
+    key = _mcp_oauth_test_key(project_id, server_name)
+    try:
+        _get_client().set(key, "ok", ex=_MCP_OAUTH_TEST_TTL)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def get_mcp_oauth_test_status(project_id: str, server_name: str) -> bool:
+    """Return True if a recent test-mode OAuth flow succeeded for this project+server."""
+    key = _mcp_oauth_test_key(project_id, server_name)
+    try:
+        return bool(_get_client().exists(key))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 __all__ = [
     "SessionCoordinationError",
     "acquire_run_lease",
@@ -259,11 +403,18 @@ __all__ = [
     "ensure_redis_available",
     "get_heartbeat_interval_seconds",
     "get_instance_id",
+    "get_mcp_oauth_test_status",
+    "get_mcp_oauth_token",
+    "get_and_delete_mcp_oauth_state",
     "get_redis_client",
     "get_run_traceparent",
     "is_cancel_signaled",
+    "purge_mcp_oauth_tokens",
     "release_run_lease",
     "renew_run_lease",
+    "set_mcp_oauth_state",
+    "set_mcp_oauth_test_status",
+    "set_mcp_oauth_token",
     "signal_cancel",
     "store_run_traceparent",
 ]

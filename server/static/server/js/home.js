@@ -685,13 +685,36 @@ document.addEventListener("DOMContentLoaded", function () {
 
     setRunningState(true);
 
+    // --- MCP OAuth pre-run gate ---
+    // Resolve projectId from the hidden input (may be empty for sessions without MCP OAuth).
+    var projectId = activeProjectIdInput ? activeProjectIdInput.value.trim() : "";
+
+    var oauthGate = (window.McpOAuth && projectId)
+      ? window.McpOAuth.checkAndAuthorize(sessionId, projectId, secretKey)
+      : Promise.resolve();
+
+    oauthGate.then(function () {
+      return _doStartRun(sessionId, secretKey, task, attachmentIds);
+    }).catch(function (reason) {
+      if (reason === "cancelled") {
+        setRunningState(false);
+      } else {
+        // Unexpected error in OAuth gate — surface it and abort
+        console.error("[McpOAuth] pre-run gate error:", reason);
+        setRunningState(false);
+        alert("MCP OAuth error: " + (reason && reason.message ? reason.message : reason));
+      }
+    });
+  }
+
+  function _doStartRun(sessionId, secretKey, task, attachmentIds) {
     var body = new URLSearchParams();
     body.append("task", task || "");
     (attachmentIds || []).forEach(function (id) {
       if (id) body.append("attachment_ids", id);
     });
 
-    fetch("/chat/sessions/" + sessionId + "/run/", {
+    return fetch("/chat/sessions/" + sessionId + "/run/", {
       method: "POST",
       headers: {
         "X-App-Secret-Key": secretKey,

@@ -12,6 +12,11 @@ MCP_TOOL_SCOPES = ("none", "shared", "dedicated")
 MCP_HTTP_TRANSPORT = "http"
 MCP_DEPRECATED_TRANSPORTS = ("sse",)
 
+# OAuth 2.0 Authorization Code (+ PKCE) support for HTTP MCP servers.
+# mcp_oauth_configs is project-level: {server_name: {auth_url, token_url, client_id, client_secret, scopes?}}
+# server_name keys must match actual mcpServers keys (cross-validated in validate_project).
+MCP_OAUTH_REQUIRED_FIELDS = ("auth_url", "token_url", "client_id", "client_secret")
+
 # MCP secret keys are UPPER_SNAKE identifiers; placeholders use {KEY_NAME}
 # inside any string value of mcp_configuration / shared_mcp_tools and are
 # resolved at runtime in agents/mcp_tools.py.
@@ -158,6 +163,70 @@ def validate_mcp_secrets(raw, label="mcp_secrets"):
         if not isinstance(value, str) or value == "":
             raise ValueError(f"{label}: value for '{key}' must be a non-empty string.")
         cleaned[key] = value
+    return cleaned
+
+
+def validate_mcp_oauth_configs(raw, label="mcp_oauth_configs"):
+    """
+    Validate the project-level OAuth 2.0 app registration dict.
+
+    Shape: {server_name: {auth_url, token_url, client_id, client_secret, scopes?}}
+
+    - server_name must be a non-empty string (cross-checked against actual
+      mcpServers keys in validate_project()).
+    - auth_url / token_url must start with https:// (always two separate
+      OAuth 2.0 endpoints: auth_url → browser redirect, token_url → server POST).
+    - client_id required, non-empty string.
+    - client_secret required, non-empty string (SECRET_MASK accepted here;
+      the real value is restored by _restore_masked_mcp_oauth_configs() on save).
+    - scopes optional, string.
+
+    Returns the cleaned dict. Empty/missing input returns {}.
+    """
+    if raw in (None, "", {}):
+        return {}
+    if not isinstance(raw, dict):
+        raise ValueError(f"{label}: must be a JSON object of server_name → OAuth config.")
+
+    cleaned = {}
+    for server_name, cfg in raw.items():
+        if not isinstance(server_name, str) or not server_name.strip():
+            raise ValueError(f"{label}: server names must be non-empty strings.")
+        sname = server_name.strip()
+
+        if not isinstance(cfg, dict):
+            raise ValueError(f"{label}['{sname}']: must be a JSON object.")
+
+        for field in MCP_OAUTH_REQUIRED_FIELDS:
+            val = (cfg.get(field) or "").strip()
+            if not val:
+                raise ValueError(
+                    f"{label}['{sname}']: '{field}' is required and must be non-empty."
+                )
+
+        auth_url = cfg["auth_url"].strip()
+        token_url = cfg["token_url"].strip()
+        if not auth_url.startswith("https://"):
+            raise ValueError(
+                f"{label}['{sname}']: 'auth_url' must start with https:// "
+                "(the OAuth authorization endpoint where users grant consent)."
+            )
+        if not token_url.startswith("https://"):
+            raise ValueError(
+                f"{label}['{sname}']: 'token_url' must start with https:// "
+                "(the OAuth token endpoint where the server exchanges the code)."
+            )
+
+        scopes = (cfg.get("scopes") or "").strip()
+
+        cleaned[sname] = {
+            "auth_url": auth_url,
+            "token_url": token_url,
+            "client_id": cfg["client_id"].strip(),
+            "client_secret": cfg["client_secret"].strip(),
+            "scopes": scopes,
+        }
+
     return cleaned
 
 
@@ -627,6 +696,27 @@ def validate_project(data):
             + ". Add them under 'MCP Secrets' or remove the placeholder."
         )
 
+    mcp_oauth_configs = validate_mcp_oauth_configs(data.get("mcp_oauth_configs"))
+    # Cross-validate: every OAuth server_name must match a real mcpServers key.
+    if mcp_oauth_configs:
+        known_server_names = set()
+        known_server_names.update(
+            (shared_mcp_tools.get("mcpServers") or {}).keys()
+        )
+        for a in agents:
+            if a.get("mcp_tools") == "dedicated":
+                known_server_names.update(
+                    (a.get("mcp_configuration", {}).get("mcpServers") or {}).keys()
+                )
+        orphaned = sorted(k for k in mcp_oauth_configs if k not in known_server_names)
+        if orphaned:
+            raise ValueError(
+                "mcp_oauth_configs key(s) do not match any configured MCP server: "
+                + ", ".join(f"'{k}'" for k in orphaned)
+                + ". Each key must match a name under shared_mcp_tools.mcpServers or "
+                "a dedicated agent's mcp_configuration.mcpServers."
+            )
+
     cleaned = {
         "project_name": project_name,
         "objective": objective,
@@ -635,6 +725,7 @@ def validate_project(data):
         "integrations": integrations,
         "shared_mcp_tools": shared_mcp_tools,
         "mcp_secrets": mcp_secrets,
+        "mcp_oauth_configs": mcp_oauth_configs,
     }
 
     # In single-assistant chat mode, Team Setup is not a persisted contract.

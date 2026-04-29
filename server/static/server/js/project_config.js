@@ -519,5 +519,137 @@ document.addEventListener("DOMContentLoaded", function () {
     }
   });
 
+  // ---- MCP OAuth Configs rows ----
+  function reindexMcpOauthConfigs() {
+    var container = document.getElementById("mcp-oauth-configs-rows");
+    if (!container) return;
+    container.querySelectorAll(".mcp-oauth-configs__row").forEach(function (row, idx) {
+      row.setAttribute("data-oauth-index", idx);
+      row.querySelectorAll("[name^='mcp_oauth_configs[']").forEach(function (el) {
+        el.name = el.name.replace(/^mcp_oauth_configs\[\d+\]/, "mcp_oauth_configs[" + idx + "]");
+      });
+    });
+  }
+
+  document.body.addEventListener("click", function (e) {
+    // Add new OAuth config row
+    if (e.target.matches(".js-add-mcp-oauth-config")) {
+      var container = document.getElementById("mcp-oauth-configs-rows");
+      if (!container) return;
+      var idx = container.querySelectorAll(".mcp-oauth-configs__row").length;
+      var html =
+        '<fieldset class="mcp-oauth-configs__row form-group--nested" data-oauth-index="' + idx + '">' +
+          '<div class="mcp-oauth-configs__row-header">' +
+            '<strong>New OAuth Config</strong>' +
+            '<div class="mcp-oauth-configs__row-actions">' +
+              '<span class="mcp-oauth-status"></span>' +
+              '<button type="button" class="chat-session-item__delete js-delete-mcp-oauth-config" ' +
+                'aria-label="Remove OAuth config" title="Remove OAuth config">×</button>' +
+            '</div>' +
+          '</div>' +
+          '<div class="form-group">' +
+            '<label>Server Name</label>' +
+            '<input type="text" class="input input--sm js-mcp-oauth-server-name" ' +
+              'name="mcp_oauth_configs[' + idx + '][server_name]" placeholder="my-api-server" autocomplete="off">' +
+            '<small class="form-hint">Must match a key in mcpServers (shared or dedicated config).</small>' +
+          '</div>' +
+          '<div class="form-group">' +
+            '<label>Authorization URL</label>' +
+            '<input type="url" class="input input--sm" ' +
+              'name="mcp_oauth_configs[' + idx + '][auth_url]" placeholder="https://provider.example.com/oauth/authorize" autocomplete="off">' +
+            '<small class="form-hint">The provider\'s authorization endpoint (where users grant consent).</small>' +
+          '</div>' +
+          '<div class="form-group">' +
+            '<label>Token URL</label>' +
+            '<input type="url" class="input input--sm" ' +
+              'name="mcp_oauth_configs[' + idx + '][token_url]" placeholder="https://provider.example.com/oauth/token" autocomplete="off">' +
+            '<small class="form-hint">The provider\'s token endpoint (server-to-server code exchange).</small>' +
+          '</div>' +
+          '<div class="form-group">' +
+            '<label>Client ID</label>' +
+            '<input type="text" class="input input--sm" ' +
+              'name="mcp_oauth_configs[' + idx + '][client_id]" placeholder="your-client-id" autocomplete="off">' +
+          '</div>' +
+          '<div class="form-group">' +
+            '<label>Client Secret</label>' +
+            '<input type="password" class="input input--sm" ' +
+              'name="mcp_oauth_configs[' + idx + '][client_secret]" placeholder="your-client-secret" autocomplete="new-password">' +
+            '<small class="form-hint">Stored encrypted on the server; masked on page load.</small>' +
+          '</div>' +
+          '<div class="form-group">' +
+            '<label>Scopes <small class="form-hint">(optional)</small></label>' +
+            '<input type="text" class="input input--sm" ' +
+              'name="mcp_oauth_configs[' + idx + '][scopes]" placeholder="read write offline_access" autocomplete="off">' +
+            '<small class="form-hint">Space-separated OAuth scopes to request.</small>' +
+          '</div>' +
+        '</fieldset>';
+      container.insertAdjacentHTML("beforeend", html);
+      return;
+    }
+
+    // Delete OAuth config row
+    if (e.target.matches(".js-delete-mcp-oauth-config")) {
+      var row = e.target.closest(".mcp-oauth-configs__row");
+      if (row) {
+        row.remove();
+        reindexMcpOauthConfigs();
+      }
+      return;
+    }
+
+    // Test Authorization button
+    if (e.target.matches(".js-test-mcp-oauth")) {
+      var btn = e.target;
+      var serverNameInput = btn.closest(".mcp-oauth-configs__row")
+        && btn.closest(".mcp-oauth-configs__row").querySelector(".js-mcp-oauth-server-name");
+      var serverName = (btn.dataset.serverName || (serverNameInput && serverNameInput.value) || "").trim();
+      var projectIdInput = document.getElementById("config-project-id");
+      var projectId = (btn.dataset.projectId || (projectIdInput && projectIdInput.value) || "").trim();
+      if (!serverName) { alert("Enter the Server Name first."); return; }
+      if (!projectId) { alert("Save the project before testing OAuth — project_id is missing."); return; }
+
+      var secretKey = (window.AppCommon && window.AppCommon.getSecretKey) ? window.AppCommon.getSecretKey() : "";
+      if (!secretKey) { alert("Enter the Secret Key first."); return; }
+
+      var params = new URLSearchParams({
+        flow: "test",
+        server_name: serverName,
+        project_id: projectId,
+        skey: secretKey,
+      });
+      window.open(
+        "/mcp/oauth/start/?" + params.toString(),
+        "mcp_oauth_test_" + serverName,
+        "width=860,height=720,toolbar=0,menubar=0,location=0,status=0"
+      );
+      return;
+    }
+  });
+
+  // Listen for OAuth test result postMessages
+  window.addEventListener("message", function (event) {
+    var data = event.data || {};
+    if (data.type !== "mcp_oauth_test_done") return;
+    var serverName = data.server_name || "";
+    // Find the status badge for this server and update it
+    var badge = document.querySelector(
+      ".mcp-oauth-status[data-server-name=\"" + serverName.replace(/"/g, '\\"') + "\"]"
+    );
+    if (!badge) {
+      // Newly-added rows don't have data-server-name yet; find by server-name input value
+      var rows = document.querySelectorAll(".mcp-oauth-configs__row");
+      rows.forEach(function (row) {
+        var nameInput = row.querySelector(".js-mcp-oauth-server-name");
+        if (nameInput && nameInput.value === serverName) {
+          badge = row.querySelector(".mcp-oauth-status");
+        }
+      });
+    }
+    if (badge) {
+      badge.textContent = data.success ? "✓ Authorized" : "✗ Failed";
+      badge.className = "mcp-oauth-status mcp-oauth-status--" + (data.success ? "ok" : "error");
+    }
+  });
+
   syncFormState();
 });

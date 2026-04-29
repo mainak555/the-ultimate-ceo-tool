@@ -143,3 +143,98 @@ location for credential material referenced by MCP servers. Rules:
 5. **Tracing**: fingerprint hashes the placeholder `mcpServers` dict, NOT the
    substituted dict, so spans remain stable across secret rotation.
 
+## OAuth 2.0 contract (HTTP MCP servers)
+
+`mcp_oauth_configs` is a project-level dict storing app registrations
+(`auth_url`, `token_url`, `client_id`, `client_secret`, `scopes?`) keyed by
+`server_name`. Keys must cross-validate against actual `mcpServers` keys
+(shared + dedicated) at save time — orphan keys raise `ValueError`.
+`client_secret` follows the SECRET_MASK round-trip and must never be sent
+back to the browser after the first save.
+
+### Endpoints (single generic start handler)
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/mcp/oauth/start/?flow=test\|run&server_name=...&project_id=...&[session_id=...]&skey=...` | Single entry point for both flows. Generates PKCE (S256, `secrets.token_urlsafe(64)` verifier), persists state metadata to Redis (300 s TTL), 302-redirects to `auth_url`. |
+| GET | `/mcp/oauth/callback/` | Provider redirect-back. Atomic `getdel` on `state`, exchanges code at `token_url`, branches on stored `flow`, renders shared `server/templates/server/oauth_flow.html`. |
+| GET | `/mcp/oauth/check/<session_id>/` | JSON status of all OAuth servers required for the session. Header secret only. |
+
+Do NOT add per-flow endpoints (`/oauth/test/`, `/oauth/authorize/`, etc.).
+The single handler discriminated by `?flow=` is the blessed pattern.
+
+### Popup secret-key rule
+
+`/mcp/oauth/start/` is reachable from `window.open()`, which cannot set
+request headers. `_has_valid_oauth_secret(request)` accepts the secret as
+either `X-App-Secret-Key` header or `?skey=` query param. **Every other
+MCP endpoint (including `/check/`) remains header-only.** Do not extend the
+query-param fallback to non-popup endpoints.
+
+### Outcome rendering
+
+Only one template is permitted for OAuth popup outcomes:
+`server/templates/server/oauth_flow.html`. It is rendered by
+`_render_outcome()` and `_render_error()` in `server/mcp_views.py`.
+Auto-close defaults: 2 s on `flow=run` success, 5 s on `flow=test` success,
+**30 s on error** (so users can read provider error messages). Never
+inline popup HTML inside views — always go through the helpers.
+
+### Run-time injection
+
+- Session-scoped token Redis key: `{ns}:mcp_oauth:{session_id}:{server_name}:token`.
+- Test status (config-form-only) Redis key: `{ns}:mcp_oauth_test:{project_id}:{server_name}:status` (300 s TTL). The test flow MUST NOT write to the session token key.
+- TTL derivation order: JWT `exp` (no signature verify) → `expires_in` → 3600 s default.
+- `agents/mcp_tools.py::_build_server_params(name, entry, session_id, has_oauth)` injects `Authorization: Bearer <token>` into the streamable-HTTP `headers` dict. Missing token → `ValueError` (surfaced as a run error).
+- No mid-session refresh (v1 limitation); a 401 mid-run requires re-authorize on the next run.
+- `purge_mcp_oauth_tokens(session_id)` runs on chat-session delete (SCAN-based).
+
+### Logging contract (server/mcp_views.py)
+
+Logger: `logging.getLogger(__name__)`. Required event names — every branch
+MUST be observable from server logs alone:
+
+- `agents.mcp.oauth_start`
+- `agents.mcp.oauth_callback_received`
+- `agents.mcp.oauth_callback_provider_error`
+- `agents.mcp.oauth_callback_state_missing`
+- `agents.mcp.oauth_callback_state_recovered`
+- `agents.mcp.oauth_token_exchange_start`
+- `agents.mcp.oauth_token_exchange_network_error`
+- `agents.mcp.oauth_token_exchange_http_error` (must include `status_code` and a `body_snippet` truncated to 500 chars)
+- `agents.mcp.oauth_token_exchange_ok`
+- `agents.mcp.oauth_token_missing`
+- `agents.mcp.oauth_test_authorized` / `agents.mcp.oauth_authorized`
+
+**Forbidden in logs and span attributes**: `code`, `code_verifier`,
+`client_secret`, `access_token`, raw `?skey=` value, full `Authorization`
+header. Allowed: `server_name`, `project_id`, `session_id`, `flow`,
+`token_url`, `state_prefix` (first 8 chars), `ttl_seconds`, `token_type`,
+`status_code`, provider `error` / `error_description`, response body
+snippet (≤ 500 chars, via `set_payload_attribute()`).
+
+### Tracing contract (core/tracing.py)
+
+Three nested spans per round-trip:
+
+- `mcp.oauth.start` — attrs: `mcp.oauth.flow`, `server_name`, `project_id`,
+  `session_id`, `state_prefix`.
+- `mcp.oauth.callback` — attrs: `has_code`, `has_state`, `provider_error`,
+  `flow`, `server_name`, `state_recovered`.
+  - child `mcp.oauth.token_exchange` — attrs: `token_url`, `server_name`,
+    `flow`, `http.status_code`, `mcp.oauth.token_ttl_seconds` (success).
+    Non-2xx body snippets go through `set_payload_attribute(span, "output.value", snippet)`.
+
+Outbound POST to `token_url` is also captured by `OTEL_INSTRUMENT_HTTP` as a
+sibling span in the same trace.
+
+### OAuth anti-patterns (block in review)
+
+- Adding `/mcp/oauth/test/`, `/mcp/oauth/authorize/`, or any per-flow start route.
+- Inline popup HTML in `mcp_views.py` (e.g. `_popup_html`, `_error_popup_html`) — must use `oauth_flow.html`.
+- Reading the secret from `?skey=` on any endpoint other than `/mcp/oauth/start/`.
+- Logging or span-attaching `code`, `code_verifier`, `client_secret`, `access_token`, or raw `Authorization` header.
+- Writing the test flow's success to the session token Redis key.
+- Auto-close timer < 30 s on the error branch of `oauth_flow.html`.
+- Computing the OTel `fingerprint` after secret substitution (must hash the placeholder dict).
+

@@ -102,6 +102,12 @@
           ({{ project.mcp_secrets.keys|join:", " }}) — values hidden.
         </p>
         {% endif %}
+        {% if project.mcp_oauth_configs %}
+        <p class="form-hint form-hint--compact" style="margin-top: 0.5rem;">
+          🔒 {{ project.mcp_oauth_configs|length }} OAuth config{{ project.mcp_oauth_configs|length|pluralize }} configured
+          ({{ project.mcp_oauth_configs.keys|join:", " }}) — client secrets hidden.
+        </p>
+        {% endif %}
       </div>
     </div>
   </div>
