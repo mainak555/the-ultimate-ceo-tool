@@ -602,7 +602,42 @@ def _normalize_discussion(msg):
         attachments.append(att)
     if attachments:
         row["attachments"] = attachments
+    # Coerce export payload datetimes (updated_at, last_push.pushed_at) to ISO strings.
+    exports = row.get("exports")
+    if isinstance(exports, dict):
+        coerced_exports = {}
+        for provider_key, provider_val in exports.items():
+            if not isinstance(provider_val, dict):
+                coerced_exports[provider_key] = provider_val
+                continue
+            # Handles both flat (trello) and nested (jira.software/service_desk/business) shapes.
+            if any(isinstance(v, dict) for v in provider_val.values()):
+                # Nested shape: e.g. jira -> {software: {...}, service_desk: {...}}
+                coerced_provider = {}
+                for sub_key, sub_val in provider_val.items():
+                    if isinstance(sub_val, dict):
+                        coerced_provider[sub_key] = _coerce_export_payload_dates(sub_val)
+                    else:
+                        coerced_provider[sub_key] = sub_val
+                coerced_exports[provider_key] = coerced_provider
+            else:
+                coerced_exports[provider_key] = _coerce_export_payload_dates(provider_val)
+        row["exports"] = coerced_exports
     return row
+
+
+def _coerce_export_payload_dates(payload):
+    """Return a shallow copy of an export payload dict with datetime fields coerced to ISO strings."""
+    if not isinstance(payload, dict):
+        return payload
+    out = dict(payload)
+    out["updated_at"] = _coerce_dt_to_iso(out.get("updated_at"))
+    last_push = out.get("last_push")
+    if isinstance(last_push, dict):
+        lp = dict(last_push)
+        lp["pushed_at"] = _coerce_dt_to_iso(lp.get("pushed_at"))
+        out["last_push"] = lp
+    return out
 
 
 def normalize_chat_session(doc):

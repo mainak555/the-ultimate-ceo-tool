@@ -150,12 +150,12 @@ Cross-references: [docs/API.md](API.md) (form fields + HTTP schema), [AGENTS.md]
       "exports": {
         "trello": {
           "schema_version": "string",
-          "updated_at": "ISO datetime",
+          "updated_at": "datetime (UTC BSON Date — coerced to ISO string on read)",
           "exported": true,
           "source": "extract | manual",
           "cards": [],
           "last_push": {
-            "pushed_at": "ISO datetime",
+            "pushed_at": "datetime (UTC BSON Date — coerced to ISO string on read)",
             "list_id": "string",
             "result": []
           }
@@ -163,12 +163,12 @@ Cross-references: [docs/API.md](API.md) (form fields + HTTP schema), [AGENTS.md]
         "jira": {
           "software": {
             "schema_version": "string",
-            "updated_at": "ISO datetime",
+            "updated_at": "datetime (UTC BSON Date — coerced to ISO string on read)",
             "exported": true,
             "source": "extract | manual",
             "issues": [],
             "last_push": {
-              "pushed_at": "ISO datetime",
+              "pushed_at": "datetime (UTC BSON Date — coerced to ISO string on read)",
               "project_key": "string",
               "result": []
             }

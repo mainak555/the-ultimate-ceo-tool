@@ -5,6 +5,7 @@ All views require the X-App-Secret-Key header.
 """
 
 import json
+from datetime import datetime, timezone
 
 from django.http import HttpResponse
 from django.views.decorators.csrf import csrf_exempt
@@ -23,7 +24,13 @@ def _has_valid_secret(request):
 
 
 def _json_response(data, status=200):
-    return HttpResponse(json.dumps(data), status=status, content_type="application/json")
+    def _dt_default(obj):
+        if isinstance(obj, datetime):
+            if obj.tzinfo is None:
+                obj = obj.replace(tzinfo=timezone.utc)
+            return obj.isoformat()
+        raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
+    return HttpResponse(json.dumps(data, default=_dt_default), status=status, content_type="application/json")
 
 
 def _json_error(message, status=400):

@@ -2,6 +2,7 @@
 
 import json
 import re
+from datetime import timezone as _timezone
 
 from .model_catalog import get_agent_model_names
 
@@ -533,7 +534,12 @@ def validate_integrations(data, agent_names):
         trello["app_name"] = app_name
         trello["api_key"] = api_key
         trello["token"] = (raw_trello.get("token") or "").strip()
-        trello["token_generated_at"] = (raw_trello.get("token_generated_at") or "").strip()
+        _tga = raw_trello.get("token_generated_at") or ""
+        if hasattr(_tga, "isoformat"):
+            if _tga.tzinfo is None:
+                _tga = _tga.replace(tzinfo=_timezone.utc)
+            _tga = _tga.isoformat()
+        trello["token_generated_at"] = (_tga or "").strip()
         trello["default_workspace_id"] = (raw_trello.get("default_workspace_id") or "").strip()
         trello["default_workspace_name"] = (raw_trello.get("default_workspace_name") or raw_trello.get("default_workspace") or "").strip()
         trello["default_board_id"] = (raw_trello.get("default_board_id") or "").strip()

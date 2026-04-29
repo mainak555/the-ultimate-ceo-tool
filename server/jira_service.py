@@ -25,10 +25,6 @@ logger = logging.getLogger(__name__)
 JIRA_TYPES = ("software", "service_desk", "business")
 
 
-def _utc_iso_now():
-    return datetime.now(timezone.utc).isoformat()
-
-
 def _coerce_confidence(value):
     try:
         out = float(value)
@@ -389,7 +385,7 @@ def _normalize_labels(labels):
 def _build_export_payload(items, type_name, source):
     return {
         "schema_version": "2026-04-23",
-        "updated_at": _utc_iso_now(),
+        "updated_at": datetime.now(timezone.utc),
         "exported": False,
         "source": (source or "manual").strip() or "manual",
         "issues": normalize_export_items(items, type_name),
@@ -422,18 +418,18 @@ def save_push_result(session_id, discussion_id, type_name, project_key, push_res
     """Persist push result into existing Jira export payload."""
     payload = get_saved_export(session_id, discussion_id, type_name) or {
         "schema_version": "2026-04-23",
-        "updated_at": _utc_iso_now(),
+        "updated_at": datetime.now(timezone.utc),
         "exported": False,
         "source": "manual",
         "issues": [],
     }
     payload["last_push"] = {
-        "pushed_at": _utc_iso_now(),
+        "pushed_at": datetime.now(timezone.utc),
         "project_key": project_key,
         "result": push_result,
     }
     payload["exported"] = True
-    payload["updated_at"] = _utc_iso_now()
+    payload["updated_at"] = datetime.now(timezone.utc)
     return services.set_discussion_export_payload(
         session_id,
         discussion_id,

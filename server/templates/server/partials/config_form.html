@@ -335,7 +335,7 @@
               </button>
             </div>
             <small class="form-hint trello-token-status" id="trello-token-generated-at">
-              {% if mode == 'create' %}<strong>Save first</strong> to generate the token{% elif project.integrations.trello.token_generated_at %}Generated: {{ project.integrations.trello.token_generated_at }}{% endif %}
+              {% if mode == 'create' %}<strong>Save first</strong> to generate the token{% elif project.integrations.trello.token_generated_at %}Generated: <time class="local-time" data-utc="{{ project.integrations.trello.token_generated_at }}">{{ project.integrations.trello.token_generated_at }}</time>{% endif %}
             </small>
             <input type="hidden" name="integrations[trello][token]" value="{{ project.integrations.trello.token|default:'' }}">
             <input type="hidden" name="integrations[trello][token_generated_at]" value="{{ project.integrations.trello.token_generated_at|default:'' }}">

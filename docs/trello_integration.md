@@ -179,7 +179,7 @@ Saved payload path: `discussions[].exports.trello`
 ```json
 {
   "schema_version": "2026-04-21",
-  "updated_at": "ISO datetime",
+  "updated_at": "datetime (UTC BSON Date — coerced to ISO string on read)",
   "exported": false,
   "source": "extract|manual",
   "cards": [
@@ -210,7 +210,7 @@ Saved payload path: `discussions[].exports.trello`
     }
   ],
   "last_push": {
-    "pushed_at": "ISO datetime",
+    "pushed_at": "datetime (UTC BSON Date — coerced to ISO string on read)",
     "list_id": "string",
     "result": []
   }

@@ -270,7 +270,7 @@
         if (d.valid) {
           statusEl.innerHTML =
             '<span class="export-modal__token-status export-modal__token-status--valid">Authorized</span>'
-            + (d.token_generated_at ? ' <small>(configured ' + d.token_generated_at + ')</small>' : '');
+            + (d.token_generated_at ? ' <small>(configured <time class="local-time" data-utc="' + d.token_generated_at + '">' + d.token_generated_at + '</time>)</small>' : '');
           if (d.defaults) _state.defaults = d.defaults;
           _showDestination();
         } else {

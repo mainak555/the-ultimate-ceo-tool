@@ -255,10 +255,6 @@ def create_list(session_id, name, board_id):
 PRIORITY_VALUES = {"low": "Low", "medium": "Medium", "high": "High", "critical": "Critical"}
 
 
-def _utc_iso_now():
-    return datetime.now(timezone.utc).isoformat()
-
-
 def _coerce_confidence(value):
     try:
         out = float(value)
@@ -385,7 +381,7 @@ def normalize_export_items(items):
 def _build_export_payload(items, source):
     return {
         "schema_version": "2026-04-21",
-        "updated_at": _utc_iso_now(),
+        "updated_at": datetime.now(timezone.utc),
         "exported": False,
         "source": (source or "manual").strip() or "manual",
         "cards": normalize_export_items(items),
@@ -407,18 +403,18 @@ def save_push_result(session_id, discussion_id, list_id, push_result):
     """Persist push outcome into existing trello export payload."""
     payload = get_saved_export(session_id, discussion_id) or {
         "schema_version": "2026-04-21",
-        "updated_at": _utc_iso_now(),
+        "updated_at": datetime.now(timezone.utc),
         "exported": False,
         "source": "manual",
         "cards": [],
     }
     payload["last_push"] = {
-        "pushed_at": _utc_iso_now(),
+        "pushed_at": datetime.now(timezone.utc),
         "list_id": list_id,
         "result": push_result,
     }
     payload["exported"] = True
-    payload["updated_at"] = _utc_iso_now()
+    payload["updated_at"] = datetime.now(timezone.utc)
     return services.set_discussion_export_payload(session_id, discussion_id, "trello", payload)
 
 

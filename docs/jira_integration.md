@@ -253,9 +253,9 @@ Saved payloads are stored on the chat session document under `discussions[].expo
 ```json
 {
   "jira": {
-    "software": { "schema_version": "...", "updated_at": "ISO", "exported": false, "source": "extract|manual", "issues": [...] },
-    "service_desk": { "schema_version": "...", "updated_at": "ISO", "exported": false, "source": "extract|manual", "issues": [...] },
-    "business": { "schema_version": "...", "updated_at": "ISO", "exported": false, "source": "extract|manual", "issues": [...] }
+    "software": { "schema_version": "...", "updated_at": "datetime (UTC BSON Date — coerced to ISO string on read)", "exported": false, "source": "extract|manual", "issues": [...] },
+    "service_desk": { "schema_version": "...", "updated_at": "datetime (UTC BSON Date — coerced to ISO string on read)", "exported": false, "source": "extract|manual", "issues": [...] },
+    "business": { "schema_version": "...", "updated_at": "datetime (UTC BSON Date — coerced to ISO string on read)", "exported": false, "source": "extract|manual", "issues": [...] }
   }
 }
 ```

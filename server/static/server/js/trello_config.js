@@ -159,7 +159,10 @@
 
         if (data.valid) {
           if (display) display.value = "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022";
-          if (generatedAt) generatedAt.textContent = "Generated: " + data.token_generated_at;
+          if (generatedAt) {
+            generatedAt.innerHTML = 'Generated: <time class="local-time" data-utc="' + data.token_generated_at + '">' + data.token_generated_at + '</time>';
+            if (window.renderLocalTimes) window.renderLocalTimes();
+          }
 
           var tokenHidden = document.querySelector("input[name='integrations[trello][token]']");
           if (tokenHidden) tokenHidden.value = "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022";

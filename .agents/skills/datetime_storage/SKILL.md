@@ -182,14 +182,10 @@ function renderLocalTimes() {
 | `chat_sessions` | `created_at` | `datetime` (UTC BSON Date) |
 | `chat_sessions` | `discussions[].timestamp` | `datetime` (UTC BSON Date) |
 | `chat_sessions` | `agent_state.saved_at` | `datetime` (UTC BSON Date) |
-| `chat_sessions` | `discussions[].exports.*.updated_at` | ISO string (export metadata — not user-facing) |
-| `chat_sessions` | `discussions[].exports.*.last_push.pushed_at` | ISO string (export metadata — not user-facing) |
-
-> **Why are export `updated_at`/`pushed_at` still strings?**
-> They are internal export pipeline metadata written and read by Trello/Jira
-> services, never displayed directly to users. Changing them would require
-> migrating all existing export payloads. They are exempt from this standard
-> until a dedicated migration is performed.
+| `chat_sessions` | `discussions[].exports.*.updated_at` | `datetime` (UTC BSON Date — coerced to ISO string on read) |
+| `chat_sessions` | `discussions[].exports.*.last_push.pushed_at` | `datetime` (UTC BSON Date — coerced to ISO string on read) |
+| `chat_attachments` | `uploaded_at` | `datetime` (UTC BSON Date) |
+| `chat_attachments` | `bound_at` | `datetime` (UTC BSON Date) |
 
 ---
 
@@ -200,22 +196,7 @@ may contain legacy string values in fields that should now be BSON Dates.
 
 The `_coerce_dt_to_iso()` helper and `_normalize_discussion()` in
 `server/services.py` handle both datetime objects and legacy strings
-transparently at read time. Similarly, `renderLocalTimes()` in JS falls back
-to displaying the raw string if `new Date(isoString)` returns `Invalid Date`.
-
-If a targeted migration is needed in future, use a MongoDB update pipeline:
-```js
-db.chat_sessions.updateMany(
-  { "discussions.timestamp": { $type: "string" } },
-  [{ $set: { "discussions": {
-    $map: { input: "$discussions", as: "m", in: {
-      $mergeObjects: ["$$m", {
-        timestamp: { $dateFromString: { dateString: "$$m.timestamp", onError: null } }
-      }]
-    }}
-  }}}]
-)
-```
+transparently at read time.
 
 ---
 
