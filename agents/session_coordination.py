@@ -255,19 +255,14 @@ def clear_run_traceparent(session_id: str) -> None:
 # MCP OAuth 2.0 — session-scoped token storage (run-time)
 # ---------------------------------------------------------------------------
 
-# Hard cap on how long a Bearer token may live in Redis, regardless of what
-# the provider's `expires_in` / JWT `exp` claims. The pre-run gate re-runs the
-# OAuth flow on every `startRun()` call, so a 12 h cap forces re-auth at most
-# once per half day for long-lived runs without surprising the user mid-session.
-# Also used as the default TTL when the provider response carries neither JWT
-# `exp` nor `expires_in`. Override with env var MCP_OAUTH_TOKEN_TTL_MAX_SECONDS.
-MCP_OAUTH_TOKEN_TTL_MAX_SECONDS: Final[int] = max(
-    60, int(os.getenv("MCP_OAUTH_TOKEN_TTL_MAX_SECONDS", str(12 * 3600)))
-)
+# Fallback TTL used when the provider's JWT access_token has no parseable `exp`
+# claim. The Redis key naturally expires when the token does, so no external
+# cap is applied — TTL is authoritative from the JWT itself.
+_MCP_OAUTH_DEFAULT_TTL: Final[int] = 3 * 3600  # 3 hours
 
 
 def _mcp_oauth_token_key(session_id: str, server_name: str) -> str:
-    return f"{_namespace()}:mcp_oauth:{session_id}:{server_name}:token"
+    return f"{_namespace()}:mcp_oauth:run:{session_id}:{server_name}:token"
 
 
 def _mcp_oauth_state_key(state: str) -> str:
@@ -275,27 +270,28 @@ def _mcp_oauth_state_key(state: str) -> str:
 
 
 def _mcp_oauth_test_key(project_id: str, server_name: str) -> str:
-    return f"{_namespace()}:mcp_oauth_test:{project_id}:{server_name}:status"
+    return f"{_namespace()}:mcp_oauth:test:{project_id}:{server_name}:status"
 
 
 def set_mcp_oauth_token(
     session_id: str,
     server_name: str,
     access_token: str,
-    ttl_seconds: int = MCP_OAUTH_TOKEN_TTL_MAX_SECONDS,
+    ttl_seconds: int = _MCP_OAUTH_DEFAULT_TTL,
 ) -> None:
-    """Store a run-time OAuth access token for a specific MCP server + session.
+    """Store a run-time OAuth Bearer token for a specific MCP server + session.
 
-    The token is stored under a session-scoped Redis key with the given TTL so
-    it is automatically evicted when the token expires. Silent on Redis failure
-    — the run will simply require re-authorization on the next run.
+    TTL is derived from the JWT ``exp`` claim (``exp - now()``). The Redis key
+    expires exactly when the token does, so cache hits during an active run are
+    always valid. Falls back to ``_MCP_OAUTH_DEFAULT_TTL`` (3 h) when ``exp``
+    is unavailable. Silent on Redis failure — the run will simply require
+    re-authorization on the next run.
     """
     import json as _json
 
     key = _mcp_oauth_token_key(session_id, server_name)
-    # Cap to MCP_OAUTH_TOKEN_TTL_MAX_SECONDS so a long-lived provider token
-    # cannot pin the Redis entry beyond the configured ceiling.
-    capped_ttl = max(60, min(int(ttl_seconds), MCP_OAUTH_TOKEN_TTL_MAX_SECONDS))
+    # Enforce a floor of 60 s; no ceiling — the JWT exp is authoritative.
+    capped_ttl = max(60, int(ttl_seconds))
     try:
         _get_client().set(
             key,
@@ -360,7 +356,7 @@ def purge_mcp_oauth_tokens(session_id: str) -> None:
     Uses SCAN to avoid a KEYS call on large Redis instances.
     Silent on Redis failure.
     """
-    pattern = f"{_namespace()}:mcp_oauth:{session_id}:*:token"
+    pattern = f"{_namespace()}:mcp_oauth:run:{session_id}:*:token"
     try:
         client = _get_client()
         cursor = 0
@@ -416,11 +412,11 @@ def get_and_delete_mcp_oauth_state(state: str) -> dict | None:
 # MCP OAuth 2.0 — test-mode status (config-form Test Authorization)
 # ---------------------------------------------------------------------------
 
-_MCP_OAUTH_TEST_TTL: Final[int] = 300  # 5 minutes
+_MCP_OAUTH_TEST_TTL: Final[int] = 600  # 10 minutes
 
 
 def set_mcp_oauth_test_status(project_id: str, server_name: str) -> None:
-    """Mark that a test-mode OAuth flow succeeded for this project+server (5-minute TTL)."""
+    """Mark that a test-mode OAuth flow succeeded for this project+server (10-minute TTL)."""
     key = _mcp_oauth_test_key(project_id, server_name)
     try:
         _get_client().set(key, "ok", ex=_MCP_OAUTH_TEST_TTL)

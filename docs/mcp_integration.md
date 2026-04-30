@@ -398,17 +398,25 @@ The config form shows the computed redirect URI in the section hint.
 
 ### Token TTL derivation
 
-1. Parse `access_token` as JWT — use `exp` claim minus current time (if > 60 s).
-2. Fall back to `expires_in` from the token response (integer seconds).
-3. Default to `MCP_OAUTH_TOKEN_TTL_MAX_SECONDS` (env var, default `43200` = 12 h).
+The token endpoint response is a JWT. The backend decodes the payload (no signature
+verification — the token endpoint is TLS-protected) and reads the `exp` UTC epoch claim:
 
-The resolved value is then **capped** at `MCP_OAUTH_TOKEN_TTL_MAX_SECONDS` so a long-lived provider token (e.g. Figma's 90-day refresh-issued tokens) cannot pin the Redis entry beyond the configured ceiling. The pre-run gate re-runs on every `startRun()`, so the cap effectively forces re-auth at most once per cap window — set this to a longer value for kiosk/automation deployments, or shorter (e.g. `3600`) for stricter session hygiene.
+```
+TTL = exp − now(UTC)
+```
 
-Tokens are stored in Redis with the (capped) TTL. There is **no mid-session refresh** (v1 limitation). If a token expires during a run, MCP calls return 401. The user must re-authorize for the next run.
+The Redis key is set with this exact TTL, so it expires precisely when the Bearer
+token does. Cache hits during an active session are always valid without any
+additional checks.
+
+If the JWT cannot be decoded or `exp` is absent, the TTL falls back to a hardcoded
+**3 h** (`_MCP_OAUTH_DEFAULT_TTL`). No external env-var cap is applied.
+
+Tokens are stored in Redis with the derived TTL. There is **no mid-session refresh** (v1 limitation). If a token expires during a run, MCP calls return 401. The user must re-authorize for the next run.
 
 ### Test Authorization mode
 
-The config form "Test Authorization" button opens the OAuth flow with `?flow=test` and a `project_id` scope (no `session_id`). On success a short-lived (300 s) status flag is written to Redis. This validates app credentials without starting a run; **no run-time session token is injected**.
+The config form "Test Authorization" button opens the OAuth flow with `?flow=test` and a `project_id` scope (no `session_id`). On success a short-lived (600 s) status flag is written to Redis. This validates app credentials without starting a run; **no run-time session token is injected**.
 
 ### Popup secret-key handoff
 
@@ -446,13 +454,13 @@ Both success and error branches of `/mcp/oauth/callback/` render the shared `ser
 
 | Purpose | Key pattern |
 |---------|-------------|
-| Session-scoped run token | `{ns}:mcp_oauth:{session_id}:{server_name}:token` |
+| Session-scoped run token | `{ns}:mcp_oauth:run:{session_id}:{server_name}:token` |
 | PKCE state (one-time) | `{ns}:mcp_oauth_state:{state}:meta` (300 s TTL) |
-| Test authorization result | `{ns}:mcp_oauth_test:{project_id}:{server_name}:status` (300 s TTL) |
+| Test authorization result | `{ns}:mcp_oauth:test:{project_id}:{server_name}:status` (600 s TTL) |
 
 ### Session cleanup
 
-`purge_mcp_oauth_tokens(session_id)` is called when a chat session is deleted. It uses SCAN to remove all `{ns}:mcp_oauth:{session_id}:*:token` keys.
+`purge_mcp_oauth_tokens(session_id)` is called when a chat session is deleted. It uses SCAN to remove all `{ns}:mcp_oauth:run:{session_id}:*:token` keys.
 
 ### Observability — OAuth flow
 

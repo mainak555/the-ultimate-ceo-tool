@@ -387,7 +387,7 @@ Configure this per-server under **MCP OAuth App Registrations** in the project c
 - Register the callback URL `{BASE_URL}/mcp/oauth/callback/` with your OAuth provider.
 - Before each agent run, the UI checks token status and shows an **Authorize** modal if any server needs consent. Clicking the button opens a popup; after the user grants access the run starts automatically.
 - **Test Authorization** (config form) validates credentials without starting a run.
-- Tokens are session-scoped and expire per the provider's `expires_in` / JWT `exp`, capped at `MCP_OAUTH_TOKEN_TTL_MAX_SECONDS` (default **12 h**). There is no mid-session refresh (v1) — re-authorize on the next run if a token expires.
+- Tokens are session-scoped and expire from their JWT `exp` claim (TTL = `exp − now(UTC)`). Falls back to a hardcoded 3 h default if `exp` is absent. There is no mid-session refresh (v1) — re-authorize on the next run if a token expires.
 - `client_secret` is stored masked and never sent to the browser after the first save.
 - The OAuth start endpoint (`/mcp/oauth/start/`) is opened from a popup window, which cannot set request headers — it accepts the admin secret as `X-App-Secret-Key` **or** `?skey=<APP_SECRET_KEY>`. Always serve the app over TLS and scrub query strings from access logs (or accept the leak as in-scope for an admin-only deployment).
 - Every branch of the OAuth start + callback handlers emits structured `agents.mcp.oauth_*` log events plus three nested OpenTelemetry spans (`mcp.oauth.start`, `mcp.oauth.callback`, `mcp.oauth.token_exchange`) so popup-window failures are diagnosable from the server console alone.
@@ -409,7 +409,6 @@ Full documentation: [docs/mcp_integration.md](docs/mcp_integration.md).
 | `REDIS_RUN_HEARTBEAT_SECONDS` | Lease heartbeat interval (seconds) | `20` |
 | `REDIS_CANCEL_SIGNAL_TTL_SECONDS` | Cancel signal TTL (seconds) | `120` |
 | `REDIS_ATTACHMENT_TTL_SECONDS` | How long extracted attachment text is kept in Redis (seconds). Raise this if sessions span multiple days. | `86400` (24 h) |
-| `MCP_OAUTH_TOKEN_TTL_MAX_SECONDS` | Hard cap on Redis TTL for MCP OAuth Bearer tokens, regardless of provider `expires_in` / JWT `exp`. Also the default TTL when the provider returns neither. Forces the pre-run authorize modal to re-prompt at most once per cap window. | `43200` (12 h) |
 | `MAX_AGENT_STATE_BYTES` | Maximum byte size of serialised AutoGen agent state stored in MongoDB. Raise for long sessions with many attachments or embedded images. MongoDB's document limit is 16 MB (shared with `discussions[]`). | `1000000` (1 MB) |
 | `DEBUG` | Django debug mode | `True` |
 | `ALLOWED_HOSTS` | Comma-separated allowed hosts | `localhost,127.0.0.1` |

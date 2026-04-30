@@ -45,13 +45,17 @@ from django.urls import reverse
 from django.views.decorators.http import require_GET
 
 from agents.session_coordination import (
-    MCP_OAUTH_TOKEN_TTL_MAX_SECONDS,
     get_and_delete_mcp_oauth_state,
     get_mcp_oauth_token,
     set_mcp_oauth_state,
     set_mcp_oauth_test_status,
     set_mcp_oauth_token,
 )
+
+# Default Redis TTL for a run-time Bearer token when the JWT contains no
+# parseable `exp` claim.  3 h is a conservative fallback; the JWT exp is
+# always preferred so the key expires exactly when the token does.
+_MCP_OAUTH_DEFAULT_TTL: int = 3 * 3600
 from core.tracing import set_payload_attribute, traced_block
 from .services import get_project_raw, verify_secret_key
 from .views import _has_valid_secret  # noqa: F401  (kept for tests/external imports)
@@ -102,40 +106,36 @@ def _resolve_oauth_config(project_raw: dict, server_name: str) -> dict | None:
 
 
 def _extract_token_ttl(token_response: dict) -> int:
-    """Derive token TTL seconds from the provider response.
+    """Derive token TTL (seconds) from the JWT access_token returned by the token endpoint.
 
-    Priority:
-    1. JWT 'exp' claim in access_token (if it decodes without signature verify).
-    2. 'expires_in' field (integer seconds).
-    3. Env-configurable default MCP_OAUTH_TOKEN_TTL_MAX_SECONDS (default 12 h).
+    The provider response is expected to be a JSON Web Token.  We decode the
+    payload (without signature verification — we trust the TLS-protected
+    token endpoint) and read the ``exp`` claim, which is a UTC epoch timestamp.
+    TTL = exp − now(UTC).  Because the Redis key expires at exactly this TTL,
+    cache hits during an active session are always valid.
 
-    The returned value is further capped to MCP_OAUTH_TOKEN_TTL_MAX_SECONDS
-    inside agents/session_coordination.py::set_mcp_oauth_token().
+    If the JWT cannot be decoded or contains no ``exp`` claim, falls back to
+    ``_MCP_OAUTH_DEFAULT_TTL`` (3 h hardcoded).  No external cap is applied.
     """
     access_token = token_response.get("access_token", "")
     if access_token and access_token.count(".") == 2:
         try:
             payload_part = access_token.split(".")[1]
+            # Add padding so base64 decoding works for any payload length.
             padding = 4 - len(payload_part) % 4
             if padding != 4:
                 payload_part += "=" * padding
             payload = json.loads(base64.urlsafe_b64decode(payload_part))
             exp = payload.get("exp")
             if exp:
+                # exp is a UTC epoch integer; time.time() returns UTC epoch.
                 remaining = int(exp) - int(time.time())
                 if remaining > 60:
                     return remaining
         except Exception:  # noqa: BLE001
             pass
 
-    expires_in = token_response.get("expires_in")
-    if expires_in:
-        try:
-            return max(60, int(expires_in))
-        except (TypeError, ValueError):
-            pass
-
-    return MCP_OAUTH_TOKEN_TTL_MAX_SECONDS
+    return _MCP_OAUTH_DEFAULT_TTL
 
 
 def _post_message_for(flow: str, server_name: str, success: bool) -> dict:
@@ -592,6 +592,8 @@ def mcp_oauth_callback(request):
                 auto_close_seconds=_AUTO_CLOSE_SUCCESS_TEST,
             )
 
+        # access_token is the Bearer token returned by token_url exchange
+        # (not the authorization code). TTL = JWT exp − now(); 3 h fallback.
         set_mcp_oauth_token(session_id, server_name, access_token, ttl_seconds=ttl)
         logger.info(
             "agents.mcp.oauth_authorized",
