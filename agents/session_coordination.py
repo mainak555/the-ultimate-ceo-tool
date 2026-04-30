@@ -255,7 +255,15 @@ def clear_run_traceparent(session_id: str) -> None:
 # MCP OAuth 2.0 — session-scoped token storage (run-time)
 # ---------------------------------------------------------------------------
 
-_MCP_OAUTH_TOKEN_TTL_DEFAULT: Final[int] = 3600  # 1 hour fallback
+# Hard cap on how long a Bearer token may live in Redis, regardless of what
+# the provider's `expires_in` / JWT `exp` claims. The pre-run gate re-runs the
+# OAuth flow on every `startRun()` call, so a 12 h cap forces re-auth at most
+# once per half day for long-lived runs without surprising the user mid-session.
+# Also used as the default TTL when the provider response carries neither JWT
+# `exp` nor `expires_in`. Override with env var MCP_OAUTH_TOKEN_TTL_MAX_SECONDS.
+MCP_OAUTH_TOKEN_TTL_MAX_SECONDS: Final[int] = max(
+    60, int(os.getenv("MCP_OAUTH_TOKEN_TTL_MAX_SECONDS", str(12 * 3600)))
+)
 
 
 def _mcp_oauth_token_key(session_id: str, server_name: str) -> str:
@@ -274,7 +282,7 @@ def set_mcp_oauth_token(
     session_id: str,
     server_name: str,
     access_token: str,
-    ttl_seconds: int = _MCP_OAUTH_TOKEN_TTL_DEFAULT,
+    ttl_seconds: int = MCP_OAUTH_TOKEN_TTL_MAX_SECONDS,
 ) -> None:
     """Store a run-time OAuth access token for a specific MCP server + session.
 
@@ -285,11 +293,14 @@ def set_mcp_oauth_token(
     import json as _json
 
     key = _mcp_oauth_token_key(session_id, server_name)
+    # Cap to MCP_OAUTH_TOKEN_TTL_MAX_SECONDS so a long-lived provider token
+    # cannot pin the Redis entry beyond the configured ceiling.
+    capped_ttl = max(60, min(int(ttl_seconds), MCP_OAUTH_TOKEN_TTL_MAX_SECONDS))
     try:
         _get_client().set(
             key,
             _json.dumps({"access_token": access_token}),
-            ex=max(60, ttl_seconds),
+            ex=capped_ttl,
         )
     except Exception:  # noqa: BLE001
         logger.warning(
@@ -310,6 +321,37 @@ def get_mcp_oauth_token(session_id: str, server_name: str) -> str | None:
         return _json.loads(raw).get("access_token")
     except Exception:  # noqa: BLE001
         return None
+
+
+def list_authorized_oauth_servers(
+    session_id: str, server_names: list[str]
+) -> list[str]:
+    """Return the subset of ``server_names`` that currently hold a session-scoped
+    OAuth token in Redis.
+
+    Uses a pipelined ``EXISTS`` so the cost is one round-trip regardless of the
+    number of servers. On any Redis error returns an empty list (caller treats
+    every server as unauthorized — fail-closed for the gate).
+    """
+    if not session_id or not server_names:
+        return []
+    try:
+        client = _get_client()
+        pipe = client.pipeline(transaction=False)
+        for name in server_names:
+            pipe.exists(_mcp_oauth_token_key(session_id, name))
+        results = pipe.execute()
+        return [
+            name
+            for name, exists in zip(server_names, results)
+            if bool(exists)
+        ]
+    except Exception:  # noqa: BLE001
+        logger.warning(
+            "agents.mcp.oauth_list_authorized_failed",
+            extra={"session_id": session_id, "server_count": len(server_names)},
+        )
+        return []
 
 
 def purge_mcp_oauth_tokens(session_id: str) -> None:
@@ -409,6 +451,7 @@ __all__ = [
     "get_redis_client",
     "get_run_traceparent",
     "is_cancel_signaled",
+    "list_authorized_oauth_servers",
     "purge_mcp_oauth_tokens",
     "release_run_lease",
     "renew_run_lease",

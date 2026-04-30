@@ -184,7 +184,7 @@ inline popup HTML inside views — always go through the helpers.
 
 - Session-scoped token Redis key: `{ns}:mcp_oauth:{session_id}:{server_name}:token`.
 - Test status (config-form-only) Redis key: `{ns}:mcp_oauth_test:{project_id}:{server_name}:status` (300 s TTL). The test flow MUST NOT write to the session token key.
-- TTL derivation order: JWT `exp` (no signature verify) → `expires_in` → 3600 s default.
+- TTL derivation order: JWT `exp` (no signature verify) → `expires_in` → env default `MCP_OAUTH_TOKEN_TTL_MAX_SECONDS` (default 43200 s = 12 h). The resolved TTL is **capped** at the same env value via `min()` in `set_mcp_oauth_token()` so long-lived provider tokens cannot pin the Redis entry beyond the configured ceiling.
 - `agents/mcp_tools.py::_build_server_params(name, entry, session_id, has_oauth)` injects `Authorization: Bearer <token>` into the streamable-HTTP `headers` dict. Missing token → `ValueError` (surfaced as a run error).
 - No mid-session refresh (v1 limitation); a 401 mid-run requires re-authorize on the next run.
 - `purge_mcp_oauth_tokens(session_id)` runs on chat-session delete (SCAN-based).

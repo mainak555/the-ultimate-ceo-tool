@@ -698,6 +698,147 @@ document.addEventListener("DOMContentLoaded", function () {
     chatMessages.scrollTop = chatMessages.scrollHeight;
   }
 
+  // ------------------------------------------------------------------
+  // MCP OAuth in-history authorization panel
+  // ------------------------------------------------------------------
+
+  var _oauthPollTimer = null;
+  var _oauthMessageListener = null;
+
+  function _teardownOAuthGate() {
+    if (_oauthPollTimer) { clearInterval(_oauthPollTimer); _oauthPollTimer = null; }
+    if (_oauthMessageListener) {
+      window.removeEventListener("message", _oauthMessageListener);
+      _oauthMessageListener = null;
+    }
+  }
+
+  function _resolveProjectId() {
+    var pid = activeProjectIdInput ? activeProjectIdInput.value.trim() : "";
+    if (!pid && chatProjectBtn && chatProjectBtn.dataset.activeProjectId) {
+      pid = chatProjectBtn.dataset.activeProjectId;
+    }
+    return pid;
+  }
+
+  function _showOAuthGatePanel(sessionId, secretKey, servers, replayTask, replayAttachmentIds) {
+    setRunningState(false);
+    _teardownOAuthGate();
+
+    chatMessages.querySelectorAll(".chat-status-badge, .chat-restart-panel, .chat-oauth-panel").forEach(function (el) {
+      el.remove();
+    });
+
+    var projectId = _resolveProjectId();
+    var rowsHtml = (servers || []).map(function (name) {
+      var safe = escapeHtml(name);
+      return '<div class="chat-oauth-panel__row" data-server-name="' + safe + '">'
+        + '<span class="chat-oauth-panel__server">' + safe + '</span>'
+        + '<span class="chat-oauth-panel__status chat-oauth-panel__status--pending">Pending</span>'
+        + '<button type="button" class="btn btn--primary chat-oauth-authorize-btn" data-server-name="' + safe + '">Authorize</button>'
+        + '</div>';
+    }).join("");
+
+    chatMessages.insertAdjacentHTML(
+      "beforeend",
+      '<div class="chat-oauth-panel"'
+      + ' data-session-id="' + escapeHtml(sessionId) + '"'
+      + ' data-project-id="' + escapeHtml(projectId) + '">'
+      + '<div class="chat-oauth-panel__title">&#x1F510; MCP authorization required</div>'
+      + '<p class="chat-oauth-panel__hint">One or more MCP servers used by this project require OAuth authorization for this session. Authorize each server below; the run will resume automatically once all are connected.</p>'
+      + '<div class="chat-oauth-panel__rows">' + rowsHtml + '</div>'
+      + '</div>'
+    );
+
+    var panel = chatMessages.querySelector(".chat-oauth-panel");
+    if (!panel) return;
+    panel._replayTask = replayTask || "";
+    panel._replayAttachmentIds = (replayAttachmentIds || []).slice();
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+
+    _attachOAuthGateBehavior(panel, sessionId, secretKey);
+  }
+
+  function _attachOAuthGateBehavior(panel, sessionId, secretKey) {
+    function _markRowAuthorized(name) {
+      var row = panel.querySelector('.chat-oauth-panel__row[data-server-name="' + (window.CSS && CSS.escape ? CSS.escape(name) : name) + '"]');
+      if (!row) return;
+      row.classList.add("chat-oauth-panel__row--authorized");
+      var status = row.querySelector(".chat-oauth-panel__status");
+      if (status) {
+        status.classList.remove("chat-oauth-panel__status--pending");
+        status.classList.add("chat-oauth-panel__status--authorized");
+        status.textContent = "Authorized \u2713";
+      }
+      var btn = row.querySelector(".chat-oauth-authorize-btn");
+      if (btn) { btn.disabled = true; btn.textContent = "Authorized \u2713"; }
+    }
+
+    function _allAuthorized() {
+      var rows = panel.querySelectorAll(".chat-oauth-panel__row");
+      if (!rows.length) return false;
+      for (var i = 0; i < rows.length; i++) {
+        if (!rows[i].classList.contains("chat-oauth-panel__row--authorized")) return false;
+      }
+      return true;
+    }
+
+    function _onAllAuthorized() {
+      _teardownOAuthGate();
+      var task = panel._replayTask || "";
+      var ids = panel._replayAttachmentIds || [];
+      panel.remove();
+      // Re-issue the run; server will gate again if anything is still missing.
+      _doStartRun(sessionId, secretKey, task, ids);
+      setRunningState(true);
+    }
+
+    // postMessage from popup callback page
+    _oauthMessageListener = function (event) {
+      var data = event.data || {};
+      if (data.type === "mcp_oauth_done" && data.success && data.server_name) {
+        _markRowAuthorized(data.server_name);
+        if (_allAuthorized()) _onAllAuthorized();
+      }
+    };
+    window.addEventListener("message", _oauthMessageListener);
+
+    // Polling fallback (popup-blocker scenarios)
+    _oauthPollTimer = setInterval(function () {
+      if (!window.McpOAuth || !document.body.contains(panel)) {
+        _teardownOAuthGate();
+        return;
+      }
+      window.McpOAuth.fetchStatus(sessionId, secretKey).then(function (status) {
+        (status.servers || []).forEach(function (s) {
+          if (s.authorized) _markRowAuthorized(s.server_name);
+        });
+        if (status.all_authorized || _allAuthorized()) _onAllAuthorized();
+      }).catch(function () { /* keep polling */ });
+    }, 3000);
+  }
+
+  // Delegated click handler for Authorize buttons (works for server-rendered
+  // panels after page reload as well as JS-injected panels).
+  document.addEventListener("click", function (event) {
+    var btn = event.target && event.target.closest ? event.target.closest(".chat-oauth-authorize-btn") : null;
+    if (!btn) return;
+    var panel = btn.closest(".chat-oauth-panel");
+    if (!panel) return;
+    var sessionId = panel.dataset.sessionId
+      || (activeSessionIdInput ? activeSessionIdInput.value.trim() : "");
+    var projectId = panel.dataset.projectId || _resolveProjectId();
+    var secretKey = getSecretKey();
+    if (!sessionId || !secretKey) {
+      alert("Enter the Secret Key first.");
+      return;
+    }
+    var serverName = btn.dataset.serverName;
+    if (window.McpOAuth) window.McpOAuth.openAuthPopup(serverName, sessionId, projectId, secretKey);
+    // Wire postMessage + polling once on first click for a server-rendered panel.
+    if (!_oauthMessageListener) _attachOAuthGateBehavior(panel, sessionId, secretKey);
+  });
+
   function restartSession(panel, mode, text) {
     var sessionId = panel.dataset.sessionId
       || (activeSessionIdInput ? activeSessionIdInput.value.trim() : "");
@@ -741,32 +882,17 @@ document.addEventListener("DOMContentLoaded", function () {
     var secretKey = getSecretKey();
     if (!secretKey) { alert("Enter the Secret Key first."); return; }
 
-    chatMessages.querySelectorAll(".chat-status-badge, .chat-restart-panel").forEach(function (el) {
+    chatMessages.querySelectorAll(".chat-status-badge, .chat-restart-panel, .chat-oauth-panel").forEach(function (el) {
       el.remove();
     });
 
     setRunningState(true);
 
-    // --- MCP OAuth pre-run gate ---
-    // Resolve projectId from the hidden input (may be empty for sessions without MCP OAuth).
-    var projectId = activeProjectIdInput ? activeProjectIdInput.value.trim() : "";
-
-    var oauthGate = (window.McpOAuth && projectId)
-      ? window.McpOAuth.checkAndAuthorize(sessionId, projectId, secretKey)
-      : Promise.resolve();
-
-    oauthGate.then(function () {
-      return _doStartRun(sessionId, secretKey, task, attachmentIds);
-    }).catch(function (reason) {
-      if (reason === "cancelled") {
-        setRunningState(false);
-      } else {
-        // Unexpected error in OAuth gate — surface it and abort
-        console.error("[McpOAuth] pre-run gate error:", reason);
-        setRunningState(false);
-        alert("MCP OAuth error: " + (reason && reason.message ? reason.message : reason));
-      }
-    });
+    // OAuth gate is now driven by the server: /run/ returns 409 +
+    // {status:"awaiting_oauth", servers:[...]} when authorization is needed,
+    // and the SSE stream may also emit `awaiting_oauth` mid-run. Both paths
+    // are handled inside _doStartRun.
+    _doStartRun(sessionId, secretKey, task, attachmentIds);
   }
 
   function _doStartRun(sessionId, secretKey, task, attachmentIds) {
@@ -785,6 +911,17 @@ document.addEventListener("DOMContentLoaded", function () {
       },
       body: body.toString(),
     }).then(function (response) {
+      if (response.status === 409) {
+        // Either awaiting_oauth (our gate) or "already running"/"changed".
+        // Distinguish by JSON body.
+        return response.json().then(function (d) {
+          if (d && d.status === "awaiting_oauth") {
+            _showOAuthGatePanel(sessionId, secretKey, d.servers || [], task, attachmentIds);
+            return;
+          }
+          throw new Error(d.error || "Run failed");
+        });
+      }
       if (!response.ok) {
         return response.json().then(function (d) { throw new Error(d.error || "Run failed"); });
       }
@@ -924,6 +1061,13 @@ document.addEventListener("DOMContentLoaded", function () {
     } else if (eventName === "error") {
       setRunningState(false);
       appendBubble('<div class="chat-bubble chat-bubble--error">' + (data.message || "Unknown error") + '</div>');
+    } else if (eventName === "awaiting_oauth") {
+      // Mid-run token expiry: surface the same in-history authorization card.
+      var sessionId = activeSessionIdInput ? activeSessionIdInput.value.trim() : "";
+      var secretKey = getSecretKey();
+      if (sessionId && secretKey) {
+        _showOAuthGatePanel(sessionId, secretKey, data.servers || [], "", []);
+      }
     }
   }
 

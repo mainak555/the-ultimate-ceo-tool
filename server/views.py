@@ -15,7 +15,7 @@ from urllib.parse import quote
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from django.http import FileResponse, HttpResponse, StreamingHttpResponse
+from django.http import FileResponse, HttpResponse, JsonResponse, StreamingHttpResponse
 from django.shortcuts import render
 from django.template.loader import render_to_string
 from django.views.decorators.csrf import csrf_exempt
@@ -876,7 +876,7 @@ async def chat_session_run(request, session_id):
     if session is None:
         return _json_error("Session not found", 404)
 
-    valid_states = ("idle", "awaiting_input")
+    valid_states = ("idle", "awaiting_input", "awaiting_oauth")
     if session["status"] not in valid_states:
         return _json_error(f"Session is currently '{session['status']}'", 409)
 
@@ -906,6 +906,30 @@ async def chat_session_run(request, session_id):
     )
     if is_single_assistant_gate and not is_first_run and not task:
         return _json_error("A message is required to continue.", 400)
+
+    # MCP OAuth pre-run gate: any reachable MCP server that requires OAuth and
+    # has no session-scoped Bearer token in Redis blocks the run start. The
+    # session is parked in ``awaiting_oauth`` and the frontend renders the
+    # in-history authorization card. The lease is NOT acquired here.
+    pending_oauth = await asyncio.to_thread(
+        services.compute_pending_oauth_servers, raw_project, session_id
+    )
+    if pending_oauth:
+        await asyncio.to_thread(
+            services.set_session_awaiting_oauth, session_id, pending_oauth
+        )
+        logger.info(
+            "agents.mcp.oauth_gate_blocked",
+            extra={
+                "session_id": session_id,
+                "server_count": len(pending_oauth),
+                "server_names": pending_oauth,
+            },
+        )
+        return JsonResponse(
+            {"status": "awaiting_oauth", "servers": pending_oauth},
+            status=409,
+        )
 
     from agents.session_coordination import (
         SessionCoordinationError,
@@ -1046,8 +1070,29 @@ async def chat_session_run(request, session_id):
                             yield _sse("error", {"message": "Unable to restart: state version mismatch."})
                             return
             except Exception as exc:
-                await asyncio.to_thread(services.set_session_status, session_id, "idle")
                 evict_team(session_id)
+                # If the failure is a missing/expired MCP OAuth token,
+                # re-park the session in awaiting_oauth and surface the same
+                # in-history authorization card via an SSE event so the
+                # frontend swap path is identical to the pre-run gate.
+                pending_oauth_mid = await asyncio.to_thread(
+                    services.compute_pending_oauth_servers, raw_project, session_id
+                )
+                if pending_oauth_mid:
+                    await asyncio.to_thread(
+                        services.set_session_awaiting_oauth, session_id, pending_oauth_mid
+                    )
+                    logger.info(
+                        "agents.mcp.oauth_gate_blocked_midrun",
+                        extra={
+                            "session_id": session_id,
+                            "server_count": len(pending_oauth_mid),
+                            "server_names": pending_oauth_mid,
+                        },
+                    )
+                    yield _sse("awaiting_oauth", {"servers": pending_oauth_mid})
+                    return
+                await asyncio.to_thread(services.set_session_status, session_id, "idle")
                 yield _sse("error", {"message": str(exc)})
                 return
 
@@ -1239,6 +1284,26 @@ async def chat_session_run(request, session_id):
                     "agents.session.run_error",
                     extra={"session_id": session_id, "exc_type": type(exc).__name__},
                 )
+                # Flush any pending messages (user task + partial assistant turns)
+                # so the discussion thread reflects what actually happened before
+                # the failure. Persistence failures here must not mask the
+                # original error, so they are swallowed with a log line.
+                if pending_messages:
+                    try:
+                        await asyncio.to_thread(services.append_messages, session_id, pending_messages)
+                    except Exception:  # noqa: BLE001
+                        logger.exception(
+                            "agents.session.append_messages_failed_on_error",
+                            extra={"session_id": session_id, "pending": len(pending_messages)},
+                        )
+                    pending_messages = []
+                try:
+                    await checkpoint_state()
+                except Exception:  # noqa: BLE001
+                    logger.exception(
+                        "agents.session.checkpoint_failed_on_error",
+                        extra={"session_id": session_id},
+                    )
                 await asyncio.to_thread(services.set_session_status, session_id, "idle")
                 evict_team(session_id)
                 # AutoGen's BaseGroupChat wraps exceptions as:

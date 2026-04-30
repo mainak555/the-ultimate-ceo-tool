@@ -400,9 +400,11 @@ The config form shows the computed redirect URI in the section hint.
 
 1. Parse `access_token` as JWT — use `exp` claim minus current time (if > 60 s).
 2. Fall back to `expires_in` from the token response (integer seconds).
-3. Default to 3600 s.
+3. Default to `MCP_OAUTH_TOKEN_TTL_MAX_SECONDS` (env var, default `43200` = 12 h).
 
-Tokens are stored in Redis with the computed TTL. There is **no mid-session refresh** (v1 limitation). If a token expires during a run, MCP calls return 401. The user must re-authorize for the next run.
+The resolved value is then **capped** at `MCP_OAUTH_TOKEN_TTL_MAX_SECONDS` so a long-lived provider token (e.g. Figma's 90-day refresh-issued tokens) cannot pin the Redis entry beyond the configured ceiling. The pre-run gate re-runs on every `startRun()`, so the cap effectively forces re-auth at most once per cap window — set this to a longer value for kiosk/automation deployments, or shorter (e.g. `3600`) for stricter session hygiene.
+
+Tokens are stored in Redis with the (capped) TTL. There is **no mid-session refresh** (v1 limitation). If a token expires during a run, MCP calls return 401. The user must re-authorize for the next run.
 
 ### Test Authorization mode
 

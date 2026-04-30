@@ -469,90 +469,6 @@ select.input {
   &--error { color: $color-error; }
 }
 
-// MCP OAuth pre-run authorization modal
-.mcp-oauth-modal {
-  &__overlay {
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.45);
-    z-index: 1200;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-
-  &__dialog {
-    background: $color-surface;
-    border-radius: $radius-lg;
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.18);
-    padding: $space-xl;
-    width: 92vw;
-    max-width: 480px;
-    max-height: 80vh;
-    overflow-y: auto;
-  }
-
-  &__header {
-    margin-bottom: $space-md;
-  }
-
-  &__title {
-    font-size: $font-size-lg;
-    font-weight: 700;
-    margin: 0 0 $space-xs;
-    color: $color-text;
-  }
-
-  &__subtitle {
-    font-size: $font-size-sm;
-    color: $color-text-muted;
-    margin: 0;
-  }
-
-  &__server-list {
-    list-style: none;
-    padding: 0;
-    margin: 0 0 $space-md;
-    display: flex;
-    flex-direction: column;
-    gap: $space-xs;
-  }
-
-  &__server {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: $space-sm $space-md;
-    border: 1px solid $color-border;
-    border-radius: $radius;
-    background: lighten($color-bg, 1.5%);
-
-    &--authorized {
-      border-color: $color-success;
-      background: lighten($color-success, 52%);
-    }
-  }
-
-  &__server-name {
-    font-weight: 500;
-    font-size: $font-size-sm;
-  }
-
-  &__authorize-btn {
-    &:disabled {
-      color: $color-success;
-      border-color: $color-success;
-      cursor: default;
-      opacity: 1;
-    }
-  }
-
-  &__footer {
-    display: flex;
-    justify-content: flex-end;
-  }
-}
-
 // MCP OAuth shared outcome page (oauth_flow.html — popup window)
 .oauth-flow {
   min-height: 100vh;
@@ -2045,6 +1961,78 @@ select.input {
     display: flex;
     gap: $space-sm;
     flex-wrap: wrap;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// MCP OAuth in-history authorization panel (chat_session_history.html)
+// Mirrors .chat-restart-panel rhythm; tokens only.
+// ---------------------------------------------------------------------------
+.chat-oauth-panel {
+  margin: $space-md;
+  padding: $space-md;
+  background: lighten($color-bg, 1.5%);
+  border: 1px solid $color-border;
+  border-left: 4px solid $color-primary;
+  border-radius: $radius;
+
+  &__title {
+    font-size: $font-size-base;
+    font-weight: 700;
+    color: $color-text;
+    margin-bottom: $space-xs;
+  }
+
+  &__hint {
+    font-size: $font-size-sm;
+    color: $color-text-muted;
+    line-height: 1.5;
+    margin-bottom: $space-sm;
+  }
+
+  &__rows {
+    display: flex;
+    flex-direction: column;
+    gap: $space-xs;
+  }
+
+  &__row {
+    display: grid;
+    grid-template-columns: 1fr auto auto;
+    align-items: center;
+    gap: $space-sm;
+    padding: $space-sm $space-md;
+    background: $color-surface;
+    border: 1px solid $color-border;
+    border-radius: $radius;
+
+    &--authorized {
+      border-color: $color-success;
+    }
+  }
+
+  &__server {
+    font-weight: 500;
+    font-size: $font-size-sm;
+    color: $color-text;
+  }
+
+  &__status {
+    font-size: $font-size-sm;
+    padding: 2px $space-xs;
+    border-radius: $radius;
+
+    &--pending {
+      color: $color-text-muted;
+      background: $color-bg;
+      border: 1px solid $color-border;
+    }
+
+    &--authorized {
+      color: $color-success;
+      background: transparent;
+      border: 1px solid $color-success;
+    }
   }
 }
 

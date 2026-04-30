@@ -5,7 +5,9 @@ Three views, generic-page design:
 
   mcp_oauth_check   GET  /mcp/oauth/check/<session_id>/
       Returns {servers: [{server_name, label, authorized}], all_authorized: bool}.
-      Called by the frontend pre-run gate (home.js → McpOAuth.checkAndAuthorize).
+      Used by the in-history authorization panel (home.js polling fallback)
+      to flip rows to authorized state when postMessage from the popup is
+      blocked or missed.
 
   mcp_oauth_start   GET  /mcp/oauth/start/
       One entry point for both phases. Discriminated by `flow` query param:
@@ -43,6 +45,7 @@ from django.urls import reverse
 from django.views.decorators.http import require_GET
 
 from agents.session_coordination import (
+    MCP_OAUTH_TOKEN_TTL_MAX_SECONDS,
     get_and_delete_mcp_oauth_state,
     get_mcp_oauth_token,
     set_mcp_oauth_state,
@@ -104,7 +107,10 @@ def _extract_token_ttl(token_response: dict) -> int:
     Priority:
     1. JWT 'exp' claim in access_token (if it decodes without signature verify).
     2. 'expires_in' field (integer seconds).
-    3. Default 3600s.
+    3. Env-configurable default MCP_OAUTH_TOKEN_TTL_MAX_SECONDS (default 12 h).
+
+    The returned value is further capped to MCP_OAUTH_TOKEN_TTL_MAX_SECONDS
+    inside agents/session_coordination.py::set_mcp_oauth_token().
     """
     access_token = token_response.get("access_token", "")
     if access_token and access_token.count(".") == 2:
@@ -129,7 +135,7 @@ def _extract_token_ttl(token_response: dict) -> int:
         except (TypeError, ValueError):
             pass
 
-    return 3600
+    return MCP_OAUTH_TOKEN_TTL_MAX_SECONDS
 
 
 def _post_message_for(flow: str, server_name: str, success: bool) -> dict:
@@ -194,28 +200,23 @@ def mcp_oauth_check(request, session_id):
     if not _has_valid_secret(request):
         return JsonResponse({"error": "Unauthorized"}, status=403)
 
-    from .db import get_collection, CHAT_SESSIONS_COLLECTION
+    from .services import get_chat_session
 
-    try:
-        session_col = get_collection(CHAT_SESSIONS_COLLECTION)
-        session_doc = session_col.find_one({"session_id": session_id})
-    except Exception:  # noqa: BLE001
-        return JsonResponse({"error": "Session not found"}, status=404)
-
+    session_doc = get_chat_session(session_id)
     if not session_doc:
         return JsonResponse({"error": "Session not found"}, status=404)
 
     project_id = session_doc.get("project_id", "")
     if not project_id:
-        return JsonResponse({"servers": [], "all_authorized": True})
+        return JsonResponse({"servers": [], "all_authorized": True, "project_id": ""})
 
     project_raw = get_project_raw(project_id)
     if not project_raw:
-        return JsonResponse({"servers": [], "all_authorized": True})
+        return JsonResponse({"servers": [], "all_authorized": True, "project_id": project_id})
 
     oauth_configs = project_raw.get("mcp_oauth_configs") or {}
     if not oauth_configs:
-        return JsonResponse({"servers": [], "all_authorized": True})
+        return JsonResponse({"servers": [], "all_authorized": True, "project_id": project_id})
 
     servers = []
     for server_name in oauth_configs:
@@ -227,7 +228,11 @@ def mcp_oauth_check(request, session_id):
         })
 
     all_authorized = all(s["authorized"] for s in servers)
-    return JsonResponse({"servers": servers, "all_authorized": all_authorized})
+    return JsonResponse({
+        "servers": servers,
+        "all_authorized": all_authorized,
+        "project_id": project_id,
+    })
 
 
 # ---------------------------------------------------------------------------

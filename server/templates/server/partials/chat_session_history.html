@@ -112,6 +112,33 @@
 {% endif %}
 {% endif %}
 
+{% if session.status == "awaiting_oauth" and session.pending_oauth_servers %}
+  <div class="chat-oauth-panel"
+       data-session-id="{{ session.session_id }}"
+       data-project-id="{{ session.project_id }}"
+       data-pending="{{ session.pending_oauth_servers|join:',' }}">
+    <div class="chat-oauth-panel__title">&#x1F510; MCP authorization required</div>
+    <p class="chat-oauth-panel__hint">
+      One or more MCP servers used by this project require OAuth authorization
+      for this session. Authorize each server below; the run will resume
+      automatically once all are connected.
+    </p>
+    <div class="chat-oauth-panel__rows">
+      {% for server_name in session.pending_oauth_servers %}
+        <div class="chat-oauth-panel__row" data-server-name="{{ server_name }}">
+          <span class="chat-oauth-panel__server">{{ server_name }}</span>
+          <span class="chat-oauth-panel__status chat-oauth-panel__status--pending">Pending</span>
+          <button type="button"
+                  class="btn btn--primary chat-oauth-authorize-btn"
+                  data-server-name="{{ server_name }}">
+            Authorize
+          </button>
+        </div>
+      {% endfor %}
+    </div>
+  </div>
+{% endif %}
+
 {% if session.has_agent_state %}
 {% if session.status == "completed" or session.status == "stopped" %}
   <div class="chat-restart-panel" data-session-id="{{ session.session_id }}">
