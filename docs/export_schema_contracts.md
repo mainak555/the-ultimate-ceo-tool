@@ -46,3 +46,9 @@ Code and documentation changes must land in the same PR.
 
 - Trello: documented in `README.md` and `docs/trello_integration.md`
 - Jira Software: documented in `README.md` and `docs/jira_integration.md`
+
+## MCP Credential Injection
+
+When a provider's extraction agent or push logic requires credentials from an MCP server (for example a private API accessed via a shared MCP tool), those credentials must **not** be embedded in the extraction prompt or push payload. Instead, document in the provider integration doc that the relevant MCP server must be configured under `shared_mcp_tools` or the agent's `mcp_configuration`, and that secrets are managed via the project `mcp_secrets` placeholder contract.
+
+See [docs/mcp_integration.md](docs/mcp_integration.md) for the full MCP secrets, placeholder substitution, and OAuth 2.0 token injection reference.

@@ -179,14 +179,26 @@ Order of operations in `agents/team_builder.py::build_team()`:
    `mcpServers` dict based on scope.
 2. `build_mcp_workbenches()` constructs one `McpWorkbench` per server entry
    (mapping to `StdioServerParams` or `StreamableHttpServerParams`).
-3. The workbenches are passed to `AssistantAgent(workbench=...)` (single
-   workbench passed directly, multiple as a list).
+3. The workbenches are passed to `AssistantAgent(workbench=..., reflect_on_tool_use=True)` (single
+   workbench passed directly, multiple as a list). **`reflect_on_tool_use=True` is mandatory** on every agent that receives a workbench — without it AutoGen returns a raw `ToolCallSummaryMessage` after tool execution that is invisible in SSE chat and generates no `LLMCallEvent` OTel span.
 4. The accumulated workbenches are stashed under `project["_runtime"]
    ["mcp_workbenches"]` so the runtime cache can register them.
 5. `agents/runtime.py::get_or_create_team()` calls
    `register_session_workbenches(session_id, workbenches)`.
 6. `evict_team(session_id)` calls `close_session_workbenches(session_id)`,
    which awaits `wb.stop()` on each workbench.
+
+**Thread-pool safety of `close_session_workbenches`**: eviction may be called
+from a Django thread-pool thread (e.g. `ThreadPoolExecutor`) where there is no
+running event loop. The function uses `asyncio.get_running_loop()` (not the
+deprecated `get_event_loop()`) to detect the async context:
+- If a loop is running → `loop.create_task(_stop_all())` (fire-and-forget).
+- If no loop is running (thread context) → `asyncio.run(_stop_all())`.
+
+**Never-started workbenches**: a workbench that was constructed but whose
+`start()` was never called (e.g. an agent that was evicted before its first
+run) raises `TypeError` when awaited inside `stop()`. This is treated as a
+silent no-op, not an error.
 
 ## Observability
 
@@ -314,3 +326,194 @@ When using the sidecar topology, agents reference servers via:
 2. Update `_build_server_params()` in `agents/mcp_tools.py`.
 3. Update this doc + [`.agents/skills/mcp_tool_integration/SKILL.md`](../.agents/skills/mcp_tool_integration/SKILL.md).
 4. Document any deployment implications in `deployments/README.md`.
+
+---
+
+## OAuth 2.0 Authorization for HTTP MCP Servers
+
+Some HTTP MCP servers require a Bearer token obtained via OAuth 2.0 (Authorization Code + PKCE).  
+The project-level `mcp_oauth_configs` dict stores app registration details, and a pre-run gate
+ensures tokens are present in Redis before the agent team is built.
+
+### Data model
+
+```json
+{
+  "mcp_oauth_configs": {
+    "<server_name>": {
+      "auth_url":      "https://provider.example.com/oauth/authorize",
+      "token_url":     "https://provider.example.com/oauth/token",
+      "client_id":     "app-client-id",
+      "client_secret": "••••••••",
+      "scopes":        "read write"
+    }
+  }
+}
+```
+
+- `server_name` must match a key in `mcpServers` (shared or dedicated config). Orphan keys raise `ValueError` at save time.
+- `client_secret` uses the SECRET_MASK round-trip — stored masked in normalized docs, restored from DB on save, never sent to the browser after first save.
+- `auth_url` is the provider's authorization endpoint (user consent page). `token_url` is the provider's token endpoint (server-to-server POST). These are always two different URLs.
+- `scopes` is optional; space-separated.
+
+### Endpoints
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/mcp/oauth/start/` | Start OAuth flow — generates PKCE pair, stores state, redirects to `auth_url`. Discriminated by `?flow=test` (Project Config Test button) or `?flow=run` (pre-run authorize) |
+| GET | `/mcp/oauth/callback/` | Provider callback — exchanges code for token, renders shared `oauth_flow.html` outcome page (postMessage + auto-close) |
+| GET | `/mcp/oauth/check/<session_id>/` | Pre-run check — returns authorization status for all OAuth servers |
+
+### PKCE flow sequence
+
+```
+User browser (popup)            Backend                      OAuth provider
+      |                            |                               |
+      |-- GET /mcp/oauth/start/?flow=run&server_name=...&session_id=...&skey=... -->|
+      |                            | generate code_verifier, code_challenge    |
+      |                            | store {state → metadata} in Redis (300s)  |
+      |<-- 302 redirect to auth_url?response_type=code&...&code_challenge=... -|
+      |------- user grants consent ----------------------------------------->|
+      |<-- 302 redirect to /mcp/oauth/callback/?code=...&state=... -----------|
+      |-- GET /mcp/oauth/callback/?code=...&state=... --->|
+      |                            | get_and_delete_mcp_oauth_state(state)     |
+      |                            | POST token_url code + code_verifier       |
+      |                            |----------- exchange code for token ------>|
+      |                            |<----------- {access_token, expires_in} ---|
+      |                            | set_mcp_oauth_token(session_id, ...)      |
+      |<-- popup page: postMessage({type:"mcp_oauth_done"}) + window.close() -|
+```
+
+### Callback URL registration
+
+You must register the exact callback URL with your OAuth provider before using this feature:
+
+```
+{BASE_URL}/mcp/oauth/callback/
+```
+
+Example: `https://your-domain.com/mcp/oauth/callback/`
+
+The config form shows the computed redirect URI in the section hint.
+
+### Token TTL derivation
+
+The token endpoint response is a JWT. The backend decodes the payload (no signature
+verification — the token endpoint is TLS-protected) and reads the `exp` UTC epoch claim:
+
+```
+TTL = exp − now(UTC)
+```
+
+The Redis key is set with this exact TTL, so it expires precisely when the Bearer
+token does. Cache hits during an active session are always valid without any
+additional checks.
+
+If the JWT cannot be decoded or `exp` is absent, the TTL falls back to a hardcoded
+**3 h** (`_MCP_OAUTH_DEFAULT_TTL`). No external env-var cap is applied.
+
+Tokens are stored in Redis with the derived TTL. There is **no mid-session refresh** (v1 limitation). If a token expires during a run, MCP calls return 401. The user must re-authorize for the next run.
+
+### Test Authorization mode
+
+The config form "Test Authorization" button opens the OAuth flow with `?flow=test` and a `project_id` scope (no `session_id`). On success a short-lived (600 s) status flag is written to Redis. This validates app credentials without starting a run; **no run-time session token is injected**.
+
+### Popup secret-key handoff
+
+`/mcp/oauth/start/` is reachable from a `window.open()` popup, which cannot set custom request headers. The endpoint therefore accepts the admin secret either as the `X-App-Secret-Key` header **or** as a `?skey=<APP_SECRET_KEY>` query parameter (`_has_valid_oauth_secret()` in `server/mcp_views.py`). All other MCP endpoints remain header-only. Because `?skey=` lands in browser history and may appear in HTTP server access logs, deployments must:
+
+- terminate TLS in front of the app,
+- scrub query strings from access logs (or accept the leak as in-scope for an admin-only deployment),
+- never share an OAuth start URL outside the operator's own browser session.
+
+### Outcome page
+
+Both success and error branches of `/mcp/oauth/callback/` render the shared `server/templates/server/oauth_flow.html` popup. The template:
+
+- posts `{type, flow, server_name, status, message}` to `window.opener` so the parent page (config form or pre-run modal) can react immediately,
+- shows a countdown and a manual **Close** button,
+- auto-closes after 2 s on `flow=run` success, 5 s on `flow=test` success, and **30 s on error** (long enough to read the provider's error message before the window disappears).
+
+### Pre-run and mid-run OAuth gate
+
+The gate is **server-driven** — no client-side pre-check occurs before the run POST.
+
+**Pre-run flow:**
+
+1. `home.js::_doStartRun()` posts to `POST /chat/sessions/<id>/run/`.
+2. The backend calls `compute_pending_oauth_servers(raw_project, session_id)`, which intersects the project's `mcp_oauth_configs` keys with the MCP server names reachable by active agents (shared + dedicated scopes), then checks Redis for session-scoped Bearer tokens.
+3. If any server lacks a token the backend returns **HTTP 409** `{"status": "awaiting_oauth", "servers": [...]}` and sets `session.status = "awaiting_oauth"` in MongoDB.
+4. The frontend detects the 409 and calls `_showOAuthGatePanel(sessionId, secretKey, servers, replayTask, replayAttachmentIds)`, which renders a `.chat-oauth-panel` in-history card (not a modal overlay) with one **Authorize** button per server.
+5. Clicking **Authorize** calls `window.McpOAuth.openAuthPopup(serverName, sessionId, projectId, secretKey)`, opening the consent popup.
+6. The popup's `oauth_flow.html` outcome page posts `{type: "mcp_oauth_done", success: true, server_name}` to the parent window via `postMessage`.
+7. The parent marks the row authorized; when all rows are authorized, `_onAllAuthorized()` calls `_doStartRun()` again — the server re-checks Redis and proceeds normally.
+8. **Popup-blocker fallback:** a 3 s polling timer calls `McpOAuth.fetchStatus(sessionId, secretKey)` (`GET /mcp/oauth/check/<sessionId>/`) to detect tokens written by the callback; marks rows and triggers `_onAllAuthorized()` the same way.
+
+`window.McpOAuth` exposes only `openAuthPopup()` and `fetchStatus()`. `checkAndAuthorize` does not exist.
+
+**Mid-run gate:**
+
+If a token expires between turns during a run, the SSE stream emits:
+
+```
+event: awaiting_oauth
+data: {"servers": ["server-name", ...]}
+```
+
+The frontend handles this in the SSE pump loop by calling `_showOAuthGatePanel()` with empty `replayTask` and `replayAttachmentIds`. Once all servers are re-authorized, `_onAllAuthorized()` replays `_doStartRun()` automatically. There is no mid-session token refresh without user action (v1 limitation).
+
+### Runtime injection
+
+`agents/mcp_tools.py::_build_server_params()` merges `Authorization: Bearer <token>` into the `StreamableHttpServerParams.headers` dict when `has_oauth=True` and `session_id` is provided. A missing token raises `ValueError` (surfaced as a run error).
+
+### Redis key scheme
+
+| Purpose | Key pattern |
+|---------|-------------|
+| Session-scoped run token | `{ns}:mcp_oauth:run:{session_id}:{server_name}:token` |
+| PKCE state (one-time) | `{ns}:mcp_oauth_state:{state}:meta` (300 s TTL) |
+| Test authorization result | `{ns}:mcp_oauth:test:{project_id}:{server_name}:status` (600 s TTL) |
+
+### Session cleanup
+
+`purge_mcp_oauth_tokens(session_id)` is called when a chat session is deleted. It uses SCAN to remove all `{ns}:mcp_oauth:run:{session_id}:*:token` keys.
+
+### Observability — OAuth flow
+
+Logger: `server.mcp_views`. Every branch of the start + callback handlers emits a structured event so opaque popup-window failures are diagnosable from the server console alone. Secrets (`code`, `code_verifier`, `client_secret`, `access_token`, `?skey=` value) are **never** logged.
+
+| Event | Level | When |
+|---|---|---|
+| `agents.mcp.oauth_start` | INFO | Start handler entered with valid params; PKCE state written to Redis. |
+| `agents.mcp.oauth_callback_received` | INFO | Callback entered; logs `has_code`, `has_state`, `state_prefix` (first 8 chars), provider `error` / `error_description`. |
+| `agents.mcp.oauth_callback_provider_error` | WARN | Provider returned an `error=` query param (consent denied, invalid scope, etc.). |
+| `agents.mcp.oauth_callback_state_missing` | WARN | Redis miss on `state` — TTL expired or already consumed. Most common silent failure. |
+| `agents.mcp.oauth_callback_state_recovered` | INFO | Redis returned PKCE metadata; logs `flow`, `server_name`, `project_id`, `session_id`. |
+| `agents.mcp.oauth_token_exchange_start` | INFO | About to POST `token_url`. |
+| `agents.mcp.oauth_token_exchange_network_error` | EXCEPTION | `requests.RequestException` (DNS, timeout, TLS). |
+| `agents.mcp.oauth_token_exchange_http_error` | WARN | Non-2xx from token endpoint; logs `status_code`, provider `error` / `error_description`, and a 500-char body snippet. |
+| `agents.mcp.oauth_token_exchange_ok` | INFO | 2xx with `access_token`; logs `ttl_seconds`, `token_type`. |
+| `agents.mcp.oauth_token_missing` | WARN | 2xx but no `access_token` field; logs `response_keys`. |
+| `agents.mcp.oauth_test_authorized` | INFO | `flow=test` success — Redis status flag written. |
+| `agents.mcp.oauth_authorized` | INFO | `flow=run` success — session token written; logs `ttl_seconds`. |
+| `agents.mcp.oauth_gate_blocked` | INFO | Pre-run gate fired: `compute_pending_oauth_servers` found ≥1 server without a Redis token; backend returned 409; `session.status` set to `awaiting_oauth`. |
+| `agents.mcp.oauth_gate_blocked_midrun` | INFO | Same check triggered between turns; SSE `awaiting_oauth` event emitted; run paused pending re-authorization. |
+| `agents.mcp.oauth_token_store_failed` | WARN | Redis `SET` of the session-scoped token key failed (Redis unavailable or serialization error). |
+
+Tracing: three nested OTel spans per OAuth round-trip:
+
+```
+mcp.oauth.start                       [start handler]
+  └─ HTTP GET /mcp/oauth/start/        [auto · OTEL_INSTRUMENT_HTTP]
+
+mcp.oauth.callback                    [callback handler]
+  ├─ attrs: flow, server_name, has_code, has_state, state_recovered
+  └─ mcp.oauth.token_exchange         [child span around requests.post]
+     ├─ attrs: token_url, server_name, flow, http.status_code,
+     │         mcp.oauth.token_ttl_seconds (on success)
+     └─ output.value                  [500-char body snippet on non-2xx,
+                                       redacted via set_payload_attribute]
+```
+
+Spans are emitted via `core/tracing.py::traced_block()` and follow the standard redaction + truncation contract. The token-exchange POST itself is also picked up by `OTEL_INSTRUMENT_HTTP` as a sibling outbound HTTP span in the same trace.
+

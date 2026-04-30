@@ -128,15 +128,43 @@ def _resolve_stdio_command(server_name: str, command: str, env: dict | None = No
     )
 
 
-def _build_server_params(name: str, entry: dict):
-    """Map a validated mcpServers[name] entry to autogen_ext server params."""
+def _build_server_params(
+    name: str,
+    entry: dict,
+    session_id: str | None = None,
+    has_oauth: bool = False,
+):
+    """Map a validated mcpServers[name] entry to autogen_ext server params.
+
+    When ``has_oauth=True`` the project carries an OAuth 2.0 app registration
+    for this server.  If a session-scoped Bearer token is stored in Redis it is
+    merged into the outbound headers.  A missing token raises ValueError with a
+    clear message so the caller can surface it before the run starts.
+    """
     from autogen_ext.tools.mcp import StdioServerParams, StreamableHttpServerParams
 
     transport = (entry.get("transport") or "").strip().lower()
     if transport == "http" or "url" in entry:
+        headers: dict = dict(entry.get("headers") or {})
+
+        if has_oauth:
+            if not session_id:
+                raise ValueError(
+                    f"MCP server '{name}' requires OAuth authorization but no session_id "
+                    "was provided at team-build time. This is a programming error."
+                )
+            from .session_coordination import get_mcp_oauth_token
+            token = get_mcp_oauth_token(session_id, name)
+            if not token:
+                raise ValueError(
+                    f"MCP server '{name}' requires OAuth authorization. "
+                    "Please authorize via the chat run prompt before starting a run."
+                )
+            headers["Authorization"] = f"Bearer {token}"
+
         return StreamableHttpServerParams(
             url=entry["url"],
-            headers=entry.get("headers") or None,
+            headers=headers if headers else None,
         )
     resolved_command = _resolve_stdio_command(
         server_name=name,
@@ -171,7 +199,13 @@ def resolve_mcp_servers_for_agent(agent_cfg: dict, project: dict) -> dict:
 
 
 @traced_function("agents.mcp.workbench_built")
-def build_mcp_workbenches(servers: dict, scope: str, secrets: dict | None = None) -> list[Any]:
+def build_mcp_workbenches(
+    servers: dict,
+    scope: str,
+    secrets: dict | None = None,
+    session_id: str | None = None,
+    oauth_configs: dict | None = None,
+) -> list[Any]:
     """
     Construct one `McpWorkbench` per server entry. The workbenches are NOT
     started here — autogen lazily starts each workbench on first tool call,
@@ -183,6 +217,12 @@ def build_mcp_workbenches(servers: dict, scope: str, secrets: dict | None = None
     fingerprint reported in logs is computed over the **placeholder** dict so
     it stays stable when secret values rotate and never carries credentials.
 
+    `oauth_configs` (project-level `mcp_oauth_configs`) indicate which HTTP
+    servers require OAuth Bearer token injection.  When a matching session-scoped
+    token exists in Redis it is merged into the Authorization header.  A missing
+    token raises ValueError so the pre-run gate can surface the error before
+    AutoGen starts.
+
     Returns an empty list if `servers` is empty.
     """
     if not servers:
@@ -192,12 +232,16 @@ def build_mcp_workbenches(servers: dict, scope: str, secrets: dict | None = None
 
     fingerprint = _server_fingerprint(servers)
     secrets = secrets or {}
+    oauth_configs = oauth_configs or {}
 
     workbenches: list[Any] = []
     server_names: list[str] = []
     for name, entry in servers.items():
         resolved_entry = _substitute_secrets(entry, secrets)
-        params = _build_server_params(name, resolved_entry)
+        has_oauth = name in oauth_configs
+        params = _build_server_params(
+            name, resolved_entry, session_id=session_id, has_oauth=has_oauth
+        )
         workbenches.append(McpWorkbench(server_params=params))
         server_names.append(name)
 
@@ -231,10 +275,14 @@ def close_session_workbenches(session_id: str) -> None:
         for wb in workbenches:
             try:
                 await asyncio.wait_for(wb.stop(), timeout=timeout_s)
-            except RuntimeError as exc:
+            except (RuntimeError, TypeError) as exc:
                 # Lazy-started workbenches may never have been started in a
-                # session. Stopping those should be a no-op, not an error.
-                if "not started" in str(exc).lower():
+                # session — stopping them is a no-op, not an error.
+                # RuntimeError("not started"): workbench started but not run.
+                # TypeError(NoneType await): actor_task is None because the
+                # workbench was constructed but wb.start() was never called.
+                msg = str(exc).lower()
+                if "not started" in msg or "nonetype" in msg:
                     continue
                 logger.exception(
                     "agents.mcp.failed",
@@ -252,12 +300,12 @@ def close_session_workbenches(session_id: str) -> None:
                 )
 
     try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            # Schedule and forget — eviction is fire-and-forget by design.
-            loop.create_task(_stop_all())
-        else:
-            loop.run_until_complete(_stop_all())
+        # get_running_loop() raises RuntimeError when called outside an async
+        # context (e.g. a ThreadPoolExecutor thread). That is the signal to
+        # spin up a fresh event loop via asyncio.run().
+        loop = asyncio.get_running_loop()
+        # Already inside a running loop — schedule and forget.
+        loop.create_task(_stop_all())
     except RuntimeError:
         asyncio.run(_stop_all())
 

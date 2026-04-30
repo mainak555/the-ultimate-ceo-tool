@@ -149,6 +149,51 @@ def _mask_mcp_secrets(raw):
     return {k: SECRET_MASK for k in raw.keys() if isinstance(k, str) and k}
 
 
+def _mask_mcp_oauth_configs(raw):
+    """Return a copy of mcp_oauth_configs with client_secret replaced by SECRET_MASK."""
+    if not isinstance(raw, dict):
+        return {}
+    masked = {}
+    for server_name, cfg in raw.items():
+        if not isinstance(cfg, dict):
+            continue
+        masked[server_name] = {
+            "auth_url": cfg.get("auth_url", ""),
+            "token_url": cfg.get("token_url", ""),
+            "client_id": cfg.get("client_id", ""),
+            "client_secret": SECRET_MASK if cfg.get("client_secret") else "",
+            "scopes": cfg.get("scopes", ""),
+        }
+    return masked
+
+
+def _restore_masked_mcp_oauth_configs(submitted, existing_configs):
+    """
+    For each server_name in submitted mcp_oauth_configs, if client_secret is
+    SECRET_MASK restore it from existing_configs. Keys absent from submitted
+    are treated as user deletions and dropped (not restored).
+    """
+    if not isinstance(submitted, dict):
+        return {}
+    existing_configs = existing_configs or {}
+    restored = {}
+    for server_name, cfg in submitted.items():
+        if not isinstance(cfg, dict):
+            continue
+        existing_entry = existing_configs.get(server_name) or {}
+        secret = cfg.get("client_secret", "")
+        if secret == SECRET_MASK:
+            secret = existing_entry.get("client_secret", "")
+        restored[server_name] = {
+            "auth_url": cfg.get("auth_url", ""),
+            "token_url": cfg.get("token_url", ""),
+            "client_id": cfg.get("client_id", ""),
+            "client_secret": secret,
+            "scopes": cfg.get("scopes", ""),
+        }
+    return restored
+
+
 def _normalize_export_agents(raw_trello, raw_integrations):
     """Return a list of export agent names, migrating legacy single-string field."""
     raw_ea = raw_trello.get("export_agents")
@@ -315,6 +360,7 @@ def normalize_project(project):
         "integrations": integrations,
         "shared_mcp_tools": _normalize_mcp_dict(project.get("shared_mcp_tools")),
         "mcp_secrets": _mask_mcp_secrets(project.get("mcp_secrets")),
+        "mcp_oauth_configs": _mask_mcp_oauth_configs(project.get("mcp_oauth_configs")),
         "has_chat_sessions": False,
     }
 
@@ -513,6 +559,13 @@ def _restore_masked_secrets(data, existing):
                     # would otherwise reject empty value).
                     mcp_secrets.pop(key, None)
 
+    # MCP OAuth configs — restore masked client_secrets per server_name.
+    mcp_oauth_submitted = data.get("mcp_oauth_configs")
+    if isinstance(mcp_oauth_submitted, dict):
+        data["mcp_oauth_configs"] = _restore_masked_mcp_oauth_configs(
+            mcp_oauth_submitted, existing.get("mcp_oauth_configs") or {}
+        )
+
 
 @traced_function("service.project.delete")
 def delete_project(project_id):
@@ -657,6 +710,9 @@ def normalize_chat_session(doc):
             "version": agent_state.get("version", ""),
             "saved_at": _coerce_dt_to_iso(agent_state.get("saved_at", "")),
         }
+    pending_oauth = doc.get("pending_oauth_servers") or []
+    if not isinstance(pending_oauth, list):
+        pending_oauth = []
     return {
         "session_id": str(doc["_id"]),
         "project_id": doc.get("project_id", ""),
@@ -667,6 +723,7 @@ def normalize_chat_session(doc):
         "current_round": doc.get("current_round", 0),
         "has_agent_state": isinstance(agent_state, dict) and isinstance(agent_state.get("state"), dict),
         "agent_state_meta": state_meta,
+        "pending_oauth_servers": [str(s) for s in pending_oauth if isinstance(s, str)],
     }
 
 
@@ -735,7 +792,10 @@ def set_session_status(session_id, status):
 
 @traced_function("service.chat.try_set_running")
 def try_set_session_running(session_id):
-    """Atomically set status to running only from idle/awaiting_input."""
+    """Atomically set status to running only from idle/awaiting_input/awaiting_oauth.
+
+    Also clears any ``pending_oauth_servers`` left over from an awaiting_oauth gate.
+    """
     try:
         oid = ObjectId(session_id)
     except (InvalidId, TypeError):
@@ -743,10 +803,71 @@ def try_set_session_running(session_id):
 
     col = get_collection(CHAT_SESSIONS_COLLECTION)
     result = col.update_one(
-        {"_id": oid, "status": {"$in": ["idle", "awaiting_input"]}},
-        {"$set": {"status": "running"}},
+        {"_id": oid, "status": {"$in": ["idle", "awaiting_input", "awaiting_oauth"]}},
+        {"$set": {"status": "running"}, "$unset": {"pending_oauth_servers": ""}},
     )
     return result.modified_count == 1
+
+
+@traced_function("service.chat.set_awaiting_oauth")
+def set_session_awaiting_oauth(session_id, server_names):
+    """Mark a chat session as awaiting MCP OAuth authorization.
+
+    Stores the pending server-name list and flips ``status`` to ``awaiting_oauth``.
+    Idempotent. Caller is responsible for ordering the server names.
+    """
+    try:
+        oid = ObjectId(session_id)
+    except (InvalidId, TypeError):
+        return
+    names = [str(s) for s in (server_names or []) if isinstance(s, str)]
+    col = get_collection(CHAT_SESSIONS_COLLECTION)
+    col.update_one(
+        {"_id": oid},
+        {"$set": {"status": "awaiting_oauth", "pending_oauth_servers": names}},
+    )
+
+
+def compute_pending_oauth_servers(raw_project, session_id):
+    """Return the list of MCP server names that are reachable by this run,
+    require OAuth, and have no session-scoped Bearer token in Redis.
+
+    ``raw_project`` must be the unmasked project dict (from ``get_project_raw``)
+    so that ``mcp_oauth_configs`` and ``mcpServers`` keys are visible.
+    """
+    if not isinstance(raw_project, dict) or not session_id:
+        return []
+    oauth_configs = raw_project.get("mcp_oauth_configs") or {}
+    if not isinstance(oauth_configs, dict) or not oauth_configs:
+        return []
+
+    reachable: set[str] = set()
+    agents = raw_project.get("agents") or []
+    has_shared = False
+    for agent in agents:
+        if not isinstance(agent, dict):
+            continue
+        scope = (agent.get("mcp_tools") or "none").strip().lower()
+        if scope == "shared":
+            has_shared = True
+        elif scope == "dedicated":
+            cfg = agent.get("mcp_configuration") or {}
+            servers = (cfg or {}).get("mcpServers") or {}
+            if isinstance(servers, dict):
+                reachable.update(servers.keys())
+    if has_shared:
+        shared_cfg = raw_project.get("shared_mcp_tools") or {}
+        shared_servers = (shared_cfg or {}).get("mcpServers") or {}
+        if isinstance(shared_servers, dict):
+            reachable.update(shared_servers.keys())
+
+    needs_auth = sorted(reachable.intersection(oauth_configs.keys()))
+    if not needs_auth:
+        return []
+
+    from agents.session_coordination import list_authorized_oauth_servers
+    authorized = set(list_authorized_oauth_servers(session_id, needs_auth))
+    return [name for name in needs_auth if name not in authorized]
 
 
 @traced_function("service.chat.append_messages")

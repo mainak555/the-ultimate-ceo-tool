@@ -434,6 +434,126 @@ select.input {
   }
 }
 
+// MCP OAuth App Registration rows
+.mcp-oauth-configs {
+  &__row {
+    margin-left: $space-md;
+    padding-right: $space-sm;
+    border: 1px solid $color-border;
+    border-radius: $radius;
+    padding: $space-sm $space-md;
+    margin-bottom: $space-sm;
+    background: lighten($color-bg, 1.5%);
+  }
+
+  &__row-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: $space-sm;
+  }
+
+  &__row-actions {
+    display: flex;
+    align-items: center;
+    gap: $space-sm;
+  }
+}
+
+// OAuth status badge (config form — Test Authorization result)
+.mcp-oauth-status {
+  font-size: $font-size-sm;
+  font-weight: 600;
+
+  &--ok    { color: $color-success; }
+  &--error { color: $color-error; }
+}
+
+// MCP OAuth shared outcome page (oauth_flow.html — popup window)
+.oauth-flow {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: $space-lg;
+  background: $color-bg;
+
+  &__card {
+    background: $color-surface;
+    border: 1px solid $color-border;
+    border-radius: $radius-lg;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.10);
+    padding: $space-xl;
+    width: 100%;
+    max-width: 480px;
+    text-align: center;
+    border-top: 4px solid $color-border;
+
+    &--success { border-top-color: $color-success; }
+    &--error   { border-top-color: $color-error;   }
+  }
+
+  &__icon {
+    font-size: 3rem;
+    line-height: 1;
+    margin-bottom: $space-sm;
+
+    .oauth-flow__card--success & { color: $color-success; }
+    .oauth-flow__card--error   & { color: $color-error;   }
+  }
+
+  &__title {
+    font-size: $font-size-lg;
+    font-weight: 700;
+    margin: 0 0 $space-md;
+    color: $color-text;
+  }
+
+  &__server {
+    font-size: $font-size-sm;
+    color: $color-text-muted;
+    margin: 0 0 $space-md;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: $space-xs;
+    flex-wrap: wrap;
+  }
+
+  &__server-label { color: $color-text-muted; }
+
+  &__flow-badge {
+    display: inline-block;
+    font-size: 0.6875rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 2px $space-xs;
+    border-radius: $radius;
+    border: 1px solid $color-border;
+    background: lighten($color-bg, 2%);
+    color: $color-text-muted;
+  }
+
+  &__message {
+    font-size: $font-size-sm;
+    color: $color-text;
+    margin: 0 0 $space-md;
+    word-break: break-word;
+  }
+
+  &__countdown {
+    font-size: $font-size-sm;
+    color: $color-text-muted;
+    margin: 0 0 $space-md;
+  }
+
+  &__footer {
+    display: flex;
+    justify-content: center;
+  }
+}
+
+
 .agent-card {
   border: 1px solid $color-border;
   border-radius: $radius;
@@ -1678,6 +1798,36 @@ select.input {
       justify-content: center;
       margin-top: 2px;
     }
+
+    .chat-bubble__meta .chat-bubble__copy-btn {
+      margin-left: auto;
+    }
+  }
+
+  &__copy-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    color: $color-text-muted;
+    cursor: pointer;
+    transition: color 0.15s, background 0.15s;
+    line-height: 1;
+
+    &:hover {
+      background: $color-border;
+      color: $color-text;
+    }
+
+    &--copied {
+      color: $color-success;
+    }
   }
 
   &--error {
@@ -1747,81 +1897,13 @@ select.input {
     color: $color-error;
     border: 1px solid lighten($color-error, 35%);
   }
-}
 
-// ---------------------------------------------------------------------------
-// Human gate panel
-// ---------------------------------------------------------------------------
-.human-gate-panel {
-  margin: $space-md;
-  padding: $space-md;
-  background: #fffbeb;
-  border: 1px solid #fcd34d;
-  border-left: 4px solid #f59e0b;
-  border-radius: $radius;
-
-  &__prompt {
-    font-size: $font-size-base;
-    color: $color-text;
-    margin-bottom: $space-md;
-    line-height: 1.5;
+  // Awaiting human response — amber/warning palette.
+  &--gate {
+    background: #fffbeb;
+    color: $color-warning;
+    border: 1px solid lighten($color-warning, 35%);
   }
-
-  // Compose-style bordered row: [+ attach] [textarea] — mirrors .chat-input-row
-  &__input-row {
-    display: flex;
-    align-items: flex-end;
-    gap: $space-sm;
-    background: $color-surface;
-    border: 1px solid $color-border;
-    border-radius: $radius;
-    padding: $space-xs $space-sm;
-    margin-bottom: $space-sm;
-
-    &:focus-within {
-      border-color: $color-primary;
-      box-shadow: 0 0 0 2px rgba($color-primary, 0.12);
-    }
-  }
-
-  &__textarea {
-    flex: 1;
-    border: none;
-    background: transparent;
-    resize: none;
-    font-size: $font-size-base;
-    color: $color-text;
-    line-height: 1.5;
-    min-height: 4.5rem;   // ~3 rows
-    max-height: 10rem;
-    overflow-y: auto;
-    padding: 2px 0;
-    font-family: $font-family;
-
-    &:focus { outline: none; }
-    &::placeholder { color: $color-text-muted; }
-  }
-
-  &__decision-row {
-    display: flex;
-    gap: $space-sm;
-    flex-wrap: wrap;
-    margin-bottom: $space-sm;
-  }
-
-  &__attachment-list {
-    margin-bottom: $space-sm;
-  }
-
-  &__actions {
-    display: flex;
-    gap: $space-sm;
-    flex-wrap: wrap;
-  }
-}
-
-.human-gate-btn.is-active {
-  box-shadow: 0 0 0 2px rgba($color-primary, 0.22);
 }
 
 @keyframes shake {
@@ -1879,6 +1961,78 @@ select.input {
     display: flex;
     gap: $space-sm;
     flex-wrap: wrap;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// MCP OAuth in-history authorization panel (chat_session_history.html)
+// Mirrors .chat-restart-panel rhythm; tokens only.
+// ---------------------------------------------------------------------------
+.chat-oauth-panel {
+  margin: $space-md;
+  padding: $space-md;
+  background: lighten($color-bg, 1.5%);
+  border: 1px solid $color-border;
+  border-left: 4px solid $color-primary;
+  border-radius: $radius;
+
+  &__title {
+    font-size: $font-size-base;
+    font-weight: 700;
+    color: $color-text;
+    margin-bottom: $space-xs;
+  }
+
+  &__hint {
+    font-size: $font-size-sm;
+    color: $color-text-muted;
+    line-height: 1.5;
+    margin-bottom: $space-sm;
+  }
+
+  &__rows {
+    display: flex;
+    flex-direction: column;
+    gap: $space-xs;
+  }
+
+  &__row {
+    display: grid;
+    grid-template-columns: 1fr auto auto;
+    align-items: center;
+    gap: $space-sm;
+    padding: $space-sm $space-md;
+    background: $color-surface;
+    border: 1px solid $color-border;
+    border-radius: $radius;
+
+    &--authorized {
+      border-color: $color-success;
+    }
+  }
+
+  &__server {
+    font-weight: 500;
+    font-size: $font-size-sm;
+    color: $color-text;
+  }
+
+  &__status {
+    font-size: $font-size-sm;
+    padding: 2px $space-xs;
+    border-radius: $radius;
+
+    &--pending {
+      color: $color-text-muted;
+      background: $color-bg;
+      border: 1px solid $color-border;
+    }
+
+    &--authorized {
+      color: $color-success;
+      background: transparent;
+      border: 1px solid $color-success;
+    }
   }
 }
 

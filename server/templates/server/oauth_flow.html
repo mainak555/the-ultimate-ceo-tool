@@ -1,0 +1,74 @@
+{% load compress static %}<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>MCP OAuth — {{ outcome|capfirst }}</title>
+  <meta name="robots" content="noindex,nofollow">
+  {% compress css %}
+  <link rel="stylesheet" type="text/x-scss" href="{% static 'server/scss/main.scss' %}">
+  {% endcompress %}
+  <style>
+    /* Inline minimal fallback so the page is readable even without compiled CSS */
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+           background: #f3f4f6; color: #111827; }
+  </style>
+</head>
+<body class="oauth-flow">
+  <main class="oauth-flow__card oauth-flow__card--{{ outcome }}" role="status" aria-live="polite">
+    <div class="oauth-flow__icon" aria-hidden="true">
+      {% if outcome == 'success' %}✓{% else %}✕{% endif %}
+    </div>
+    <h1 class="oauth-flow__title">
+      {% if outcome == 'success' %}
+        Authorization successful
+      {% else %}
+        Authorization failed
+      {% endif %}
+    </h1>
+    <p class="oauth-flow__server">
+      <span class="oauth-flow__server-label">MCP server:</span>
+      <strong>{{ server_name }}</strong>
+      <span class="oauth-flow__flow-badge oauth-flow__flow-badge--{{ flow }}">{{ flow }}</span>
+    </p>
+    <p class="oauth-flow__message">{{ message }}</p>
+    <p class="oauth-flow__countdown">
+      This window will close in <span id="oauth-flow-countdown">{{ auto_close_seconds }}</span>s.
+    </p>
+    <div class="oauth-flow__footer">
+      <button type="button" id="oauth-flow-close" class="btn btn--secondary">Close window</button>
+    </div>
+  </main>
+
+  <script>
+    (function () {
+      var payload = {{ post_message_json|safe }};
+      var seconds = parseInt({{ auto_close_seconds|default:0 }}, 10) || 0;
+
+      try {
+        if (window.opener && !window.opener.closed) {
+          window.opener.postMessage(payload, "*");
+        }
+      } catch (_) { /* ignore cross-origin issues */ }
+
+      var span = document.getElementById("oauth-flow-countdown");
+      var btn = document.getElementById("oauth-flow-close");
+
+      function closeNow() { try { window.close(); } catch (_) { /* noop */ } }
+
+      if (btn) btn.addEventListener("click", closeNow);
+
+      if (seconds <= 0) { closeNow(); return; }
+
+      var remaining = seconds;
+      var timer = setInterval(function () {
+        remaining -= 1;
+        if (span) span.textContent = String(Math.max(0, remaining));
+        if (remaining <= 0) {
+          clearInterval(timer);
+          closeNow();
+        }
+      }, 1000);
+    })();
+  </script>
+</body>
+</html>

@@ -1135,7 +1135,7 @@ def push_issues_business(site_url, email, api_key, project_key, items):
                 detail=msg,
             )
             warnings.append(f"Failed to create issue: {msg}")
-            results.append({"issue_key": None, "summary": summary, "url": "", "warnings": warnings})
+            results.append({"issue_key": None, "summary": summary, "url": "", "warnings": warnings, "temp_id": str(item.get("temp_id") or "")})
             continue
 
         instrument_http_response(
@@ -1152,6 +1152,7 @@ def push_issues_business(site_url, email, api_key, project_key, items):
             "summary": summary,
             "url": issue_url,
             "warnings": warnings,
+            "temp_id": str(item.get("temp_id") or ""),
         })
 
     return results

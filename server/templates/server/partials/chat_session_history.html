@@ -17,10 +17,11 @@
   <div class="chat-history" id="chat-history-msgs">
     {% for msg in history_messages|default:session.discussions %}
       {% if msg.role == "user" %}
-        <div class="chat-bubble chat-bubble--human">
+        <div class="chat-bubble chat-bubble--human" data-raw-content="{{ msg.content }}">
           <div class="chat-bubble__meta">
             <span class="chat-bubble__name">You</span>
             <span class="chat-bubble__time"><time class="local-time" data-utc="{{ msg.timestamp }}">{{ msg.timestamp }}</time></span>
+            <button type="button" class="chat-bubble__copy-btn" title="Copy message" aria-label="Copy message"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg></button>
           </div>
           <div class="chat-bubble__content">{{ msg.content|markdownify }}</div>
           {% if msg.attachments %}
@@ -37,12 +38,13 @@
           {% endif %}
         </div>
       {% else %}
-        <div class="chat-bubble chat-bubble--ai">
+        <div class="chat-bubble chat-bubble--ai" data-raw-content="{{ msg.content }}">
           <div class="chat-bubble__avatar">{{ msg.agent_name|slice:":1"|upper }}</div>
           <div class="chat-bubble__body">
             <div class="chat-bubble__meta">
               <span class="chat-bubble__name">{{ msg.agent_name|default:"Agent" }}</span>
               <span class="chat-bubble__time"><time class="local-time" data-utc="{{ msg.timestamp }}">{{ msg.timestamp }}</time></span>
+              <button type="button" class="chat-bubble__copy-btn" title="Copy message" aria-label="Copy message"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg></button>
             </div>
             <div class="chat-bubble__content">{{ msg.content|markdownify }}</div>
             {% if msg.attachments %}
@@ -101,38 +103,40 @@
 {% else %}
 {% if session.status == "awaiting_input" %}
 {% if project %}
-  <div class="human-gate-panel" data-session-id="{{ session.session_id }}"{% if project.agents|length == 1 %} data-chat-mode="single_assistant"{% endif %}>
-    {% if project.agents|length == 1 %}
-    <div class="human-gate-panel__prompt">
-      &#x1F464; <strong>{{ project.human_gate.name }}</strong> &mdash; Round {{ session.current_round }} complete.
-      Continue or Stop?
-    </div>
-    {% else %}
-    <div class="human-gate-panel__prompt">
-      &#x1F464; <strong>{{ project.human_gate.name }}</strong> &mdash; Round {{ session.current_round }} of {{ project.team.max_iterations }} complete.
-      What would you like to do?
-    </div>
-    {% endif %}
-    <div class="human-gate-panel__decision-row">
-      <button class="btn btn--success human-gate-btn human-gate-btn--approve">&#x2705; Approve</button>
-      <button class="btn btn--warning human-gate-btn human-gate-btn--reject">&#x26A0; Reject</button>
-    </div>
-    <div class="human-gate-panel__input-row">
-      <button class="btn btn--secondary human-gate-btn human-gate-btn--attach chat-attach-btn" type="button" title="Attach files">+</button>
-      <textarea class="human-gate-panel__textarea"
-                rows="3"
-                placeholder="{% if project.agents|length == 1 %}Enter your next message (required)...{% else %}Optional details to send to agents...{% endif %}"></textarea>
-      <input class="human-gate-panel__file-input" type="file" hidden multiple>
-    </div>
-    <div class="chat-attachment-list human-gate-panel__attachment-list" hidden></div>
-    <div class="human-gate-panel__actions">
-      <button class="btn btn--primary human-gate-btn human-gate-btn--continue"{% if project.agents|length == 1 %} disabled{% endif %}>&#x27A1; Continue</button>
-      <button class="btn btn--danger human-gate-btn human-gate-btn--stop">&#x1F6D1; Stop</button>
-    </div>
+  <div class="chat-status-badge chat-status-badge--gate"
+       data-gate-context='{"round": {{ session.current_round }}, "max_rounds": {{ project.team.max_iterations|default:0 }}, "chat_mode": "{% if project.agents|length == 1 %}single_assistant{% endif %}"}'>
+    &#x23F8; Round {{ session.current_round }}{% if project.agents|length != 1 %}/{{ project.team.max_iterations }}{% endif %} &mdash; response is required
   </div>
 {% endif %}
 {% endif %}
 {% endif %}
+{% endif %}
+
+{% if session.status == "awaiting_oauth" and session.pending_oauth_servers %}
+  <div class="chat-oauth-panel"
+       data-session-id="{{ session.session_id }}"
+       data-project-id="{{ session.project_id }}"
+       data-pending="{{ session.pending_oauth_servers|join:',' }}">
+    <div class="chat-oauth-panel__title">&#x1F510; MCP authorization required</div>
+    <p class="chat-oauth-panel__hint">
+      One or more MCP servers used by this project require OAuth authorization
+      for this session. Authorize each server below; the run will resume
+      automatically once all are connected.
+    </p>
+    <div class="chat-oauth-panel__rows">
+      {% for server_name in session.pending_oauth_servers %}
+        <div class="chat-oauth-panel__row" data-server-name="{{ server_name }}">
+          <span class="chat-oauth-panel__server">{{ server_name }}</span>
+          <span class="chat-oauth-panel__status chat-oauth-panel__status--pending">Pending</span>
+          <button type="button"
+                  class="btn btn--primary chat-oauth-authorize-btn"
+                  data-server-name="{{ server_name }}">
+            Authorize
+          </button>
+        </div>
+      {% endfor %}
+    </div>
+  </div>
 {% endif %}
 
 {% if session.has_agent_state %}

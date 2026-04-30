@@ -46,4 +46,7 @@ urlpatterns = [
 
     # Jira integration
     path("jira/", include("server.jira_urls")),
+
+    # MCP OAuth 2.0
+    path("mcp/", include("server.mcp_urls")),
 ]

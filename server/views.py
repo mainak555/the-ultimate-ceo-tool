@@ -15,7 +15,7 @@ from urllib.parse import quote
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from django.http import FileResponse, HttpResponse, StreamingHttpResponse
+from django.http import FileResponse, HttpResponse, JsonResponse, StreamingHttpResponse
 from django.shortcuts import render
 from django.template.loader import render_to_string
 from django.views.decorators.csrf import csrf_exempt
@@ -176,7 +176,36 @@ def _build_project_data(post_data, existing_project=None):
         "integrations": integrations,
         "shared_mcp_tools": post_data.get("shared_mcp_tools", ""),
         "mcp_secrets": _parse_mcp_secrets(post_data),
+        "mcp_oauth_configs": _parse_mcp_oauth_configs(post_data),
     }
+
+
+def _parse_mcp_oauth_configs(post_data):
+    """
+    Extract MCP OAuth configs dict from POST form fields.
+
+    Form fields: mcp_oauth_configs[N][server_name], [auth_url], [token_url],
+                 [client_id], [client_secret], [scopes]
+    Returns {server_name: {auth_url, token_url, client_id, client_secret, scopes}}
+    Skips rows with empty server_name.
+    """
+    configs = {}
+    idx = 0
+    while any(
+        f"mcp_oauth_configs[{idx}][{field}]" in post_data
+        for field in ("server_name", "auth_url", "token_url", "client_id", "client_secret")
+    ):
+        server_name = post_data.get(f"mcp_oauth_configs[{idx}][server_name]", "").strip()
+        if server_name:
+            configs[server_name] = {
+                "auth_url":      post_data.get(f"mcp_oauth_configs[{idx}][auth_url]", "").strip(),
+                "token_url":     post_data.get(f"mcp_oauth_configs[{idx}][token_url]", "").strip(),
+                "client_id":     post_data.get(f"mcp_oauth_configs[{idx}][client_id]", "").strip(),
+                "client_secret": post_data.get(f"mcp_oauth_configs[{idx}][client_secret]", ""),
+                "scopes":        post_data.get(f"mcp_oauth_configs[{idx}][scopes]", "").strip(),
+            }
+        idx += 1
+    return configs
 
 
 def _parse_mcp_secrets(post_data):
@@ -847,7 +876,7 @@ async def chat_session_run(request, session_id):
     if session is None:
         return _json_error("Session not found", 404)
 
-    valid_states = ("idle", "awaiting_input")
+    valid_states = ("idle", "awaiting_input", "awaiting_oauth")
     if session["status"] not in valid_states:
         return _json_error(f"Session is currently '{session['status']}'", 409)
 
@@ -877,6 +906,30 @@ async def chat_session_run(request, session_id):
     )
     if is_single_assistant_gate and not is_first_run and not task:
         return _json_error("A message is required to continue.", 400)
+
+    # MCP OAuth pre-run gate: any reachable MCP server that requires OAuth and
+    # has no session-scoped Bearer token in Redis blocks the run start. The
+    # session is parked in ``awaiting_oauth`` and the frontend renders the
+    # in-history authorization card. The lease is NOT acquired here.
+    pending_oauth = await asyncio.to_thread(
+        services.compute_pending_oauth_servers, raw_project, session_id
+    )
+    if pending_oauth:
+        await asyncio.to_thread(
+            services.set_session_awaiting_oauth, session_id, pending_oauth
+        )
+        logger.info(
+            "agents.mcp.oauth_gate_blocked",
+            extra={
+                "session_id": session_id,
+                "server_count": len(pending_oauth),
+                "server_names": pending_oauth,
+            },
+        )
+        return JsonResponse(
+            {"status": "awaiting_oauth", "servers": pending_oauth},
+            status=409,
+        )
 
     from agents.session_coordination import (
         SessionCoordinationError,
@@ -1017,8 +1070,29 @@ async def chat_session_run(request, session_id):
                             yield _sse("error", {"message": "Unable to restart: state version mismatch."})
                             return
             except Exception as exc:
-                await asyncio.to_thread(services.set_session_status, session_id, "idle")
                 evict_team(session_id)
+                # If the failure is a missing/expired MCP OAuth token,
+                # re-park the session in awaiting_oauth and surface the same
+                # in-history authorization card via an SSE event so the
+                # frontend swap path is identical to the pre-run gate.
+                pending_oauth_mid = await asyncio.to_thread(
+                    services.compute_pending_oauth_servers, raw_project, session_id
+                )
+                if pending_oauth_mid:
+                    await asyncio.to_thread(
+                        services.set_session_awaiting_oauth, session_id, pending_oauth_mid
+                    )
+                    logger.info(
+                        "agents.mcp.oauth_gate_blocked_midrun",
+                        extra={
+                            "session_id": session_id,
+                            "server_count": len(pending_oauth_mid),
+                            "server_names": pending_oauth_mid,
+                        },
+                    )
+                    yield _sse("awaiting_oauth", {"servers": pending_oauth_mid})
+                    return
+                await asyncio.to_thread(services.set_session_status, session_id, "idle")
                 yield _sse("error", {"message": str(exc)})
                 return
 
@@ -1092,9 +1166,24 @@ async def chat_session_run(request, session_id):
 
             heartbeat_task = asyncio.create_task(_lease_heartbeat(cancel_token))
 
+            # Claude 4+ (and future Anthropic models) reject conversations whose
+            # last message is an AssistantMessage — this is the "prefill" pattern
+            # that Anthropic removed.  When a human-gate resume carries no text
+            # (task_for_agent is falsy), AutoGen calls run_stream(task=None) which
+            # adds no new UserMessage, leaving each agent's model context ending
+            # with its own prior AssistantMessage.  The fix is to inject a minimal
+            # synthetic user turn so the model context always ends with a user
+            # message.  The synthetic string is NOT persisted to discussions[]
+            # (pending_messages is only built when task or attachment_ids are
+            # present, and both are falsy in this branch) and is NOT shown in the
+            # chat UI (the SSE loop only emits TextMessage where source!="user").
+            effective_task: str | None = task_for_agent if task_for_agent else None
+            if effective_task is None and not is_first_run:
+                effective_task = "Continue."
+
             try:
                 async for msg in team.run_stream(
-                    task=task_for_agent if task_for_agent else None,
+                    task=effective_task,
                     cancellation_token=cancel_token,
                 ):
                     try:
@@ -1195,6 +1284,26 @@ async def chat_session_run(request, session_id):
                     "agents.session.run_error",
                     extra={"session_id": session_id, "exc_type": type(exc).__name__},
                 )
+                # Flush any pending messages (user task + partial assistant turns)
+                # so the discussion thread reflects what actually happened before
+                # the failure. Persistence failures here must not mask the
+                # original error, so they are swallowed with a log line.
+                if pending_messages:
+                    try:
+                        await asyncio.to_thread(services.append_messages, session_id, pending_messages)
+                    except Exception:  # noqa: BLE001
+                        logger.exception(
+                            "agents.session.append_messages_failed_on_error",
+                            extra={"session_id": session_id, "pending": len(pending_messages)},
+                        )
+                    pending_messages = []
+                try:
+                    await checkpoint_state()
+                except Exception:  # noqa: BLE001
+                    logger.exception(
+                        "agents.session.checkpoint_failed_on_error",
+                        extra={"session_id": session_id},
+                    )
                 await asyncio.to_thread(services.set_session_status, session_id, "idle")
                 evict_team(session_id)
                 # AutoGen's BaseGroupChat wraps exceptions as:

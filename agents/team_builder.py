@@ -76,7 +76,12 @@ class AgentMessageTermination(TerminationCondition):
         return cls(max_agent_messages=config.get("max_agent_messages", 1))
 
 
-def build_agent_runtime_spec(agent_config: dict, project: dict | None = None, objective: str = "") -> dict:
+def build_agent_runtime_spec(
+    agent_config: dict,
+    project: dict | None = None,
+    objective: str = "",
+    session_id: str | None = None,
+) -> dict:
     """Return a lightweight runtime spec for a configured assistant agent."""
     system_message = resolve_system_prompt(
         agent_config.get("system_prompt", ""), objective=objective
@@ -91,7 +96,14 @@ def build_agent_runtime_spec(agent_config: dict, project: dict | None = None, ob
     if scope in ("shared", "dedicated") and project is not None:
         servers = resolve_mcp_servers_for_agent(agent_config, project)
         secrets = project.get("mcp_secrets") or {}
-        workbenches = build_mcp_workbenches(servers, scope=scope, secrets=secrets)
+        oauth_configs = project.get("mcp_oauth_configs") or {}
+        workbenches = build_mcp_workbenches(
+            servers,
+            scope=scope,
+            secrets=secrets,
+            session_id=session_id,
+            oauth_configs=oauth_configs,
+        )
 
     return {
         "name": agent_config["name"],
@@ -105,7 +117,7 @@ def build_agent_runtime_spec(agent_config: dict, project: dict | None = None, ob
     }
 
 
-def build_team(project: dict):
+def build_team(project: dict, session_id: str | None = None):
     """
     Build an AutoGen team from a normalized project config.
 
@@ -133,7 +145,9 @@ def build_team(project: dict):
     all_workbenches: list = []
     mcp_agent_count = 0
     for agent_cfg in project["agents"]:
-        spec = build_agent_runtime_spec(agent_cfg, project=project, objective=objective)
+        spec = build_agent_runtime_spec(
+            agent_cfg, project=project, objective=objective, session_id=session_id
+        )
         # Ensure name is a valid Python identifier (safety net for legacy docs)
         safe_name = re.sub(r"[\s\-]+", "_", spec["name"])
         safe_name = re.sub(r"[^\w]", "", safe_name)

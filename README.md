@@ -1,5 +1,5 @@
 # The Ultimate CEO Tool
-### From vision to reality
+### Turn Vision into Action
 
 Agent-based product roadmap planning tool — OKR to Product Backlog.  
 Django SPA with HTMX, SCSS, and MongoDB (PyMongo).
@@ -37,17 +37,21 @@ Open **http://127.0.0.1:8000** in your browser.
 
 ## Human-In-The-Loop (HITL) Gate
 
-When Human Gate is enabled for a project, the run pauses after each round and
-shows a unified decision panel:
+When Human Gate is enabled for a project, the run pauses after each round. The
+bottom input bar switches to **gate mode**:
 
-- Top decision buttons: `Approve` or `Reject`
-- Notes textarea: `Approve`/`Reject` are optional shortcuts that auto-prefix
-  `APPROVED` or `REJECTED` followed by a blank line; you can add
-	optional extra context for the agents
-- Bottom actions: `Continue` (resume with optional notes) or `Stop`
+- A status badge appears in chat: `⏸ Round N/M — response is required`
+  (single-assistant shows `Round N`, no max).
+- The **Stop** button stays visible so the user can stop at any time.
+  Clicking Stop disables the button immediately to prevent double-submission;
+  it re-enables automatically when the next run starts.
+- Typing in the send box and pressing **Send** (or Enter) resumes the run,
+  forwarding the typed text as context for the next round.
+- The Approve / Reject decision shortcuts have been removed; users type their
+  response directly.
 
-HITL notes sent with `Continue` are rendered as markdown in both live chat
-and persisted session history.
+HITL notes sent with Send are rendered as markdown in both live chat and
+persisted session history.
 
 Single-assistant contract:
 
@@ -55,22 +59,46 @@ Single-assistant contract:
 - Team Setup is hidden in configuration for this mode.
 - Human Gate is mandatory.
 - The run pauses after each assistant turn and continues only when the human
-	selects `Continue`; conversation ends when the human selects `Stop`.
+  sends a reply; conversation ends when the human clicks **Stop**.
 - `max_iterations` is not used as an auto-completion condition in
-	single-assistant chat mode.
-- **`Continue` requires a message or attachment** in single-assistant mode.
-	The button starts disabled and enables only when text is typed or files are attached.
-	An empty continue is rejected at the backend with HTTP 400.
+  single-assistant chat mode.
+- **Send requires a message or attachment** in single-assistant mode.
+  The button stays disabled until text is typed or a file is attached.
+  An empty send is rejected at the backend with HTTP 400.
 
 Multi-assistant gate contract:
 
 - Gate pauses after each full agent round (all agents have spoken once).
-- `Continue` may be sent with an empty notes textarea — agents resume their
-	internal collaboration with the accumulated history as context.
-- `Stop` triggers a graceful termination: the current agent finishes its turn,
-	the message is persisted, then the run ends cleanly.
+- Send may be submitted with an empty textarea — agents resume with the
+  accumulated history as context.
+- Stop triggers a graceful termination: the current agent finishes its turn,
+  the message is persisted, then the run ends cleanly, showing the
+  **Continue session** card in chat history.
 
----
+**Stopped / completed session restart**: after a run ends, a restart card
+appears with two options:
+- **Continue from last** — resumes from the persisted agent state checkpoint.
+- **Add context and continue** — lets you type extra context before resuming.
+
+Typing in the main send box while the restart card is visible always starts a
+**new** session, not a resume.
+
+## Copying Chat Messages
+
+Every chat bubble (user and agent) shows a **copy icon** in the message header.
+Clicking it copies the message to your clipboard:
+
+- Text is copied in **markdown format** (the raw source, not rendered HTML).
+- Any attached files are appended as a markdown list below the text:
+  ```
+  **Attachments:**
+  - report.pdf
+  - screenshot.png
+  ```
+- The icon briefly changes to a check mark (✓) to confirm the copy succeeded.
+
+The copy button is always visible regardless of whether a Secret Key is
+entered — you can copy agent responses in both read and write sessions.
 
 ## Chat Attachments
 
@@ -335,6 +363,34 @@ Values are masked in the edit form, hidden in the readonly view, and
 substituted at runtime only inside `agents/mcp_tools.py`. The OTel
 `fingerprint` attribute is computed over the placeholder form so it stays
 stable across secret rotations.
+
+### OAuth 2.0 for HTTP MCP servers
+
+Some HTTP MCP servers issue Bearer tokens via OAuth 2.0 instead of static API keys.
+Configure this per-server under **MCP OAuth App Registrations** in the project config form.
+
+```jsonc
+{
+  "mcp_oauth_configs": {
+    "my-api-server": {
+      "auth_url":      "https://provider.example.com/oauth/authorize",
+      "token_url":     "https://provider.example.com/oauth/token",
+      "client_id":     "app-client-id",
+      "client_secret": "app-client-secret",
+      "scopes":        "read write"
+    }
+  }
+}
+```
+
+- **`server_name`** must match a key inside your `mcpServers` JSON (shared or dedicated).
+- Register the callback URL `{BASE_URL}/mcp/oauth/callback/` with your OAuth provider.
+- Before each agent run, the server checks Redis for session-scoped Bearer tokens (`POST /run/` returns **HTTP 409** when any are missing) and the UI shows an **Authorize** panel in the chat history. Clicking the Authorize button opens a popup; after the user grants access the run resumes automatically.
+- **Test Authorization** (config form) validates credentials without starting a run.
+- Tokens are session-scoped and expire from their JWT `exp` claim (TTL = `exp − now(UTC)`). Falls back to a hardcoded 3 h default if `exp` is absent. There is no mid-session refresh (v1) — re-authorize on the next run if a token expires.
+- `client_secret` is stored masked and never sent to the browser after the first save.
+- The OAuth start endpoint (`/mcp/oauth/start/`) is opened from a popup window, which cannot set request headers — it accepts the admin secret as `X-App-Secret-Key` **or** `?skey=<APP_SECRET_KEY>`. Always serve the app over TLS and scrub query strings from access logs (or accept the leak as in-scope for an admin-only deployment).
+- Every branch of the OAuth start + callback handlers emits structured `agents.mcp.oauth_*` log events plus three nested OpenTelemetry spans (`mcp.oauth.start`, `mcp.oauth.callback`, `mcp.oauth.token_exchange`) so popup-window failures are diagnosable from the server console alone.
 
 Full documentation: [docs/mcp_integration.md](docs/mcp_integration.md).
 

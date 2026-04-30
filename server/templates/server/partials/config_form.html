@@ -241,6 +241,104 @@
         {% endfor %}
       </div>
     </div>
+
+    <div class="mcp-secrets__subsection">
+      <div class="mcp-secrets__subsection-header">
+        <strong>MCP OAuth App Registrations</strong>
+        <button type="button" class="btn btn--secondary btn--sm js-add-mcp-oauth-config">+ Add OAuth Config</button>
+      </div>
+      <p class="form-hint form-hint--compact">
+        Register an OAuth 2.0 application for each HTTP MCP server that requires Bearer-token authorization.
+        The <strong>Server Name</strong> must exactly match a key inside your <strong>Shared MCP Configuration</strong>
+        or an assistant's <strong>Dedicated MCP configuration</strong> (e.g. <code>my-api-server</code>).
+        The redirect URI to register with your OAuth provider is:
+        <code>{{ request.scheme }}://{{ request.get_host }}/mcp/oauth/callback/</code>.<br>
+        Use the <strong>Test Authorization</strong> button to verify credentials before running agents.
+        Note: tokens are not refreshed mid-run (v1 limitation — re-authorize if a run returns 401).
+      </p>
+      <div class="mcp-secrets__rows" id="mcp-oauth-configs-rows">
+        {% for server_name, cfg in project.mcp_oauth_configs.items %}
+        <fieldset class="mcp-oauth-configs__row form-group--nested" data-oauth-index="{{ forloop.counter0 }}">
+          <div class="mcp-oauth-configs__row-header">
+            <strong>{{ server_name }}</strong>
+            <div class="mcp-oauth-configs__row-actions">
+              <span class="mcp-oauth-status" data-server-name="{{ server_name }}"></span>
+              {% if mode != 'create' %}
+              <button type="button"
+                      class="btn btn--secondary btn--sm js-test-mcp-oauth"
+                      data-server-name="{{ server_name }}"
+                      data-project-id="{{ project.project_id|default:'' }}"
+                      title="Test OAuth authorization for {{ server_name }}">Test Authorization</button>
+              {% endif %}
+              <button type="button"
+                      class="chat-session-item__delete js-delete-mcp-oauth-config"
+                      aria-label="Remove OAuth config"
+                      title="Remove OAuth config">×</button>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>Server Name</label>
+            <input type="text"
+                   class="input input--sm js-mcp-oauth-server-name"
+                   name="mcp_oauth_configs[{{ forloop.counter0 }}][server_name]"
+                   value="{{ server_name }}"
+                   placeholder="my-api-server"
+                   autocomplete="off">
+            <small class="form-hint">Must match a key in mcpServers (shared or dedicated config).</small>
+          </div>
+          <div class="form-group">
+            <label>Authorization URL</label>
+            <input type="url"
+                   class="input input--sm"
+                   name="mcp_oauth_configs[{{ forloop.counter0 }}][auth_url]"
+                   value="{{ cfg.auth_url }}"
+                   placeholder="https://provider.example.com/oauth/authorize"
+                   autocomplete="off">
+            <small class="form-hint">The provider's authorization endpoint (where users grant consent).</small>
+          </div>
+          <div class="form-group">
+            <label>Token URL</label>
+            <input type="url"
+                   class="input input--sm"
+                   name="mcp_oauth_configs[{{ forloop.counter0 }}][token_url]"
+                   value="{{ cfg.token_url }}"
+                   placeholder="https://provider.example.com/oauth/token"
+                   autocomplete="off">
+            <small class="form-hint">The provider's token endpoint (server-to-server code exchange).</small>
+          </div>
+          <div class="form-group">
+            <label>Client ID</label>
+            <input type="text"
+                   class="input input--sm"
+                   name="mcp_oauth_configs[{{ forloop.counter0 }}][client_id]"
+                   value="{{ cfg.client_id }}"
+                   placeholder="your-client-id"
+                   autocomplete="off">
+          </div>
+          <div class="form-group">
+            <label>Client Secret</label>
+            <input type="password"
+                   class="input input--sm"
+                   name="mcp_oauth_configs[{{ forloop.counter0 }}][client_secret]"
+                   value="{{ cfg.client_secret }}"
+                   placeholder="your-client-secret"
+                   autocomplete="new-password">
+            <small class="form-hint">Stored encrypted on the server; masked on page load. Leave as-is to keep the existing secret.</small>
+          </div>
+          <div class="form-group">
+            <label>Scopes <small class="form-hint">(optional)</small></label>
+            <input type="text"
+                   class="input input--sm"
+                   name="mcp_oauth_configs[{{ forloop.counter0 }}][scopes]"
+                   value="{{ cfg.scopes|default:'' }}"
+                   placeholder="read write offline_access"
+                   autocomplete="off">
+            <small class="form-hint">Space-separated OAuth scopes to request.</small>
+          </div>
+        </fieldset>
+        {% endfor %}
+      </div>
+    </div>
   </fieldset>
 
   <!-- ====== INTEGRATIONS ====== -->
