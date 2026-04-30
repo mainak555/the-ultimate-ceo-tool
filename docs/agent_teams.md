@@ -271,6 +271,7 @@ idle ──► running ──► awaiting_input ──► running ──► ... 
 
 - **Continue**: POST `/chat/sessions/<id>/respond/` with `action=continue` and optional `text`. The server returns `{status:"ok", task:"..."}` and the UI calls `/run/` with that task.
 - **Decision + Notes**: `Approve` / `Reject` are optional shortcuts. If clicked, the UI prepends `APPROVED` or `REJECTED` followed by a blank line in the notes textarea. Continue can still be sent without selecting either shortcut. Any non-empty continue text is persisted as a `user` role entry in `discussions` and passed to `run_stream(task=...)`.
+- **Empty Continue (multi-assistant mode)**: When Continue is submitted with no text, `task` is empty and no `UserMessage` is broadcast by AutoGen, leaving each agent's model context ending with its own prior `AssistantMessage`. Anthropic Claude 4+ models reject this (they no longer support "assistant prefill"). `views.py` therefore injects a synthetic `"Continue."` task for `run_stream()` in this case. The synthetic message is **not persisted** to `discussions[]` and **not shown** in the SSE chat stream (filtered because `source == "user"` is excluded from SSE output messages). It is baked into `agent_state` checkpoints, which is correct — the model context accurately records the resume event.
 - **Stop**: POST `/chat/sessions/<id>/respond/` with `action=stop` transitions session to `stopped` and evicts the cached team.
 - **First run**: `task` must be non-empty — a 400 is returned if `discussions` is empty and no task was provided.
 

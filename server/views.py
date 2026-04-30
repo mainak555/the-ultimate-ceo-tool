@@ -1121,9 +1121,24 @@ async def chat_session_run(request, session_id):
 
             heartbeat_task = asyncio.create_task(_lease_heartbeat(cancel_token))
 
+            # Claude 4+ (and future Anthropic models) reject conversations whose
+            # last message is an AssistantMessage — this is the "prefill" pattern
+            # that Anthropic removed.  When a human-gate resume carries no text
+            # (task_for_agent is falsy), AutoGen calls run_stream(task=None) which
+            # adds no new UserMessage, leaving each agent's model context ending
+            # with its own prior AssistantMessage.  The fix is to inject a minimal
+            # synthetic user turn so the model context always ends with a user
+            # message.  The synthetic string is NOT persisted to discussions[]
+            # (pending_messages is only built when task or attachment_ids are
+            # present, and both are falsy in this branch) and is NOT shown in the
+            # chat UI (the SSE loop only emits TextMessage where source!="user").
+            effective_task: str | None = task_for_agent if task_for_agent else None
+            if effective_task is None and not is_first_run:
+                effective_task = "Continue."
+
             try:
                 async for msg in team.run_stream(
-                    task=task_for_agent if task_for_agent else None,
+                    task=effective_task,
                     cancellation_token=cancel_token,
                 ):
                     try:
