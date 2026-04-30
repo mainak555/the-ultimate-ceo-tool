@@ -110,8 +110,9 @@ Shared markdown rendering for Home and export reference panes must go through `s
 `home.js` also handles (home chat page only):
 - Restart controls for sessions with persisted agent state.
 - Two restart modes: continue from last state, or add context and continue.
-- Human gate pause panel with decision-first controls (Approve/Reject), optional notes, and Continue/Stop actions.
-- Attachment interactions for both composer and human-gate panel: file-picker attach button, drag/drop, and clipboard paste.
+- Human gate: when the SSE `gate` event fires, a non-interactive status badge (`.chat-status-badge--gate`) is appended to chat and the bottom input bar enters **gate mode** — placeholder updates to show the round, Stop button stays visible, Send routes to `sendRespond("continue")`. No separate panel widget is injected.
+- When a session with `status == "awaiting_input"` is loaded from the server, `chat_session_history.html` renders the gate status badge (carrying `data-gate-context`). Both the `DOMContentLoaded` bootstrap (initial page load) and `htmx:afterSwap` (session switch) scan for this badge and call `setGateMode()` to restore the Stop button and input placeholder without an extra API call.
+- Attachment interactions for the composer: file-picker attach button, drag/drop, and clipboard paste. In gate mode the compose attachment pipeline is reused (no separate gate attachment state).
 - Attachment chip rendering during composition and thumbnail rendering in chat history for image attachments.
 
 ## Chat Restart Discoverability
@@ -121,23 +122,26 @@ Shared markdown rendering for Home and export reference panes must go through `s
 - Restart behavior:
   - `Continue from last`: resumes with no additional user instruction.
   - `Add context and continue`: appends user-provided context before resume.
+- **Send box when restart panel is visible**: when `.chat-restart-panel` is present, the `chatSendBtn` handler ignores `activeSessionIdInput` and treats the session as empty — the user's text creates a **new session** and run. The restart panel's own `data-session-id` attribute independently owns "Continue from last" / "Add context and continue".
 
 ## Configuration Surface
 
 - **Assistant agents**: each card stores `name`, `model`, `system_prompt`, and `temperature`. The project `objective` is automatically appended to each agent's resolved system prompt at runtime.
-- **Human gate**: single optional section with enable toggle and `name`. When paused, the chat panel shows top decision buttons (`Approve` / `Reject`) as optional shortcuts. Clicking either prefixes the notes textarea with `APPROVED` or `REJECTED` followed by a blank line. Users may also skip those buttons and press `Continue` directly with or without notes, or choose `Stop`.
-- **Human gate markdown contract**: notes sent via `Continue` are rendered as markdown in live bubbles and persisted history. This uses the shared markdown renderer path (`window.MarkdownViewer.render()` in `home.js`, `markdownify` in server-rendered history).
+- **Human gate**: single optional section with enable toggle and `name`. When the run pauses at a gate, the bottom input bar enters gate mode — the placeholder updates to show the round number, the Stop button stays visible, and clicking Send routes to `POST /respond/` with `action=continue`. The separate gate panel widget has been removed. There are no Approve/Reject shortcuts; users type their response directly.
+- **Human gate markdown contract**: notes sent via Continue are rendered as markdown in live bubbles and persisted history. This uses the shared markdown renderer path (`window.MarkdownViewer.render()` in `home.js`, `markdownify` in server-rendered history).
 - **Team**: nested config with `type` and `max_iterations`. Supported types:
   - `round_robin` — agents take turns in fixed order.
   - `selector` — a dedicated model client routes between agents each turn. Requires `model`, `system_prompt` (supports `{roles}`, `{history}`, `{participants}`), `temperature` (default `0.0`), and `allow_repeated_speaker`. Selector fields are wrapped in an `.agent-card` container (edit) / `.agent-card--readonly` card (readonly) with header "Selector Agent" / "Selector", matching assistant agent cards.
-- **Single-assistant chat mode**: when assistant count is exactly 1, Team Setup is hidden and Human Gate is forced on. In this mode the run pauses after each assistant turn and continues until the human selects `Stop`.
+- **Single-assistant chat mode**: when assistant count is exactly 1, Team Setup is hidden and Human Gate is forced on. In this mode the run pauses after each assistant turn and continues until the human selects Stop. In single-assistant gate mode Send is disabled until the user types text (text is mandatory — empty Continue is rejected).
 - **Integrations → Trello → Export Agents**: checkboxes (`name="integrations[trello][export_agents]"`) rendered inside `#integrations-trello-fields` as the first element (above App Name). Leaving all unchecked means every agent's messages show the export button. Synced dynamically by `syncExportAgentCheckboxes()` whenever agent names change.
 - **Home chat export controls**: per-agent output export dropdowns are rendered from `project.integrations.<provider>` where `enabled=true` and filtered by each provider's `export_agents` allowlist (`[]` = all agents). These controls are visible only when the Secret Key input has a value (edit/create mode behavior).
 - **Home chat attachments**:
-  - Composer and human-gate panel both support attach button, drag/drop, and paste for supported file types.
+  - Composer supports attach button, drag/drop, and paste for supported file types.
+  - In gate mode the same compose attachment pipeline is used — files are attached to the Continue message.
   - Uploaded attachments render as chips before send/continue.
   - Persisted messages render attachment rows under the markdown content.
   - Image attachments render thumbnails in session history; non-image files render filename links.
+  - The attach button (`#chat-attach-btn`) is disabled during an active run and re-enabled when the run ends (gate or completion).
 - **Integrations → Trello → Token**: the token section (`#trello-token-section`) is **always visible** when Trello is enabled (both create and edit modes). The textbox is permanently `disabled readonly`. In create mode the Generate button is disabled and the hint reads "Save the Configuration first to generate the token". After the project is saved the Generate button becomes enabled (gated by `js-requires-secret`). Once a token is generated the textbox shows `••••••••` and the hint shows the generated datetime. On edit-mode reload a previously stored token displays identically. The cascade dropdowns (`#trello-cascade-section`) remain hidden until a valid token exists.
 - **Integrations → Trello → Extraction Prompt**: the extraction `system_prompt` used to parse discussions into Trello cards. Rendered as a bare `form-group` textarea in edit mode (no card wrapper). In readonly mode it appears as an `.agent-card__detail` row inside the Trello card.
 - **Model list**: loaded from root `agent_models.json` and always shown in ascending order.
@@ -176,7 +180,7 @@ All write operations require a valid `APP_SECRET_KEY`. The secret is entered onc
 | **Chat send button** | `home.html` — `#chat-send-btn` | JS `disabled` | Disabled + tooltip | Enabled |
 | **Chat attach button** | `home.html` — `#chat-attach-btn` | JS `disabled` | Disabled + tooltip | Enabled |
 | **Chat input** | `home.html` — `#chat-input` | JS `disabled` + placeholder | Disabled with hint | Enabled |
-| **HITL attach button** | `chat_session_history.html` + gate panel — `.human-gate-btn--attach` | JS `disabled` | Disabled + tooltip | Enabled |
+| **HITL attach button** | `#chat-attach-btn` (shared composer) | JS `disabled` during run, re-enabled in gate mode | Disabled during active run | Enabled in gate mode and idle |
 | **Delete (chat session)** | `chat_session_list.html` — `.chat-session-item__delete` | JS `hidden` | Hidden | Visible |
 | **Export dropdown (chat output card)** | `chat_session_history.html` + SSE-rendered bubbles — `.chat-bubble__actions` | JS `hidden` via `updateChatAuthState()` | Hidden | Visible |
 | **New-session modal** | `home.html` — `#new-session-modal` | JS closes if key removed | Auto-closed | Openable |
@@ -191,7 +195,7 @@ Project delete safety:
 ### JS Functions
 
 - **`project_config.js` / `updateSubmitState()`** — runs on page load, after HTMX swaps, and on secret-key input changes. Handles `type="submit"` buttons, `.js-requires-secret` buttons on `.config-form`, and `.sidebar__delete` visibility/disabled state.
-- **`home.js` / `updateChatAuthState()`** — runs on page load, after HTMX swaps, and on secret-key input changes. Handles home chat controls (`#chat-send-btn`, `#chat-attach-btn`, `#chat-input`, `.human-gate-btn--attach`, `.chat-session-item__delete`, `.chat-session-item__edit`, `.chat-bubble__actions` export visibility, edit modal safety).
+- **`home.js` / `updateChatAuthState()`** — runs on page load, after HTMX swaps, and on secret-key input changes. Handles home chat controls (`#chat-send-btn`, `#chat-attach-btn`, `#chat-input`, `.chat-session-item__delete`, `.chat-session-item__edit`, `.chat-bubble__actions` export visibility, edit modal safety). Also calls `_evalSendBtn()` at the end to enforce gate-mode send rules.
 
 ### Adding a New Secret-Gated Button
 

@@ -188,6 +188,18 @@ Order of operations in `agents/team_builder.py::build_team()`:
 6. `evict_team(session_id)` calls `close_session_workbenches(session_id)`,
    which awaits `wb.stop()` on each workbench.
 
+**Thread-pool safety of `close_session_workbenches`**: eviction may be called
+from a Django thread-pool thread (e.g. `ThreadPoolExecutor`) where there is no
+running event loop. The function uses `asyncio.get_running_loop()` (not the
+deprecated `get_event_loop()`) to detect the async context:
+- If a loop is running → `loop.create_task(_stop_all())` (fire-and-forget).
+- If no loop is running (thread context) → `asyncio.run(_stop_all())`.
+
+**Never-started workbenches**: a workbench that was constructed but whose
+`start()` was never called (e.g. an agent that was evicted before its first
+run) raises `TypeError` when awaited inside `stop()`. This is treated as a
+silent no-op, not an error.
+
 ## Observability
 
 - Logger: `agents.mcp_tools`.

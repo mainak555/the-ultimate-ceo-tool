@@ -37,17 +37,19 @@ Open **http://127.0.0.1:8000** in your browser.
 
 ## Human-In-The-Loop (HITL) Gate
 
-When Human Gate is enabled for a project, the run pauses after each round and
-shows a unified decision panel:
+When Human Gate is enabled for a project, the run pauses after each round. The
+bottom input bar switches to **gate mode**:
 
-- Top decision buttons: `Approve` or `Reject`
-- Notes textarea: `Approve`/`Reject` are optional shortcuts that auto-prefix
-  `APPROVED` or `REJECTED` followed by a blank line; you can add
-	optional extra context for the agents
-- Bottom actions: `Continue` (resume with optional notes) or `Stop`
+- A status badge appears in chat: `⏸ Round N/M — response is required`
+  (single-assistant shows `Round N`, no max).
+- The **Stop** button stays visible so the user can stop at any time.
+- Typing in the send box and pressing **Send** (or Enter) resumes the run,
+  forwarding the typed text as context for the next round.
+- The Approve / Reject decision shortcuts have been removed; users type their
+  response directly.
 
-HITL notes sent with `Continue` are rendered as markdown in both live chat
-and persisted session history.
+HITL notes sent with Send are rendered as markdown in both live chat and
+persisted session history.
 
 Single-assistant contract:
 
@@ -55,22 +57,29 @@ Single-assistant contract:
 - Team Setup is hidden in configuration for this mode.
 - Human Gate is mandatory.
 - The run pauses after each assistant turn and continues only when the human
-	selects `Continue`; conversation ends when the human selects `Stop`.
+  sends a reply; conversation ends when the human clicks **Stop**.
 - `max_iterations` is not used as an auto-completion condition in
-	single-assistant chat mode.
-- **`Continue` requires a message or attachment** in single-assistant mode.
-	The button starts disabled and enables only when text is typed or files are attached.
-	An empty continue is rejected at the backend with HTTP 400.
+  single-assistant chat mode.
+- **Send requires a message or attachment** in single-assistant mode.
+  The button stays disabled until text is typed or a file is attached.
+  An empty send is rejected at the backend with HTTP 400.
 
 Multi-assistant gate contract:
 
 - Gate pauses after each full agent round (all agents have spoken once).
-- `Continue` may be sent with an empty notes textarea — agents resume their
-	internal collaboration with the accumulated history as context.
-- `Stop` triggers a graceful termination: the current agent finishes its turn,
-	the message is persisted, then the run ends cleanly.
+- Send may be submitted with an empty textarea — agents resume with the
+  accumulated history as context.
+- Stop triggers a graceful termination: the current agent finishes its turn,
+  the message is persisted, then the run ends cleanly, showing the
+  **Continue session** card in chat history.
 
----
+**Stopped / completed session restart**: after a run ends, a restart card
+appears with two options:
+- **Continue from last** — resumes from the persisted agent state checkpoint.
+- **Add context and continue** — lets you type extra context before resuming.
+
+Typing in the main send box while the restart card is visible always starts a
+**new** session, not a resume.
 
 ## Chat Attachments
 

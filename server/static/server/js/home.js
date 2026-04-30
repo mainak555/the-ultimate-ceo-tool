@@ -239,14 +239,6 @@ document.addEventListener("DOMContentLoaded", function () {
       chatInput.placeholder = hasSecret ? "Send a message" : "Enter the Secret Key to send messages.";
     }
 
-    document.querySelectorAll(".human-gate-btn--attach").forEach(function (btn) {
-      btn.disabled = !hasSecret;
-      btn.title = hasSecret ? "Attach files" : "Enter the Secret Key to attach files.";
-    });
-    document.querySelectorAll(".human-gate-panel__file-input").forEach(function (input) {
-      input.disabled = !hasSecret;
-    });
-
     if (!hasSecret && editSessionModal && !editSessionModal.hidden) {
       closeEditModal();
     }
@@ -254,6 +246,7 @@ document.addEventListener("DOMContentLoaded", function () {
     if (!hasSecret) {
       closeExportDropdowns();
     }
+    _evalSendBtn();
   }
 
   function openEditModal(sessionId, description) {
@@ -406,68 +399,132 @@ document.addEventListener("DOMContentLoaded", function () {
       });
   }
 
-  var gateAttachmentState = new WeakMap();
+  // ── Gate mode helpers ─────────────────────────────────────────────────────
+  // When the SSE "gate" event fires the bottom input bar enters gate mode.
+  // The old .human-gate-panel widget is replaced by a non-interactive status
+  // badge in chat; Send routes to sendRespond("continue") and Stop routes to
+  // sendRespond("stop") instead of the run /stop/ endpoint.
 
-  function getGateState(panel) {
-    var state = gateAttachmentState.get(panel);
-    if (!state) {
-      state = { pending: [], uploaded: [] };
-      gateAttachmentState.set(panel, state);
-    }
-    return state;
-  }
-
-  // Re-evaluate Continue button enabled state for single-assistant chat mode.
-  // Text is ALWAYS required; attachments alone are not sufficient.
-  function _evalGateContinue(panel) {
-    if (!panel || panel.dataset.chatMode !== "single_assistant") return;
-    // Never re-enable once a submit is in-flight (panel.dataset.submitting="1").
-    // The panel is removed on success; state is restored on failure.
-    if (panel.dataset.submitting === "1") return;
-    var ta = panel.querySelector(".human-gate-panel__textarea");
-    var hasText = ta && ta.value.trim().length > 0;
-    var continueBtn = panel.querySelector(".human-gate-btn--continue");
-    if (continueBtn) continueBtn.disabled = !hasText;
-  }
-
-  function renderGateAttachments(panel) {
-    var state = getGateState(panel);
-    var listEl = panel.querySelector(".human-gate-panel__attachment-list");
-    renderAttachmentList(listEl, state.uploaded.concat(state.pending), "gate");
-    // Keep Continue enabled/disabled in sync for single-assistant mode
-    _evalGateContinue(panel);
-  }
-
-  function addGateFiles(panel, fileList) {
-    var files = Array.prototype.slice.call(fileList || []);
-    if (!files.length) return;
-    var state = getGateState(panel);
-    var cap = 10 - state.pending.length - state.uploaded.length;
-    if (cap <= 0) return;
-    files.slice(0, cap).forEach(function (file) {
-      state.pending.push(toUploadRecord(file));
+  // POST to the session respond endpoint (gate continue or gate stop).
+  function sendRespond(sessionId, action, text, attachmentIds) {
+    var secretKey = getSecretKey();
+    var body = new URLSearchParams({ action: action });
+    if (text) body.append("text", text);
+    (attachmentIds || []).forEach(function (id) {
+      if (id) body.append("attachment_ids", id);
     });
-    renderGateAttachments(panel);
+    return fetch("/chat/sessions/" + sessionId + "/respond/", {
+      method: "POST",
+      headers: {
+        "X-App-Secret-Key": secretKey,
+        "X-CSRFToken": csrfToken,
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: body.toString(),
+    }).then(function (r) {
+      return r.json().then(function (data) {
+        if (!r.ok) throw new Error(data.error || "Action failed");
+        return data;
+      });
+    });
   }
 
-  function ensureGateAttachmentsUploaded(panel, sessionId) {
-    var state = getGateState(panel);
-    if (!state.pending.length) {
-      return Promise.resolve(state.uploaded.map(function (x) { return x.id; }));
+  // Re-evaluate Send button enabled state honouring gate mode rules.
+  // Single-assistant gate mode requires non-empty text; all other states
+  // only need a secret key.
+  function _evalSendBtn() {
+    if (!chatSendBtn) return;
+    if (!getSecretKey()) { chatSendBtn.disabled = true; return; }
+    if (_gateData && _gateData.chat_mode === "single_assistant") {
+      chatSendBtn.disabled = !chatInput || !chatInput.value.trim();
+      return;
     }
-    var pending = state.pending.slice();
-    state.pending = [];
-    return uploadAttachmentRecords(sessionId, pending)
-      .then(function (uploaded) {
-        state.uploaded = state.uploaded.concat(uploaded || []);
-        renderGateAttachments(panel);
-        return state.uploaded.map(function (x) { return x.id; });
-      })
-      .catch(function (err) {
-        state.pending = pending.concat(state.pending);
-        renderGateAttachments(panel);
-        throw err;
-      });
+    chatSendBtn.disabled = false;
+  }
+
+  // Activate gate mode on the bottom input bar.
+  function setGateMode(data) {
+    _gateData = data;
+    var isSingle = data && data.chat_mode === "single_assistant";
+    if (chatInput) {
+      var roundText = isSingle
+        ? "Round " + data.round
+        : "Round " + data.round + "/" + data.max_rounds;
+      chatInput.placeholder = roundText + " \u2014 enter your response\u2026";
+    }
+    if (chatStopBtn) chatStopBtn.hidden = false;
+    _evalSendBtn();
+  }
+
+  // Deactivate gate mode and restore the normal input bar state.
+  function clearGateMode() {
+    _gateData = null;
+    if (chatInput) chatInput.placeholder = "Send a message";
+    if (chatStopBtn) chatStopBtn.hidden = true;
+    _evalSendBtn();
+  }
+
+  // Append a non-interactive gate status badge into the chat history.
+  // Carries data-gate-context so page-reload can restore gate mode.
+  function appendGateBadge(data) {
+    var isSingle = data && data.chat_mode === "single_assistant";
+    var roundText = isSingle
+      ? "Round " + data.round
+      : "Round " + data.round + "/" + data.max_rounds;
+    var ctx = escapeHtml(JSON.stringify({
+      round: data.round,
+      max_rounds: data.max_rounds || 0,
+      chat_mode: data.chat_mode || "",
+    }));
+    chatMessages.insertAdjacentHTML(
+      "beforeend",
+      "<div class=\"chat-status-badge chat-status-badge--gate\" data-gate-context='" + ctx + "'>"
+      + "\u23F8 " + escapeHtml(roundText) + " \u2014 response is required"
+      + "</div>"
+    );
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+  }
+
+  // Handle Send while the input bar is in gate mode.
+  function _handleGateSend() {
+    var sessionId = activeSessionIdInput ? activeSessionIdInput.value.trim() : "";
+    var secretKey = getSecretKey();
+    if (!sessionId || !secretKey) return;
+
+    var text = chatInput ? chatInput.value.trim() : "";
+    var hasAttachments = composePendingFiles.length > 0 || composeUploaded.length > 0;
+
+    // Single-assistant mode: text is mandatory.
+    if (_gateData && _gateData.chat_mode === "single_assistant" && !text) {
+      if (chatInput) {
+        chatInput.focus();
+        chatInput.classList.add("input--shake");
+        setTimeout(function () { chatInput.classList.remove("input--shake"); }, 400);
+      }
+      return;
+    }
+    if (!text && !hasAttachments) return;
+
+    if (chatSendBtn) chatSendBtn.disabled = true;
+    // committed = true once upload succeeded and we've already appended the
+    // human bubble + cleared gate mode. After that point we do NOT re-enable
+    // Send on error (session reload is the recovery path).
+    var committed = false;
+
+    ensureComposeAttachmentsUploaded(sessionId).then(function (attachmentIds) {
+      committed = true;
+      var attachmentsForBubble = composeUploaded.slice();
+      appendHumanBubble(text || "Attached files", attachmentsForBubble);
+      if (chatInput) { chatInput.value = ""; chatInput.style.height = "auto"; chatInput.focus(); }
+      clearComposeAttachments();
+      clearGateMode();
+      return sendRespond(sessionId, "continue", text, attachmentIds);
+    }).then(function (d) {
+      if (d && d.status === "ok") startRun(d.task || "", d.attachment_ids || []);
+    }).catch(function (err) {
+      if (!committed && chatSendBtn) chatSendBtn.disabled = false;
+      appendBubble('<div class="chat-bubble chat-bubble--error">Error: ' + err.message + '</div>');
+    });
   }
 
   if (chatAttachBtn && chatAttachmentInput) {
@@ -498,12 +555,20 @@ document.addEventListener("DOMContentLoaded", function () {
     addComposeFiles((e.dataTransfer && e.dataTransfer.files) || []);
   });
 
+  // Keep Send enabled/disabled in sync with typing during gate mode.
+  chatInput.addEventListener("input", function () {
+    _evalSendBtn();
+  });
+
   var _activeReader = null;
+  var _gateData = null; // non-null while the input bar is in human-gate mode
 
   function setRunningState(running) {
     if (chatInput) { chatInput.disabled = running; }
     if (chatSendBtn) { chatSendBtn.hidden = running; }
     if (chatStopBtn) { chatStopBtn.hidden = !running; }
+    if (chatAttachBtn) { chatAttachBtn.disabled = running; }
+    if (chatAttachmentInput) { chatAttachmentInput.disabled = running; }
     document.querySelectorAll(".chat-restart-btn").forEach(function (btn) {
       btn.disabled = running;
     });
@@ -607,71 +672,6 @@ document.addEventListener("DOMContentLoaded", function () {
     });
   }
 
-  function appendGatePanel(data) {
-    var sessionId = activeSessionIdInput ? activeSessionIdInput.value : "";
-    var isSingleAssistant = data && data.chat_mode === "single_assistant";
-    var promptText;
-    if (isSingleAssistant) {
-      promptText = ' - Round ' + data.round + ' complete. Continue or Stop?';
-    } else {
-      promptText = ' - Round ' + data.round + ' of ' + data.max_rounds + ' complete. What would you like to do?';
-    }
-    // Single-assistant mode: Continue starts disabled until user types or attaches
-    var continueBtnAttr = isSingleAssistant ? ' disabled' : '';
-    var textareaPlaceholder = isSingleAssistant
-      ? 'Enter your next message (required)...'
-      : 'Optional details to send to agents...';
-    chatMessages.insertAdjacentHTML(
-      "beforeend",
-      '<div class="human-gate-panel" data-session-id="' + sessionId + '"'
-      + (isSingleAssistant ? ' data-chat-mode="single_assistant"' : '')
-      + '>'
-      + '<div class="human-gate-panel__prompt">'
-      + '<strong>' + (data.human_name || "You") + '</strong>'
-      + promptText
-      + '</div>'
-      + '<div class="human-gate-panel__decision-row">'
-      + '<button class="btn btn--success human-gate-btn human-gate-btn--approve">Approve</button>'
-      + '<button class="btn btn--warning human-gate-btn human-gate-btn--reject">Reject</button>'
-      + '</div>'
-      + '<div class="human-gate-panel__input-row">'
-      + '<button class="btn btn--secondary human-gate-btn human-gate-btn--attach chat-attach-btn" type="button" title="Attach files">+</button>'
-      + '<textarea class="human-gate-panel__textarea" rows="3" placeholder="' + textareaPlaceholder + '"></textarea>'
-      + '<input class="human-gate-panel__file-input" type="file" hidden multiple>'
-      + '</div>'
-      + '<div class="chat-attachment-list human-gate-panel__attachment-list" hidden></div>'
-      + '<div class="human-gate-panel__actions">'
-      + '<button class="btn btn--primary human-gate-btn human-gate-btn--continue"' + continueBtnAttr + '>Continue</button>'
-      + '<button class="btn btn--danger human-gate-btn human-gate-btn--stop">Stop</button>'
-      + '</div>'
-      + '</div>'
-    );
-    chatMessages.scrollTop = chatMessages.scrollHeight;
-  }
-
-  function setGateDecision(panel, decision) {
-    if (!panel || !decision) return;
-
-    panel.dataset.decision = decision;
-    panel.querySelectorAll(".human-gate-btn--approve, .human-gate-btn--reject").forEach(function (btn) {
-      btn.classList.remove("is-active");
-    });
-
-    var activeBtn = panel.querySelector(
-      decision === "APPROVED" ? ".human-gate-btn--approve" : ".human-gate-btn--reject"
-    );
-    if (activeBtn) activeBtn.classList.add("is-active");
-
-    var ta = panel.querySelector(".human-gate-panel__textarea");
-    if (!ta) return;
-
-    var value = ta.value || "";
-    var body = value.replace(/^(APPROVED|REJECTED)\s*\n\n?/i, "");
-    ta.value = decision + "\n\n" + body;
-    ta.focus();
-    ta.selectionStart = ta.selectionEnd = ta.value.length;
-  }
-
   function startRun(task, attachmentIds) {
     var sessionId = activeSessionIdInput ? activeSessionIdInput.value.trim() : "";
     if (!sessionId) { return; }
@@ -735,7 +735,9 @@ document.addEventListener("DOMContentLoaded", function () {
         reader.read().then(function (result) {
           if (result.done) {
             _activeReader = null;
-            setRunningState(false);
+            // If a gate event was already processed, the input bar is in gate
+            // mode — do not call setRunningState(false) and re-hide the Stop button.
+            if (!_gateData) setRunningState(false);
             return;
           }
           buffer += decoder.decode(result.value, { stream: true });
@@ -753,7 +755,7 @@ document.addEventListener("DOMContentLoaded", function () {
           pump();
         }).catch(function () {
           _activeReader = null;
-          setRunningState(false);
+          if (!_gateData) setRunningState(false);
         });
       }
       pump();
@@ -846,7 +848,8 @@ document.addEventListener("DOMContentLoaded", function () {
       window.renderLocalTimes();
     } else if (eventName === "gate") {
       setRunningState(false);
-      appendGatePanel(data);
+      appendGateBadge(data);
+      setGateMode(data);
     } else if (eventName === "done") {
       setRunningState(false);
       appendStatusBadge("completed");
@@ -864,6 +867,8 @@ document.addEventListener("DOMContentLoaded", function () {
   if (chatSendBtn) {
     chatSendBtn.addEventListener("click", function () {
       if (chatSendBtn.disabled) return;
+      // Fork to gate handler when the input bar is in human-gate mode.
+      if (_gateData) { _handleGateSend(); return; }
       var text = chatInput.value.trim();
       var hasAttachments = composePendingFiles.length > 0 || composeUploaded.length > 0;
       if (!text && !hasAttachments) return;
@@ -888,6 +893,11 @@ document.addEventListener("DOMContentLoaded", function () {
       }
 
       var sessionId = activeSessionIdInput ? activeSessionIdInput.value.trim() : "";
+      // If a restart panel is visible the session is stopped/completed.
+      // Typing in the send box should start a fresh session, not resume the old one.
+      if (sessionId && chatMessages && chatMessages.querySelector(".chat-restart-panel")) {
+        sessionId = "";
+      }
       if (!sessionId) {
         var projectId = activeProjectIdInput ? activeProjectIdInput.value.trim() : "";
         if (!projectId) { alert("Select a project first."); return; }
@@ -961,10 +971,23 @@ document.addEventListener("DOMContentLoaded", function () {
       var sessionId = activeSessionIdInput ? activeSessionIdInput.value.trim() : "";
       var secretKey = getSecretKey();
       if (!sessionId || !secretKey) return;
-      fetch("/chat/sessions/" + sessionId + "/stop/", {
-        method: "POST",
-        headers: { "X-App-Secret-Key": secretKey, "X-CSRFToken": csrfToken },
-      });
+      if (_gateData) {
+        // Gate mode: use the respond endpoint so the backend transitions the
+        // session from awaiting_input → stopped cleanly.
+        sendRespond(sessionId, "stop", "").then(function () {
+          clearGateMode();
+          appendStatusBadge("stopped");
+          appendRestartPanel();
+        }).catch(function (err) {
+          appendBubble('<div class="chat-bubble chat-bubble--error">Error: ' + err.message + '</div>');
+        });
+      } else {
+        // Active run: fire-and-forget signal to the run endpoint.
+        fetch("/chat/sessions/" + sessionId + "/stop/", {
+          method: "POST",
+          headers: { "X-App-Secret-Key": secretKey, "X-CSRFToken": csrfToken },
+        });
+      }
     });
   }
 
@@ -983,146 +1006,6 @@ document.addEventListener("DOMContentLoaded", function () {
         composePendingFiles.splice(idx - uploadedLen, 1);
       }
       renderAttachmentList(chatComposeAttachments, composeUploaded.concat(composePendingFiles), "compose");
-      return;
-    }
-
-    if (target === "gate") {
-      var panel = removeBtn.closest(".human-gate-panel");
-      if (!panel) return;
-      var state = getGateState(panel);
-      var gateUploadedLen = state.uploaded.length;
-      if (idx < gateUploadedLen) {
-        state.uploaded.splice(idx, 1);
-      } else {
-        state.pending.splice(idx - gateUploadedLen, 1);
-      }
-      renderGateAttachments(panel);
-    }
-  });
-
-  document.body.addEventListener("click", function (e) {
-    var attachBtn = e.target.closest(".human-gate-btn--attach");
-    if (!attachBtn) return;
-    var panel = attachBtn.closest(".human-gate-panel");
-    if (!panel) return;
-    var input = panel.querySelector(".human-gate-panel__file-input");
-    if (input) input.click();
-  });
-
-  document.body.addEventListener("change", function (e) {
-    if (!e.target.classList.contains("human-gate-panel__file-input")) return;
-    var panel = e.target.closest(".human-gate-panel");
-    if (!panel) return;
-    addGateFiles(panel, e.target.files);
-    e.target.value = "";
-  });
-
-  document.body.addEventListener("input", function (e) {
-    if (!e.target.classList || !e.target.classList.contains("human-gate-panel__textarea")) return;
-    var panel = e.target.closest(".human-gate-panel");
-    if (panel) _evalGateContinue(panel);
-  });
-
-  document.body.addEventListener("paste", function (e) {
-    if (!e.target.classList || !e.target.classList.contains("human-gate-panel__textarea")) return;
-    var panel = e.target.closest(".human-gate-panel");
-    if (!panel) return;
-    var files = (e.clipboardData && e.clipboardData.files) || [];
-    if (!files.length) return;
-    e.preventDefault();
-    addGateFiles(panel, files);
-  });
-
-  document.body.addEventListener("dragover", function (e) {
-    if (!e.target.classList || !e.target.classList.contains("human-gate-panel__textarea")) return;
-    e.preventDefault();
-    e.dataTransfer.dropEffect = "copy";
-  });
-
-  document.body.addEventListener("drop", function (e) {
-    if (!e.target.classList || !e.target.classList.contains("human-gate-panel__textarea")) return;
-    var panel = e.target.closest(".human-gate-panel");
-    if (!panel) return;
-    e.preventDefault();
-    addGateFiles(panel, (e.dataTransfer && e.dataTransfer.files) || []);
-  });
-
-  document.body.addEventListener("click", function (e) {
-    var panel = e.target.closest(".human-gate-panel");
-    if (!panel) return;
-
-    var sessionId = panel.dataset.sessionId
-      || (activeSessionIdInput ? activeSessionIdInput.value.trim() : "");
-    var secretKey = getSecretKey();
-    if (!sessionId || !secretKey) return;
-
-    function sendRespond(action, text, attachmentIds) {
-      var body = new URLSearchParams({ action: action });
-      if (text) body.append("text", text);
-      (attachmentIds || []).forEach(function (id) {
-        if (id) body.append("attachment_ids", id);
-      });
-      return fetch("/chat/sessions/" + sessionId + "/respond/", {
-        method: "POST",
-        headers: {
-          "X-App-Secret-Key": secretKey,
-          "X-CSRFToken": csrfToken,
-          "Content-Type": "application/x-www-form-urlencoded",
-        },
-        body: body.toString(),
-      }).then(function (r) {
-        return r.json().then(function (data) {
-          if (!r.ok) throw new Error(data.error || "Action failed");
-          return data;
-        });
-      });
-    }
-
-    if (e.target.closest(".human-gate-btn--approve")) {
-      setGateDecision(panel, "APPROVED");
-    } else if (e.target.closest(".human-gate-btn--reject")) {
-      setGateDecision(panel, "REJECTED");
-    } else if (e.target.closest(".human-gate-btn--continue")) {
-      var continueBtn = panel.querySelector(".human-gate-btn--continue");
-      var ta = panel.querySelector(".human-gate-panel__textarea");
-      var text = ta ? ta.value.trim() : "";
-      // Text is mandatory for ALL gate modes — attachments alone are not enough.
-      // Approve/Reject buttons prepend their decision to the textarea, satisfying this.
-      if (!text) {
-        if (ta) { ta.focus(); ta.classList.add("input--shake"); setTimeout(function () { ta.classList.remove("input--shake"); }, 400); }
-        return;
-      }
-      // Prevent double-submit while an async file upload is in-flight.
-      // Without this guard, clicking Continue twice (or clicking during upload)
-      // fires multiple appendHumanBubble + sendRespond calls.
-      if (panel.dataset.submitting === "1") return;
-      panel.dataset.submitting = "1";
-      if (continueBtn) continueBtn.disabled = true;
-      ensureGateAttachmentsUploaded(panel, sessionId).then(function (attachmentIds) {
-        var state = getGateState(panel);
-        var bubbleAttachments = state.uploaded.slice();
-        panel.remove();
-        if (text || bubbleAttachments.length) {
-          appendHumanBubble(text || "Attached files", bubbleAttachments);
-        }
-        sendRespond("continue", text, attachmentIds).then(function (d) {
-          if (d.status === "ok") startRun(d.task || "", d.attachment_ids || []);
-        }).catch(function (err) {
-          appendBubble('<div class="chat-bubble chat-bubble--error">Error: ' + err.message + '</div>');
-        });
-      }).catch(function (err) {
-        // Upload failed — restore interactive state so the user can retry.
-        panel.dataset.submitting = "";
-        if (continueBtn) continueBtn.disabled = false;
-        appendBubble('<div class="chat-bubble chat-bubble--error">Error: ' + err.message + '</div>');
-      });
-    } else if (e.target.closest(".human-gate-btn--stop")) {
-      panel.remove();
-      sendRespond("stop", "").then(function () {
-        appendStatusBadge("stopped");
-      }).catch(function (err) {
-        appendBubble('<div class="chat-bubble chat-bubble--error">Error: ' + err.message + '</div>');
-      });
     }
   });
 
@@ -1186,6 +1069,21 @@ document.addEventListener("DOMContentLoaded", function () {
 
   document.body.addEventListener("htmx:afterSwap", function () {
     updateChatAuthState();
+    // Restore gate mode if the newly loaded session is awaiting_input.
+    // The server renders a .chat-status-badge--gate with data-gate-context
+    // so we can reconstruct the gate state without an extra API call.
+    var gateBadge = chatMessages
+      && chatMessages.querySelector(".chat-status-badge--gate[data-gate-context]");
+    if (gateBadge) {
+      try {
+        var ctx = JSON.parse(gateBadge.dataset.gateContext);
+        setGateMode(ctx);
+      } catch (e) {
+        clearGateMode();
+      }
+    } else {
+      clearGateMode();
+    }
   });
 
   document.body.addEventListener("input", function (e) {
@@ -1239,4 +1137,14 @@ document.addEventListener("DOMContentLoaded", function () {
   });
 
   updateChatAuthState();
+
+  // On initial page load, restore gate mode if the session is awaiting_input.
+  // htmx:afterSwap covers session switches; this covers first render.
+  var initialGateBadge = chatMessages
+    && chatMessages.querySelector(".chat-status-badge--gate[data-gate-context]");
+  if (initialGateBadge) {
+    try {
+      setGateMode(JSON.parse(initialGateBadge.dataset.gateContext));
+    } catch (e) { /* malformed JSON — ignore */ }
+  }
 });

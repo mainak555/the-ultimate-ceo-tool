@@ -275,10 +275,14 @@ def close_session_workbenches(session_id: str) -> None:
         for wb in workbenches:
             try:
                 await asyncio.wait_for(wb.stop(), timeout=timeout_s)
-            except RuntimeError as exc:
+            except (RuntimeError, TypeError) as exc:
                 # Lazy-started workbenches may never have been started in a
-                # session. Stopping those should be a no-op, not an error.
-                if "not started" in str(exc).lower():
+                # session — stopping them is a no-op, not an error.
+                # RuntimeError("not started"): workbench started but not run.
+                # TypeError(NoneType await): actor_task is None because the
+                # workbench was constructed but wb.start() was never called.
+                msg = str(exc).lower()
+                if "not started" in msg or "nonetype" in msg:
                     continue
                 logger.exception(
                     "agents.mcp.failed",
@@ -296,12 +300,12 @@ def close_session_workbenches(session_id: str) -> None:
                 )
 
     try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            # Schedule and forget — eviction is fire-and-forget by design.
-            loop.create_task(_stop_all())
-        else:
-            loop.run_until_complete(_stop_all())
+        # get_running_loop() raises RuntimeError when called outside an async
+        # context (e.g. a ThreadPoolExecutor thread). That is the signal to
+        # spin up a fresh event loop via asyncio.run().
+        loop = asyncio.get_running_loop()
+        # Already inside a running loop — schedule and forget.
+        loop.create_task(_stop_all())
     except RuntimeError:
         asyncio.run(_stop_all())
 

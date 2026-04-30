@@ -270,10 +270,17 @@ idle ──► running ──► awaiting_input ──► running ──► ... 
 ```
 
 - **Continue**: POST `/chat/sessions/<id>/respond/` with `action=continue` and optional `text`. The server returns `{status:"ok", task:"..."}` and the UI calls `/run/` with that task.
-- **Decision + Notes**: `Approve` / `Reject` are optional shortcuts. If clicked, the UI prepends `APPROVED` or `REJECTED` followed by a blank line in the notes textarea. Continue can still be sent without selecting either shortcut. Any non-empty continue text is persisted as a `user` role entry in `discussions` and passed to `run_stream(task=...)`.
+- **Gate UI — unified input bar**: when the SSE `gate` event fires, a non-interactive `.chat-status-badge--gate` is appended to chat, and the bottom input bar switches to gate mode (`setGateMode(data)`). The placeholder updates to show the round, the Stop button stays visible, and the Send button routes to `_handleGateSend()` which calls `sendRespond("continue", ...)`. No separate gate panel widget is injected. The `Approve` / `Reject` decision shortcuts have been removed — users type their response directly.
 - **Empty Continue (multi-assistant mode)**: When Continue is submitted with no text, `task` is empty and no `UserMessage` is broadcast by AutoGen, leaving each agent's model context ending with its own prior `AssistantMessage`. Anthropic Claude 4+ models reject this (they no longer support "assistant prefill"). `views.py` therefore injects a synthetic `"Continue."` task for `run_stream()` in this case. The synthetic message is **not persisted** to `discussions[]` and **not shown** in the SSE chat stream (filtered because `source == "user"` is excluded from SSE output messages). It is baked into `agent_state` checkpoints, which is correct — the model context accurately records the resume event.
-- **Stop**: POST `/chat/sessions/<id>/respond/` with `action=stop` transitions session to `stopped` and evicts the cached team.
+- **Stop**: POST `/chat/sessions/<id>/respond/` with `action=stop` transitions session to `stopped` and evicts the cached team. In gate mode, the Stop button (`#chat-stop-btn`) calls `sendRespond("stop")` via the respond endpoint. During an active run it calls the dedicated `/stop/` endpoint (fire-and-forget).
 - **First run**: `task` must be non-empty — a 400 is returned if `discussions` is empty and no task was provided.
+- **Page-reload / session-switch recovery**: when an `awaiting_input` session is loaded, `chat_session_history.html` renders a `.chat-status-badge--gate` with `data-gate-context` JSON. **Two paths** restore gate state — both scan for the badge and call `setGateMode(ctx)`:
+  - `DOMContentLoaded` bootstrap (initial page render — runs once at script start).
+  - `htmx:afterSwap` handler (session switch via sidebar — runs on every HTMX history swap).
+  Neither path makes an extra API call.
+- **Gate badge format**: `⏸ Round N/M — response is required` for multi-agent; `⏸ Round N — response is required` for single-assistant (no iteration limit). The placeholder also updates to show the round.
+- **SSE pump stop-button guard**: the `pump()` loop in `_doStartRun()` checks `if (!_gateData) setRunningState(false)` before hiding the Stop button when the SSE stream closes (`result.done`) or errors. This prevents the `result.done` callback — which fires immediately after the `gate` frame — from re-hiding the Stop button that `setGateMode()` just showed.
+- **Restart panel + Send interaction**: when `.chat-restart-panel` is present in chat history (stopped/completed session), the `chatSendBtn` handler clears the session ID and forces the create-session path. The user's text starts a **new** session and run. The restart panel's own `data-session-id` continues to own "Continue from last" / "Add context and continue" independently.
 
 Mode-specific pause behavior:
 
