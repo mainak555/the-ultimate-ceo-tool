@@ -1882,6 +1882,36 @@ select.input {
       justify-content: center;
       margin-top: 2px;
     }
+
+    .chat-bubble__meta .chat-bubble__copy-btn {
+      margin-left: auto;
+    }
+  }
+
+  &__copy-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    color: $color-text-muted;
+    cursor: pointer;
+    transition: color 0.15s, background 0.15s;
+    line-height: 1;
+
+    &:hover {
+      background: $color-border;
+      color: $color-text;
+    }
+
+    &--copied {
+      color: $color-success;
+    }
   }
 
   &--error {

@@ -566,7 +566,10 @@ document.addEventListener("DOMContentLoaded", function () {
   function setRunningState(running) {
     if (chatInput) { chatInput.disabled = running; }
     if (chatSendBtn) { chatSendBtn.hidden = running; }
-    if (chatStopBtn) { chatStopBtn.hidden = !running; }
+    if (chatStopBtn) {
+      chatStopBtn.hidden = !running;
+      chatStopBtn.disabled = false; // reset so next run gets a fresh enabled button
+    }
     if (chatAttachBtn) { chatAttachBtn.disabled = running; }
     if (chatAttachmentInput) { chatAttachmentInput.disabled = running; }
     document.querySelectorAll(".chat-restart-btn").forEach(function (btn) {
@@ -587,15 +590,74 @@ document.addEventListener("DOMContentLoaded", function () {
     chatMessages.scrollTop = chatMessages.scrollHeight;
   }
 
+  var _COPY_ICON = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>';
+  var _CHECK_ICON = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>';
+
+  function _buildCopyBtn() {
+    return '<button type="button" class="chat-bubble__copy-btn" title="Copy message" aria-label="Copy message">' + _COPY_ICON + '</button>';
+  }
+
+  function _getCopyText(bubbleEl) {
+    var md = bubbleEl.dataset.rawContent || "";
+    var attachmentNames = bubbleEl.querySelectorAll(".chat-message-attachment__name");
+    if (attachmentNames.length) {
+      md += "\n\n**Attachments:**\n";
+      attachmentNames.forEach(function (span) {
+        md += "- " + span.textContent.trim() + "\n";
+      });
+    }
+    return md.trim();
+  }
+
+  function _showCopiedFeedback(btn) {
+    btn.innerHTML = _CHECK_ICON;
+    btn.classList.add("chat-bubble__copy-btn--copied");
+    btn.title = "Copied!";
+    setTimeout(function () {
+      btn.innerHTML = _COPY_ICON;
+      btn.classList.remove("chat-bubble__copy-btn--copied");
+      btn.title = "Copy message";
+    }, 2000);
+  }
+
+  function _fallbackCopyText(text, btn) {
+    var ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.cssText = "position:fixed;top:-9999px;left:-9999px;opacity:0";
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    try { document.execCommand("copy"); _showCopiedFeedback(btn); } catch (e) { /* silent */ }
+    document.body.removeChild(ta);
+  }
+
+  document.body.addEventListener("click", function (e) {
+    var btn = e.target.closest(".chat-bubble__copy-btn");
+    if (!btn) return;
+    var bubble = btn.closest(".chat-bubble");
+    if (!bubble) return;
+    var text = _getCopyText(bubble);
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function () {
+        _showCopiedFeedback(btn);
+      }).catch(function () {
+        _fallbackCopyText(text, btn);
+      });
+    } else {
+      _fallbackCopyText(text, btn);
+    }
+  });
+
   function appendHumanBubble(text, attachments) {
     var ts = new Date().toISOString();
     var contentHtml = renderMarkdown(text);
     var attachmentsHtml = renderMessageAttachments(attachments || []);
     appendBubble(
-      '<div class="chat-bubble chat-bubble--human">'
+      '<div class="chat-bubble chat-bubble--human" data-raw-content="' + escapeHtml(text || "") + '">'
       + '<div class="chat-bubble__meta">'
       + '<span class="chat-bubble__name">You</span>'
       + '<span class="chat-bubble__time"><time class="local-time" data-utc="' + ts + '">' + ts + '</time></span>'
+      + _buildCopyBtn()
       + '</div>'
       + '<div class="chat-bubble__content">' + contentHtml + '</div>'
       + attachmentsHtml
@@ -833,12 +895,13 @@ document.addEventListener("DOMContentLoaded", function () {
         data.id || ""
       );
       appendBubble(
-        '<div class="chat-bubble chat-bubble--ai">'
+        '<div class="chat-bubble chat-bubble--ai" data-raw-content="' + escapeHtml(data.content || "") + '">'
         + '<div class="chat-bubble__avatar">' + initial + '</div>'
         + '<div class="chat-bubble__body">'
         + '<div class="chat-bubble__meta">'
         + '<span class="chat-bubble__name">' + (data.agent_name || "Agent") + '</span>'
         + '<span class="chat-bubble__time"><time class="local-time" data-utc="' + ts + '">' + ts + '</time></span>'
+        + _buildCopyBtn()
         + '</div>'
         + '<div class="chat-bubble__content">' + contentHtml + '</div>'
         + attachmentsHtml
@@ -968,9 +1031,12 @@ document.addEventListener("DOMContentLoaded", function () {
 
   if (chatStopBtn) {
     chatStopBtn.addEventListener("click", function () {
+      if (chatStopBtn.disabled) return;
       var sessionId = activeSessionIdInput ? activeSessionIdInput.value.trim() : "";
       var secretKey = getSecretKey();
       if (!sessionId || !secretKey) return;
+      // Disable immediately to prevent double-click.
+      chatStopBtn.disabled = true;
       if (_gateData) {
         // Gate mode: use the respond endpoint so the backend transitions the
         // session from awaiting_input → stopped cleanly.
@@ -979,6 +1045,7 @@ document.addEventListener("DOMContentLoaded", function () {
           appendStatusBadge("stopped");
           appendRestartPanel();
         }).catch(function (err) {
+          chatStopBtn.disabled = false;
           appendBubble('<div class="chat-bubble chat-bubble--error">Error: ' + err.message + '</div>');
         });
       } else {
@@ -987,6 +1054,8 @@ document.addEventListener("DOMContentLoaded", function () {
           method: "POST",
           headers: { "X-App-Secret-Key": secretKey, "X-CSRFToken": csrfToken },
         });
+        // setRunningState(false) is called when the SSE "stopped" event arrives,
+        // which hides the button — disabled state is the interim guard.
       }
     });
   }

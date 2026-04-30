@@ -17,10 +17,11 @@
   <div class="chat-history" id="chat-history-msgs">
     {% for msg in history_messages|default:session.discussions %}
       {% if msg.role == "user" %}
-        <div class="chat-bubble chat-bubble--human">
+        <div class="chat-bubble chat-bubble--human" data-raw-content="{{ msg.content }}">
           <div class="chat-bubble__meta">
             <span class="chat-bubble__name">You</span>
             <span class="chat-bubble__time"><time class="local-time" data-utc="{{ msg.timestamp }}">{{ msg.timestamp }}</time></span>
+            <button type="button" class="chat-bubble__copy-btn" title="Copy message" aria-label="Copy message"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg></button>
           </div>
           <div class="chat-bubble__content">{{ msg.content|markdownify }}</div>
           {% if msg.attachments %}
@@ -37,12 +38,13 @@
           {% endif %}
         </div>
       {% else %}
-        <div class="chat-bubble chat-bubble--ai">
+        <div class="chat-bubble chat-bubble--ai" data-raw-content="{{ msg.content }}">
           <div class="chat-bubble__avatar">{{ msg.agent_name|slice:":1"|upper }}</div>
           <div class="chat-bubble__body">
             <div class="chat-bubble__meta">
               <span class="chat-bubble__name">{{ msg.agent_name|default:"Agent" }}</span>
               <span class="chat-bubble__time"><time class="local-time" data-utc="{{ msg.timestamp }}">{{ msg.timestamp }}</time></span>
+              <button type="button" class="chat-bubble__copy-btn" title="Copy message" aria-label="Copy message"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg></button>
             </div>
             <div class="chat-bubble__content">{{ msg.content|markdownify }}</div>
             {% if msg.attachments %}

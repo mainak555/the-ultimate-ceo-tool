@@ -43,6 +43,8 @@ bottom input bar switches to **gate mode**:
 - A status badge appears in chat: `⏸ Round N/M — response is required`
   (single-assistant shows `Round N`, no max).
 - The **Stop** button stays visible so the user can stop at any time.
+  Clicking Stop disables the button immediately to prevent double-submission;
+  it re-enables automatically when the next run starts.
 - Typing in the send box and pressing **Send** (or Enter) resumes the run,
   forwarding the typed text as context for the next round.
 - The Approve / Reject decision shortcuts have been removed; users type their
@@ -80,6 +82,23 @@ appears with two options:
 
 Typing in the main send box while the restart card is visible always starts a
 **new** session, not a resume.
+
+## Copying Chat Messages
+
+Every chat bubble (user and agent) shows a **copy icon** in the message header.
+Clicking it copies the message to your clipboard:
+
+- Text is copied in **markdown format** (the raw source, not rendered HTML).
+- Any attached files are appended as a markdown list below the text:
+  ```
+  **Attachments:**
+  - report.pdf
+  - screenshot.png
+  ```
+- The icon briefly changes to a check mark (✓) to confirm the copy succeeded.
+
+The copy button is always visible regardless of whether a Secret Key is
+entered — you can copy agent responses in both read and write sessions.
 
 ## Chat Attachments
 

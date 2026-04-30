@@ -114,6 +114,39 @@ Shared markdown rendering for Home and export reference panes must go through `s
 - When a session with `status == "awaiting_input"` is loaded from the server, `chat_session_history.html` renders the gate status badge (carrying `data-gate-context`). Both the `DOMContentLoaded` bootstrap (initial page load) and `htmx:afterSwap` (session switch) scan for this badge and call `setGateMode()` to restore the Stop button and input placeholder without an extra API call.
 - Attachment interactions for the composer: file-picker attach button, drag/drop, and clipboard paste. In gate mode the compose attachment pipeline is reused (no separate gate attachment state).
 - Attachment chip rendering during composition and thumbnail rendering in chat history for image attachments.
+- **Copy-to-clipboard** on every chat message (see [Chat Message Copy](#chat-message-copy) below).
+- **Stop button idempotency**: the Stop button is disabled immediately on first click to prevent double-submission. `setRunningState()` always resets `disabled` when hiding the button so the next run starts with a fresh enabled state.
+
+## Chat Message Copy
+
+Every chat bubble (both user and agent) carries a copy icon button (`.chat-bubble__copy-btn`) in the top-right of its meta row.
+
+### Behaviour
+
+- Clicking the button copies the message content to the clipboard.
+- **Text format**: the raw markdown source from `discussions[].content` is used — never the rendered HTML — so the recipient receives clean markdown.
+- **Attachments**: if the bubble has attachment chips (`.chat-message-attachment__name`), filenames are appended below the message text as a markdown list:
+  ```
+  **Attachments:**
+  - invoice.pdf
+  - photo.png
+  ```
+- **Image messages**: image content is not separately base64-encoded; the attachment filename is appended as above.
+- After a successful copy the icon changes to a check mark (`.chat-bubble__copy-btn--copied`, green `$color-success`) for 2 seconds, then reverts.
+- Uses `navigator.clipboard.writeText()` with an `execCommand("copy")` textarea fallback for older browsers.
+
+### Implementation
+
+| Concern | Location |
+|---|---|
+| `data-raw-content` attribute | `chat_session_history.html` (server-rendered) + `appendHumanBubble()` / `handleSSEEvent()` in `home.js` (live SSE) |
+| Button HTML | `_buildCopyBtn()` helper in `home.js`; inline SVG in template |
+| Click handler (delegated) | `document.body` listener in `home.js` — works for both server-rendered and live-streamed bubbles |
+| SCSS | `.chat-bubble__copy-btn` and `.chat-bubble__copy-btn--copied` in `main.scss` |
+
+### Copy Button Visibility
+
+The copy button is visible in **non-readonly sessions only** (it is part of the normal chat bubble markup and not gated by the secret key). The button is intentionally always visible so users can copy agent responses without needing write access.
 
 ## Chat Restart Discoverability
 
@@ -183,6 +216,7 @@ All write operations require a valid `APP_SECRET_KEY`. The secret is entered onc
 | **HITL attach button** | `#chat-attach-btn` (shared composer) | JS `disabled` during run, re-enabled in gate mode | Disabled during active run | Enabled in gate mode and idle |
 | **Delete (chat session)** | `chat_session_list.html` — `.chat-session-item__delete` | JS `hidden` | Hidden | Visible |
 | **Export dropdown (chat output card)** | `chat_session_history.html` + SSE-rendered bubbles — `.chat-bubble__actions` | JS `hidden` via `updateChatAuthState()` | Hidden | Visible |
+| **Copy button (chat bubble)** | `chat_session_history.html` + SSE-rendered bubbles — `.chat-bubble__copy-btn` | Always visible (not secret-gated) | Visible | Visible |
 | **New-session modal** | `home.html` — `#new-session-modal` | JS closes if key removed | Auto-closed | Openable |
 
 All write-endpoint views (`project_create`, `project_delete`, `project_clone`, `project_detail POST`, `chat_session_create`, `chat_session_delete`) also enforce the secret on the server and return a 403 response if the header is missing or invalid.
@@ -196,6 +230,7 @@ Project delete safety:
 
 - **`project_config.js` / `updateSubmitState()`** — runs on page load, after HTMX swaps, and on secret-key input changes. Handles `type="submit"` buttons, `.js-requires-secret` buttons on `.config-form`, and `.sidebar__delete` visibility/disabled state.
 - **`home.js` / `updateChatAuthState()`** — runs on page load, after HTMX swaps, and on secret-key input changes. Handles home chat controls (`#chat-send-btn`, `#chat-attach-btn`, `#chat-input`, `.chat-session-item__delete`, `.chat-session-item__edit`, `.chat-bubble__actions` export visibility, edit modal safety). Also calls `_evalSendBtn()` at the end to enforce gate-mode send rules.
+- **`home.js` / `setRunningState(running)`** — shows/hides the Stop button and disables/enables inputs during an active run. Always resets `chatStopBtn.disabled = false` when hiding the button so the next run starts clean.
 
 ### Adding a New Secret-Gated Button
 
