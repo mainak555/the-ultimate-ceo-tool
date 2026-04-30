@@ -385,7 +385,7 @@ Configure this per-server under **MCP OAuth App Registrations** in the project c
 
 - **`server_name`** must match a key inside your `mcpServers` JSON (shared or dedicated).
 - Register the callback URL `{BASE_URL}/mcp/oauth/callback/` with your OAuth provider.
-- Before each agent run, the UI checks token status and shows an **Authorize** modal if any server needs consent. Clicking the button opens a popup; after the user grants access the run starts automatically.
+- Before each agent run, the server checks Redis for session-scoped Bearer tokens (`POST /run/` returns **HTTP 409** when any are missing) and the UI shows an **Authorize** panel in the chat history. Clicking the Authorize button opens a popup; after the user grants access the run resumes automatically.
 - **Test Authorization** (config form) validates credentials without starting a run.
 - Tokens are session-scoped and expire from their JWT `exp` claim (TTL = `exp − now(UTC)`). Falls back to a hardcoded 3 h default if `exp` is absent. There is no mid-session refresh (v1) — re-authorize on the next run if a token expires.
 - `client_secret` is stored masked and never sent to the browser after the first save.

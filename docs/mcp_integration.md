@@ -179,8 +179,8 @@ Order of operations in `agents/team_builder.py::build_team()`:
    `mcpServers` dict based on scope.
 2. `build_mcp_workbenches()` constructs one `McpWorkbench` per server entry
    (mapping to `StdioServerParams` or `StreamableHttpServerParams`).
-3. The workbenches are passed to `AssistantAgent(workbench=...)` (single
-   workbench passed directly, multiple as a list).
+3. The workbenches are passed to `AssistantAgent(workbench=..., reflect_on_tool_use=True)` (single
+   workbench passed directly, multiple as a list). **`reflect_on_tool_use=True` is mandatory** on every agent that receives a workbench — without it AutoGen returns a raw `ToolCallSummaryMessage` after tool execution that is invisible in SSE chat and generates no `LLMCallEvent` OTel span.
 4. The accumulated workbenches are stashed under `project["_runtime"]
    ["mcp_workbenches"]` so the runtime cache can register them.
 5. `agents/runtime.py::get_or_create_team()` calls
@@ -434,17 +434,33 @@ Both success and error branches of `/mcp/oauth/callback/` render the shared `ser
 - shows a countdown and a manual **Close** button,
 - auto-closes after 2 s on `flow=run` success, 5 s on `flow=test` success, and **30 s on error** (long enough to read the provider's error message before the window disappears).
 
-### Pre-run gate (frontend)
+### Pre-run and mid-run OAuth gate
 
-`window.McpOAuth.checkAndAuthorize(sessionId, projectId, secretKey)` is called by `home.js` before every run POST:
+The gate is **server-driven** — no client-side pre-check occurs before the run POST.
 
-1. GET `/mcp/oauth/check/<sessionId>/` — check all OAuth server statuses.
-2. If `all_authorized: true` → no-op, run proceeds.
-3. Else → show authorization modal with per-server "Authorize" buttons.
-4. postMessage from popup → mark server authorized in modal.
-5. Poll `/mcp/oauth/check/` every 3 s as fallback.
-6. When all authorized → resolve → run POST fires.
-7. User clicks Cancel → reject → run is aborted.
+**Pre-run flow:**
+
+1. `home.js::_doStartRun()` posts to `POST /chat/sessions/<id>/run/`.
+2. The backend calls `compute_pending_oauth_servers(raw_project, session_id)`, which intersects the project's `mcp_oauth_configs` keys with the MCP server names reachable by active agents (shared + dedicated scopes), then checks Redis for session-scoped Bearer tokens.
+3. If any server lacks a token the backend returns **HTTP 409** `{"status": "awaiting_oauth", "servers": [...]}` and sets `session.status = "awaiting_oauth"` in MongoDB.
+4. The frontend detects the 409 and calls `_showOAuthGatePanel(sessionId, secretKey, servers, replayTask, replayAttachmentIds)`, which renders a `.chat-oauth-panel` in-history card (not a modal overlay) with one **Authorize** button per server.
+5. Clicking **Authorize** calls `window.McpOAuth.openAuthPopup(serverName, sessionId, projectId, secretKey)`, opening the consent popup.
+6. The popup's `oauth_flow.html` outcome page posts `{type: "mcp_oauth_done", success: true, server_name}` to the parent window via `postMessage`.
+7. The parent marks the row authorized; when all rows are authorized, `_onAllAuthorized()` calls `_doStartRun()` again — the server re-checks Redis and proceeds normally.
+8. **Popup-blocker fallback:** a 3 s polling timer calls `McpOAuth.fetchStatus(sessionId, secretKey)` (`GET /mcp/oauth/check/<sessionId>/`) to detect tokens written by the callback; marks rows and triggers `_onAllAuthorized()` the same way.
+
+`window.McpOAuth` exposes only `openAuthPopup()` and `fetchStatus()`. `checkAndAuthorize` does not exist.
+
+**Mid-run gate:**
+
+If a token expires between turns during a run, the SSE stream emits:
+
+```
+event: awaiting_oauth
+data: {"servers": ["server-name", ...]}
+```
+
+The frontend handles this in the SSE pump loop by calling `_showOAuthGatePanel()` with empty `replayTask` and `replayAttachmentIds`. Once all servers are re-authorized, `_onAllAuthorized()` replays `_doStartRun()` automatically. There is no mid-session token refresh without user action (v1 limitation).
 
 ### Runtime injection
 
@@ -480,6 +496,9 @@ Logger: `server.mcp_views`. Every branch of the start + callback handlers emits 
 | `agents.mcp.oauth_token_missing` | WARN | 2xx but no `access_token` field; logs `response_keys`. |
 | `agents.mcp.oauth_test_authorized` | INFO | `flow=test` success — Redis status flag written. |
 | `agents.mcp.oauth_authorized` | INFO | `flow=run` success — session token written; logs `ttl_seconds`. |
+| `agents.mcp.oauth_gate_blocked` | INFO | Pre-run gate fired: `compute_pending_oauth_servers` found ≥1 server without a Redis token; backend returned 409; `session.status` set to `awaiting_oauth`. |
+| `agents.mcp.oauth_gate_blocked_midrun` | INFO | Same check triggered between turns; SSE `awaiting_oauth` event emitted; run paused pending re-authorization. |
+| `agents.mcp.oauth_token_store_failed` | WARN | Redis `SET` of the session-scoped token key failed (Redis unavailable or serialization error). |
 
 Tracing: three nested OTel spans per OAuth round-trip:
 
