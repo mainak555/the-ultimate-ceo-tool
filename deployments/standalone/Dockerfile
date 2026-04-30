@@ -31,7 +31,12 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # App source
-COPY . .
+COPY agents/ agents/
+COPY config/ config/
+COPY server/ server/
+COPY core/ core/
+COPY agent_models.json .
+COPY manage.py .
 
 # Compile static (SCSS via django-compressor)
 RUN python manage.py collectstatic --noinput
