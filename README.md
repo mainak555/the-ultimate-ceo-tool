@@ -131,7 +131,11 @@ Multi-assistant gate contract:
 
 - Gate pauses after each full agent round (all agents have spoken once).
 - Send may be submitted with an empty textarea — agents resume with the
-  accumulated history as context.
+  accumulated history as context. An empty resume injects a synthetic
+  `"Continue."` user turn into the model context so Anthropic Claude 3.7+ /
+  Claude 4+ models (which require conversations to end with a user message)
+  do not reject the API call. The synthetic turn is not shown in chat and
+  not persisted to the discussion history.
 - Stop triggers a graceful termination: the current agent finishes its turn,
   the message is persisted, then the run ends cleanly, showing the
   **Continue session** card in chat history.

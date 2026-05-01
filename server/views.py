@@ -924,6 +924,23 @@ def _friendly_run_error(exc: Exception) -> str:
     #      raise RuntimeError(str(message.error))
     #    str(exc) begins with "BadRequestError: Error code: 400 - ..."
     exc_str = str(exc)
+
+    # 2a. Anthropic "assistant message prefill" error (Claude 3.7+ / Claude 4+).
+    # Occurs when the model context ends with an AssistantMessage instead of a
+    # UserMessage.  The run-level fix (injecting "Continue." for empty resumes)
+    # prevents this in normal gate-resume flows; this branch provides a
+    # user-friendly fallback if any edge case slips through.
+    if (
+        isinstance(exc, RuntimeError)
+        and "BadRequestError" in exc_str
+        and "assistant message prefill" in exc_str
+    ):
+        return (
+            "The model rejected the conversation: it must end with a user message. "
+            "This usually happens after an empty gate resume with a Claude 3.7+ model. "
+            "Please type a message and try again."
+        )
+
     if isinstance(exc, RuntimeError) and "BadRequestError" in exc_str and "invalid_prompt" in exc_str:
         # Extract the JSON body from the string representation.
         # Pattern: "Error code: 400 - {...}"
@@ -1297,19 +1314,24 @@ async def chat_session_run(request, session_id):
 
             heartbeat_task = asyncio.create_task(_lease_heartbeat(cancel_token))
 
-            # Claude 4+ (and future Anthropic models) reject conversations whose
-            # last message is an AssistantMessage — this is the "prefill" pattern
-            # that Anthropic removed.  When a human-gate resume carries no text
-            # (task_for_agent is falsy), AutoGen calls run_stream(task=None) which
-            # adds no new UserMessage, leaving each agent's model context ending
-            # with its own prior AssistantMessage.  The fix is to inject a minimal
-            # synthetic user turn so the model context always ends with a user
-            # message.  The synthetic string is NOT persisted to discussions[]
-            # (pending_messages is only built when task or attachment_ids are
-            # present, and both are falsy in this branch) and is NOT shown in the
-            # chat UI (the SSE loop only emits TextMessage where source!="user").
+            # Claude 3.7+ / Claude 4+ (and future Anthropic models) reject
+            # conversations whose last message is an AssistantMessage — this is
+            # the "prefill" pattern that Anthropic removed.  Ensure run_stream
+            # always receives a non-empty user task:
+            #
+            #  • Non-first runs with no text/attachments (empty gate resume):
+            #    inject "Continue." so AutoGen adds a UserMessage to every
+            #    agent's context before the LLM is called.  The synthetic string
+            #    is NOT persisted to discussions[] and NOT shown in the chat UI
+            #    (the SSE loop only emits TextMessage where source!="user").
+            #
+            #  • First runs whose attachment content could not be extracted
+            #    (empty PDF text layer, image-only PDF, etc.): also inject
+            #    "Continue." so the agents at least receive a minimal user turn
+            #    rather than run_stream(task=None) producing an empty message
+            #    array rejected by the model API.
             effective_task: str | None = task_for_agent if task_for_agent else None
-            if effective_task is None and not is_first_run:
+            if effective_task is None:
                 effective_task = "Continue."
 
             try:
