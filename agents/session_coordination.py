@@ -451,7 +451,7 @@ def _remote_user_token_ttl() -> int:
 
 
 def _remote_user_presence_ttl() -> int:
-    raw = int(getattr(settings, "REMOTE_USER_PRESENCE_TTL_SECONDS", 45) or 45)
+    raw = int(getattr(settings, "REMOTE_USER_PRESENCE_TTL_SECONDS", 60) or 60)
     return max(10, raw)
 
 
@@ -462,7 +462,7 @@ def _remote_user_checked_ttl() -> int:
 
 
 def get_remote_user_heartbeat_interval_seconds() -> int:
-    raw = int(getattr(settings, "REMOTE_USER_HEARTBEAT_INTERVAL_SECONDS", 20) or 20)
+    raw = int(getattr(settings, "REMOTE_USER_HEARTBEAT_INTERVAL_SECONDS", 30) or 30)
     return max(5, raw)
 
 
@@ -480,6 +480,26 @@ def _remote_user_online_key(session_id: str, user_id: str) -> str:
 
 def _remote_user_checked_key(session_id: str) -> str:
     return f"{_namespace()}:remote_user_checked:{session_id}"
+
+
+def _remote_export_capability_key(session_id: str, capability: str) -> str:
+    return f"{_namespace()}:remote_export_capability:{session_id}:{capability}"
+
+
+def _remote_export_capability_by_user_key(session_id: str, user_id: str) -> str:
+    return f"{_namespace()}:remote_export_capability_by_user:{session_id}:{user_id}"
+
+
+def _remote_gate_response_key(session_id: str, round_no: int, user_id: str) -> str:
+    return f"{_namespace()}:remote_gate_response:{session_id}:{round_no}:{user_id}"
+
+
+def _remote_gate_response_index_key(session_id: str, round_no: int) -> str:
+    return f"{_namespace()}:remote_gate_response_index:{session_id}:{round_no}"
+
+
+def _remote_gate_required_key(session_id: str, round_no: int) -> str:
+    return f"{_namespace()}:remote_gate_required:{session_id}:{round_no}"
 
 
 @traced_function("agents.remote_user.token_mint")
@@ -551,6 +571,60 @@ def get_or_mint_remote_user_token(session_id: str, user_id: str) -> str:
     if existing:
         return existing
     return mint_remote_user_token(session_id, user_id)
+
+
+@traced_function("agents.remote_user.export_capability_mint")
+def mint_remote_export_capability(session_id: str, user_id: str) -> str:
+    """Mint a session-scoped remote export capability token for one user.
+
+    Any previously active capability for the same user is invalidated
+    atomically. Token values are opaque random strings and are never logged.
+    """
+    if not session_id or not user_id:
+        raise SessionCoordinationError("session_id and user_id are required.")
+    capability = _secrets.token_urlsafe(32)
+    ttl = _remote_user_token_ttl()
+    by_user_key = _remote_export_capability_by_user_key(session_id, user_id)
+    cap_key = _remote_export_capability_key(session_id, capability)
+    try:
+        client = _get_client()
+        prior = client.get(by_user_key)
+        pipe = client.pipeline(transaction=True)
+        if prior:
+            pipe.delete(_remote_export_capability_key(session_id, prior))
+        pipe.set(cap_key, user_id, ex=ttl)
+        pipe.set(by_user_key, capability, ex=ttl)
+        pipe.execute()
+    except Exception as exc:  # noqa: BLE001
+        raise SessionCoordinationError("Unable to mint remote export capability.") from exc
+    logger.info(
+        "agents.remote_user.export_capability_minted",
+        extra={"session_id": session_id, "user_id": user_id, "rotated": bool(prior)},
+    )
+    return capability
+
+
+def get_or_mint_remote_export_capability(session_id: str, user_id: str) -> str:
+    """Return existing remote export capability for user or mint one."""
+    if not session_id or not user_id:
+        raise SessionCoordinationError("session_id and user_id are required.")
+    try:
+        existing = _get_client().get(_remote_export_capability_by_user_key(session_id, user_id))
+    except Exception as exc:  # noqa: BLE001
+        raise SessionCoordinationError("Unable to read remote export capability.") from exc
+    if existing:
+        return existing
+    return mint_remote_export_capability(session_id, user_id)
+
+
+def lookup_remote_export_capability(session_id: str, capability: str) -> str | None:
+    """Resolve a remote export capability to user_id, or None when missing."""
+    if not session_id or not capability:
+        return None
+    try:
+        return _get_client().get(_remote_export_capability_key(session_id, capability))
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def set_remote_user_online(session_id: str, user_id: str) -> None:
@@ -647,6 +721,109 @@ def list_remote_users_with_token(session_id: str, user_ids: list[str]) -> list[s
         return []
 
 
+def initialize_remote_gate_round(session_id: str, round_no: int, required_user_ids: list[str]) -> None:
+    """Initialize required-user and response index state for a gate round."""
+    import json as _json
+
+    if not session_id or round_no <= 0:
+        return
+    required = [str(uid).strip() for uid in (required_user_ids or []) if str(uid).strip()]
+    ttl = _remote_user_checked_ttl()
+    required_key = _remote_gate_required_key(session_id, round_no)
+    response_idx_key = _remote_gate_response_index_key(session_id, round_no)
+    try:
+        client = _get_client()
+        client.set(required_key, _json.dumps(required), ex=ttl)
+        client.delete(response_idx_key)
+        client.expire(response_idx_key, ttl)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def get_remote_gate_required_users(session_id: str, round_no: int) -> list[str] | None:
+    """Return required remote users for a gate round, or None if unset."""
+    import json as _json
+
+    if not session_id or round_no <= 0:
+        return None
+    try:
+        raw = _get_client().get(_remote_gate_required_key(session_id, round_no))
+        if raw is None:
+            return None
+        decoded = _json.loads(raw)
+        if not isinstance(decoded, list):
+            return None
+        return [str(uid) for uid in decoded if isinstance(uid, str)]
+    except Exception:  # noqa: BLE001
+        return None
+
+
+@traced_function("agents.remote_user.gate_response_record")
+def record_remote_gate_response(
+    session_id: str,
+    round_no: int,
+    user_id: str,
+    payload_json: str,
+) -> None:
+    """Record one remote response per user for a gate round.
+
+    The per-user key prevents duplicate responses from the same user in one
+    round. The index set supports efficient collection and cleanup.
+    """
+    if not session_id or round_no <= 0 or not user_id:
+        return
+    ttl = _remote_user_checked_ttl()
+    response_key = _remote_gate_response_key(session_id, round_no, user_id)
+    response_idx_key = _remote_gate_response_index_key(session_id, round_no)
+    try:
+        client = _get_client()
+        if client.set(response_key, payload_json, ex=ttl, nx=True):
+            pipe = client.pipeline(transaction=False)
+            pipe.sadd(response_idx_key, user_id)
+            pipe.expire(response_idx_key, ttl)
+            pipe.execute()
+            logger.info(
+                "agents.remote_user.gate_response_recorded",
+                extra={"session_id": session_id, "user_id": user_id, "round": round_no},
+            )
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def list_remote_gate_responded_users(session_id: str, round_no: int) -> list[str]:
+    """Return user IDs that have already responded for a gate round."""
+    if not session_id or round_no <= 0:
+        return []
+    try:
+        raw = _get_client().smembers(_remote_gate_response_index_key(session_id, round_no))
+        return [str(uid) for uid in (raw or []) if isinstance(uid, str)]
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def pop_remote_gate_response_payloads(session_id: str, round_no: int) -> list[str]:
+    """Return and clear all remote response payload JSON strings for a round."""
+    if not session_id or round_no <= 0:
+        return []
+    response_idx_key = _remote_gate_response_index_key(session_id, round_no)
+    try:
+        client = _get_client()
+        user_ids = client.smembers(response_idx_key) or []
+        if not user_ids:
+            return []
+        pipe = client.pipeline(transaction=False)
+        for uid in user_ids:
+            pipe.get(_remote_gate_response_key(session_id, round_no, uid))
+        payloads = pipe.execute() or []
+        cleanup_keys = [_remote_gate_response_key(session_id, round_no, uid) for uid in user_ids]
+        cleanup_keys.append(response_idx_key)
+        cleanup_keys.append(_remote_gate_required_key(session_id, round_no))
+        client.delete(*cleanup_keys)
+        return [str(p) for p in payloads if isinstance(p, str) and p.strip()]
+    except Exception:  # noqa: BLE001
+        return []
+
+
 def purge_remote_users_state(session_id: str) -> None:
     """Delete all readiness/presence/token keys for a session (called on session delete)."""
     if not session_id:
@@ -656,6 +833,11 @@ def purge_remote_users_state(session_id: str) -> None:
         f"{_namespace()}:remote_user_token_by_user:{session_id}:*",
         f"{_namespace()}:remote_user_online:{session_id}:*",
         f"{_namespace()}:remote_user_checked:{session_id}",
+        f"{_namespace()}:remote_export_capability:{session_id}:*",
+        f"{_namespace()}:remote_export_capability_by_user:{session_id}:*",
+        f"{_namespace()}:remote_gate_response:{session_id}:*",
+        f"{_namespace()}:remote_gate_response_index:{session_id}:*",
+        f"{_namespace()}:remote_gate_required:{session_id}:*",
     ]
     try:
         client = _get_client()
@@ -691,15 +873,23 @@ __all__ = [
     "get_remote_user_heartbeat_interval_seconds",
     "get_remote_user_token_for_user",
     "get_or_mint_remote_user_token",
+    "get_or_mint_remote_export_capability",
     "get_run_traceparent",
+    "get_remote_gate_required_users",
     "is_cancel_signaled",
+    "initialize_remote_gate_round",
     "list_authorized_oauth_servers",
+    "list_remote_gate_responded_users",
     "list_online_remote_users",
     "list_remote_users_with_token",
+    "lookup_remote_export_capability",
     "lookup_remote_user_token",
+    "mint_remote_export_capability",
     "mint_remote_user_token",
+    "pop_remote_gate_response_payloads",
     "purge_mcp_oauth_tokens",
     "purge_remote_users_state",
+    "record_remote_gate_response",
     "release_run_lease",
     "renew_run_lease",
     "set_checked_remote_users",

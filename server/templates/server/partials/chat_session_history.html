@@ -17,9 +17,19 @@
   <div class="chat-history" id="chat-history-msgs">
     {% for msg in history_messages|default:session.discussions %}
       {% if msg.role == "user" %}
-        <div class="chat-bubble chat-bubble--human" data-raw-content="{{ msg.content }}">
+        <div class="chat-bubble chat-bubble--human{% if msg.is_current_turn %} chat-bubble--current-turn{% endif %}" data-raw-content="{{ msg.content }}">
           <div class="chat-bubble__meta">
-            <span class="chat-bubble__name">You</span>
+            <span class="chat-bubble__name">
+              {% if history_viewer_name and msg.agent_name == history_viewer_name %}
+                You
+              {% else %}
+                {% if not history_viewer_name and project and project.human_gate and msg.agent_name == project.human_gate.name %}
+                  You
+                {% else %}
+                  {{ msg.agent_name|default:"You" }}
+                {% endif %}
+              {% endif %}
+            </span>
             <span class="chat-bubble__time"><time class="local-time" data-utc="{{ msg.timestamp }}">{{ msg.timestamp }}</time></span>
             <button type="button" class="chat-bubble__copy-btn" title="Copy message" aria-label="Copy message"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg></button>
           </div>
@@ -101,12 +111,16 @@
 {% if session.status == "stopped" %}
   <div class="chat-status-badge chat-status-badge--stopped">&#x1F6D1; Run stopped</div>
 {% else %}
+{% if session.status == "running" %}
+  <div class="chat-status-badge chat-status-badge--running">&#x2699; Agents at Work</div>
+{% else %}
 {% if session.status == "awaiting_input" %}
 {% if project %}
   <div class="chat-status-badge chat-status-badge--gate"
        data-gate-context='{"round": {{ session.current_round }}, "max_rounds": {{ project.team.max_iterations|default:0 }}, "chat_mode": "{% if project.agents|length == 1 %}single_assistant{% endif %}"}'>
     &#x23F8; Round {{ session.current_round }}{% if project.agents|length != 1 %}/{{ project.team.max_iterations }}{% endif %} &mdash; response is required
   </div>
+{% endif %}
 {% endif %}
 {% endif %}
 {% endif %}

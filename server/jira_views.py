@@ -23,6 +23,25 @@ def _has_valid_secret(request):
     return services.verify_secret_key(key)
 
 
+def _has_valid_session_access(request, session_id):
+    """Allow session access via admin secret or remote export capability."""
+    if _has_valid_secret(request):
+        return True
+    capability = request.headers.get("X-Remote-Export-Capability", "").strip()
+    if not capability or not session_id:
+        return False
+    from agents.session_coordination import lookup_remote_export_capability
+
+    user_id = lookup_remote_export_capability(session_id, capability)
+    if not user_id:
+        return False
+    session = services.get_chat_session(session_id)
+    if session is None:
+        return False
+    project = services.get_project(session.get("project_id", ""))
+    return services.get_remote_user(project, user_id) is not None
+
+
 def _json_response(data, status=200):
     def _dt_default(obj):
         if isinstance(obj, datetime):
@@ -93,7 +112,7 @@ def jira_project_spaces(request, project_id, type_name):
 @require_GET
 def jira_session_status(request, session_id, type_name):
     """GET — Check if a Jira type is configured for the session's project."""
-    if not _has_valid_secret(request):
+    if not _has_valid_session_access(request, session_id):
         return _json_error("Unauthorized", 403)
 
     err = _validate_type(type_name)
@@ -111,7 +130,7 @@ def jira_session_status(request, session_id, type_name):
 @require_GET
 def jira_session_spaces(request, session_id, type_name):
     """GET — List Jira projects for the session's project type (export modal)."""
-    if not _has_valid_secret(request):
+    if not _has_valid_session_access(request, session_id):
         return _json_error("Unauthorized", 403)
 
     err = _validate_type(type_name)
@@ -129,7 +148,7 @@ def jira_session_spaces(request, session_id, type_name):
 @require_GET
 def jira_session_metadata(request, session_id, type_name):
     """GET — Return project metadata for export editor dropdowns."""
-    if not _has_valid_secret(request):
+    if not _has_valid_session_access(request, session_id):
         return _json_error("Unauthorized", 403)
 
     err = _validate_type(type_name)
@@ -152,7 +171,7 @@ def jira_session_metadata(request, session_id, type_name):
 @require_POST
 def jira_extract(request, session_id, discussion_id, type_name):
     """POST — Run extraction agent against a discussion message."""
-    if not _has_valid_secret(request):
+    if not _has_valid_session_access(request, session_id):
         return _json_error("Unauthorized", 403)
 
     err = _validate_type(type_name)
@@ -173,7 +192,7 @@ def jira_extract(request, session_id, discussion_id, type_name):
 @require_http_methods(["GET", "POST"])
 def jira_export_data(request, session_id, discussion_id, type_name):
     """GET — Load saved export. POST — Save edited export."""
-    if not _has_valid_secret(request):
+    if not _has_valid_session_access(request, session_id):
         return _json_error("Unauthorized", 403)
 
     err = _validate_type(type_name)
@@ -212,7 +231,7 @@ def jira_export_data(request, session_id, discussion_id, type_name):
 @require_GET
 def jira_reference(request, session_id, discussion_id):
     """GET — Return raw discussion content as markdown for the reference pane."""
-    if not _has_valid_secret(request):
+    if not _has_valid_session_access(request, session_id):
         return _json_error("Unauthorized", 403)
 
     try:
@@ -227,7 +246,7 @@ def jira_reference(request, session_id, discussion_id):
 @require_POST
 def jira_push(request, session_id, type_name):
     """POST — Push issues to Jira and save push result."""
-    if not _has_valid_secret(request):
+    if not _has_valid_session_access(request, session_id):
         return _json_error("Unauthorized", 403)
 
     err = _validate_type(type_name)

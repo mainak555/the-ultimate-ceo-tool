@@ -1032,6 +1032,51 @@ select.input {
   z-index: 10;
 }
 
+.remote-chat-layout {
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - #{$header-height});
+  overflow: hidden;
+}
+
+.remote-chat-layout .chat-main {
+  height: 100%;
+  overflow: hidden;
+}
+
+.remote-presence-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: $space-xs;
+  align-items: center;
+}
+
+.remote-presence-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  border: 1px solid $color-border;
+  background: $color-surface;
+  color: $color-text-muted;
+  font-size: $font-size-sm;
+
+  &--online {
+    color: $color-success;
+    border-color: $color-success;
+  }
+
+  &--offline {
+    color: $color-text-muted;
+  }
+
+  &--active {
+    background: lighten($color-warning-bg, 7%);
+    border-color: $color-warning-bg-dk;
+    color: darken($color-warning-bg-dk, 30%);
+  }
+}
+
 .chat-input-panel__toolbar {
   display: flex;
   align-items: center;
@@ -1458,6 +1503,11 @@ select.input {
   flex-direction: column;
   gap: 0;
   padding: $space-md $space-xl;
+}
+
+.chat-bubble--current-turn {
+  border-left: 4px solid $color-warning-bg-dk;
+  padding-left: $space-sm;
 }
 
 .chat-history-msg {
@@ -1956,6 +2006,12 @@ select.input {
     background: #fffbeb;
     color: $color-warning;
     border: 1px solid lighten($color-warning, 35%);
+  }
+
+  &--running {
+    background: #eff6ff;
+    color: $color-info;
+    border: 1px solid lighten($color-info, 30%);
   }
 }
 

@@ -11,9 +11,9 @@ leader**: they own MCP authorizations and start every run. **Remote users**
 only join an active chat session via a per-session join URL and may respond at
 the Human Gate.
 
-Phase 1 ships configuration only. Runtime remote-response collection (Redis
-hash → N appended `discussions[].role="user"` entries before the next
-`team.run_stream`) is delivered in Phase 3.
+Phase 1 and Phase 2 are shipped. Phase 3 now includes remote-page runtime
+collection of per-user gate responses (Redis-backed queue consumed on leader
+continue) before the next `team.run_stream`.
 
 ---
 
@@ -191,7 +191,7 @@ human presence before triggering external authorizations.
 |---|---|---|
 | `{ns}:remote_user_token:{session_id}:{token}` | `user_id` | `REMOTE_USER_TOKEN_TTL_SECONDS` (12 h / 43200 default) |
 | `{ns}:remote_user_token_by_user:{session_id}:{user_id}` | `token` (active token for rotation) | matches token TTL |
-| `{ns}:remote_user_online:{session_id}:{user_id}` | `"1"` | `REMOTE_USER_PRESENCE_TTL_SECONDS` (45 s default) |
+| `{ns}:remote_user_online:{session_id}:{user_id}` | `"1"` | `REMOTE_USER_PRESENCE_TTL_SECONDS` (60 s default) |
 | `{ns}:remote_user_checked:{session_id}` | JSON list of `user_id`s | `REMOTE_USER_CHECKED_TTL_SECONDS` (12 h / 43200 default) |
 
 All four prefixes are purged on session delete via
@@ -298,7 +298,7 @@ or any value derived from them.
 
 ## Out of scope (Phase 2)
 
-- Actual remote-user page (`GET /chat/<id>/remote_user/<token>/`) and WS
+- Actual remote-user page (`GET /chat/<id>/remote-user/<token>/`) and WS
   consumer (Phase 3).
 - Real-time presence updates: in Phase 2 a remote user only flips to Online
   when a Phase 3 WS heartbeat (or a manual `redis-cli SET …:remote_user_online:…`

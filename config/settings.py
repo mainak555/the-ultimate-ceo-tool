@@ -54,12 +54,12 @@ REDIS_CANCEL_SIGNAL_TTL_SECONDS = int(os.getenv("REDIS_CANCEL_SIGNAL_TTL_SECONDS
 #   Redis is short-lived run state, NOT long-term persistence — sessions resumed
 #   after this window re-mint on the leader's next "Copy Invitation Link" click.
 # REMOTE_USER_PRESENCE_TTL_SECONDS: how long a remote user is considered online
-#   without a heartbeat refresh (default 45 s).
+#   without a heartbeat refresh (default 60 s).
 # REMOTE_USER_HEARTBEAT_INTERVAL_SECONDS: client-side WS ping cadence (Phase 3).
 # REMOTE_USER_CHECKED_TTL_SECONDS: lifetime of the leader's checked-set in Redis.
 REMOTE_USER_TOKEN_TTL_SECONDS = int(os.getenv("REMOTE_USER_TOKEN_TTL_SECONDS", "43200"))
-REMOTE_USER_PRESENCE_TTL_SECONDS = int(os.getenv("REMOTE_USER_PRESENCE_TTL_SECONDS", "45"))
-REMOTE_USER_HEARTBEAT_INTERVAL_SECONDS = int(os.getenv("REMOTE_USER_HEARTBEAT_INTERVAL_SECONDS", "20"))
+REMOTE_USER_PRESENCE_TTL_SECONDS = int(os.getenv("REMOTE_USER_PRESENCE_TTL_SECONDS", "60"))
+REMOTE_USER_HEARTBEAT_INTERVAL_SECONDS = int(os.getenv("REMOTE_USER_HEARTBEAT_INTERVAL_SECONDS", "30"))
 REMOTE_USER_CHECKED_TTL_SECONDS = int(os.getenv("REMOTE_USER_CHECKED_TTL_SECONDS", "43200"))
 # How long extracted attachment text is kept in Redis (seconds). Default 24 h.
 # Raise this if sessions span multiple days; lower it to reduce Redis memory use.
@@ -76,6 +76,7 @@ INSTALLED_APPS = [
     "django.contrib.contenttypes",
     "django.contrib.sessions",
     "django.contrib.staticfiles",
+    "channels",
     # Third-party
     "django_htmx",
     "compressor",
@@ -112,6 +113,15 @@ TEMPLATES = [
 
 WSGI_APPLICATION = "config.wsgi.application"
 ASGI_APPLICATION = "config.asgi.application"
+
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": "channels_redis.core.RedisChannelLayer",
+        "CONFIG": {
+            "hosts": [REDIS_URI],
+        },
+    }
+}
 
 # ---------------------------------------------------------------------------
 # Database — not used (MongoDB via PyMongo in backend/db.py)

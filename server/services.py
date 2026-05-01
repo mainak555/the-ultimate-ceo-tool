@@ -1010,6 +1010,160 @@ def compute_pending_remote_users(project, session_id):
     return [u for u in cleaned if u["user_id"] in checked_set and u["user_id"] not in online]
 
 
+def get_remote_user(project, user_id):
+    """Return configured remote-user dict for user_id, else None."""
+    if not isinstance(project, dict):
+        return None
+    gate = project.get("human_gate") or {}
+    for entry in (gate.get("remote_users") or []):
+        if not isinstance(entry, dict):
+            continue
+        uid = str(entry.get("id") or "").strip()
+        if uid and uid == str(user_id or "").strip():
+            return {
+                "user_id": uid,
+                "name": str(entry.get("name") or "").strip(),
+                "description": str(entry.get("description") or "").strip(),
+            }
+    return None
+
+
+def _get_required_remote_users_for_gate(project, session_id):
+    """Return required remote user IDs for the current gate (default all checked)."""
+    gate = project.get("human_gate") or {}
+    configured = []
+    for entry in (gate.get("remote_users") or []):
+        if not isinstance(entry, dict):
+            continue
+        uid = str(entry.get("id") or "").strip()
+        name = str(entry.get("name") or "").strip()
+        if uid and name:
+            configured.append(uid)
+    if not configured:
+        return []
+
+    from agents.session_coordination import get_checked_remote_users
+
+    checked = get_checked_remote_users(session_id)
+    if checked is None:
+        return configured
+    checked_set = {str(uid).strip() for uid in checked if str(uid).strip()}
+    return [uid for uid in configured if uid in checked_set]
+
+
+def compute_remote_turn_state(project, session, user_id):
+    """Compute per-user turn eligibility and participant strips for remote page.
+
+    Returns a dict with:
+      - can_send: bool
+      - pending_user_ids: list[str]
+      - required_user_ids: list[str]
+      - responded_user_ids: list[str]
+      - quorum: str
+      - round: int
+      - participants: list[dict] with online/active flags
+    """
+    if not isinstance(project, dict) or not isinstance(session, dict):
+        return {
+            "can_send": False,
+            "pending_user_ids": [],
+            "required_user_ids": [],
+            "responded_user_ids": [],
+            "quorum": "yes",
+            "round": 0,
+            "participants": [],
+        }
+
+    gate = project.get("human_gate") or {}
+    quorum = str(gate.get("quorum") or "yes")
+    round_no = int(session.get("current_round") or 0)
+    required_user_ids = _get_required_remote_users_for_gate(project, session.get("session_id", ""))
+
+    from agents.session_coordination import list_online_remote_users, list_remote_gate_responded_users
+
+    responded_user_ids = list_remote_gate_responded_users(session.get("session_id", ""), round_no)
+    responded_set = set(responded_user_ids)
+
+    if quorum == "first_win":
+        pending_user_ids = required_user_ids if not responded_set else []
+    else:
+        # team_config currently follows all-required semantics until selector
+        # routing ownership is added for remote turn collection.
+        pending_user_ids = [uid for uid in required_user_ids if uid not in responded_set]
+
+    can_send = (
+        session.get("status") == "awaiting_input"
+        and str(user_id or "") in set(pending_user_ids)
+    )
+
+    configured_rows = []
+    for entry in (gate.get("remote_users") or []):
+        if not isinstance(entry, dict):
+            continue
+        uid = str(entry.get("id") or "").strip()
+        name = str(entry.get("name") or "").strip()
+        if uid and name:
+            configured_rows.append({"user_id": uid, "name": name})
+    online_set = set(list_online_remote_users(session.get("session_id", ""), [r["user_id"] for r in configured_rows]))
+    participants = []
+    for row in configured_rows:
+        uid = row["user_id"]
+        participants.append({
+            "user_id": uid,
+            "name": row["name"],
+            "online": uid in online_set,
+            "active": uid in set(pending_user_ids),
+        })
+
+    return {
+        "can_send": can_send,
+        "pending_user_ids": pending_user_ids,
+        "required_user_ids": required_user_ids,
+        "responded_user_ids": responded_user_ids,
+        "quorum": quorum,
+        "round": round_no,
+        "participants": participants,
+    }
+
+
+def pop_remote_gate_resume_payload(project, session_id, round_no):
+    """Build resume task additions from queued remote gate responses.
+
+    Returns tuple: (remote_text_block, remote_attachment_ids)
+    """
+    if not isinstance(project, dict) or not session_id or int(round_no or 0) <= 0:
+        return "", []
+
+    from agents.session_coordination import pop_remote_gate_response_payloads
+
+    payload_rows = pop_remote_gate_response_payloads(session_id, int(round_no))
+    if not payload_rows:
+        return "", []
+
+    lines = []
+    attachment_ids = []
+    for raw in payload_rows:
+        try:
+            row = json.loads(raw)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+        if not isinstance(row, dict):
+            continue
+        user_name = str(row.get("name") or row.get("user_id") or "Remote User").strip() or "Remote User"
+        text = str(row.get("text") or "").strip()
+        lines.append(f"- {user_name}: {text or '[Attachment only]'}")
+        for aid in row.get("attachment_ids") or []:
+            aid_str = str(aid or "").strip()
+            if aid_str:
+                attachment_ids.append(aid_str)
+
+    if not lines and not attachment_ids:
+        return "", []
+
+    remote_block = "\n\n---\nRemote participant responses:\n" + "\n".join(lines)
+    return remote_block, attachment_ids
+
+
 def get_remote_users_status(project, session_id, base_url=""):
     """Return a status snapshot for the readiness panel.
 
@@ -1064,7 +1218,7 @@ def get_remote_users_status(project, session_id, base_url=""):
         if row["has_token"] and base_url:
             tok = get_remote_user_token_for_user(session_id, uid)
             row["join_url"] = (
-                f"{base_url.rstrip('/')}/chat/{session_id}/remote_user/{tok}/"
+                f"{base_url.rstrip('/')}/chat/{session_id}/remote-user/{tok}/"
                 if tok else ""
             )
         else:

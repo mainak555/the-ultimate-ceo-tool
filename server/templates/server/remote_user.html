@@ -1,0 +1,81 @@
+{% load compress static django_htmx %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Remote Chat Participant</title>
+  {% compress css %}
+  <link rel="stylesheet" type="text/x-scss" href="{% static 'server/scss/main.scss' %}">
+  {% endcompress %}
+  <script src="https://unpkg.com/htmx.org@1.9.12/dist/htmx.min.js"></script>
+  {% django_htmx_script %}
+  <script src="https://cdn.jsdelivr.net/npm/marked@15/marked.min.js"></script>
+</head>
+<body hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'>
+  <header class="header">
+    <div class="header__brand">
+      <h1 class="header__title">The Ultimate CEO Tool</h1>
+    </div>
+    <div class="header__actions">
+      <span class="header__hint">Remote participant: {{ remote_user.name }}</span>
+    </div>
+  </header>
+
+  <div class="remote-chat-layout">
+    <div class="chat-main">
+      <div class="chat-messages" id="chat-messages">
+        {{ history_html|safe }}
+      </div>
+
+      <div class="chat-input-panel">
+        <div class="remote-presence-strip" id="remote-presence-strip">
+          {% for row in participants %}
+            <span class="remote-presence-chip{% if row.online %} remote-presence-chip--online{% else %} remote-presence-chip--offline{% endif %}{% if row.active %} remote-presence-chip--active{% endif %}">
+              {{ row.name }}
+            </span>
+          {% endfor %}
+        </div>
+
+        <div class="chat-input-row">
+          <button class="chat-attach-btn" id="chat-attach-btn" type="button" title="Attach files" {% if not can_send %}disabled{% endif %}>
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+          </button>
+          <textarea id="chat-input"
+                    class="chat-input__textarea"
+                    placeholder="{% if can_send %}Send your response{% else %}Waiting for your turn{% endif %}"
+                    rows="1"
+                    autocomplete="off"
+                    {% if not can_send %}disabled{% endif %}></textarea>
+          <button class="btn btn--primary chat-send-btn" id="chat-send-btn" title="Send" {% if not can_send %}disabled{% endif %}>
+            ↑
+          </button>
+          <input id="chat-attachment-input" type="file" hidden multiple>
+        </div>
+        <div class="chat-attachment-list" id="chat-compose-attachments" hidden></div>
+      </div>
+    </div>
+  </div>
+
+  <input type="hidden" id="remote-session-id" value="{{ session.session_id }}">
+  <input type="hidden" id="remote-project-id" value="{{ project.project_id }}">
+  <input type="hidden" id="remote-user-id" value="{{ remote_user.user_id }}">
+  <input type="hidden" id="remote-user-name" value="{{ remote_user.name }}">
+  <input type="hidden" id="remote-user-token" value="{{ remote_token }}">
+  <input type="hidden" id="remote-export-capability" value="{{ remote_export_capability }}">
+  <input type="hidden" id="remote-heartbeat-seconds" value="{{ heartbeat_interval_seconds }}">
+  <input type="hidden" id="csrf-token-value" value="{{ csrf_token }}">
+
+  <script src="{% static 'server/js/app.js' %}"></script>
+  <script src="{% static 'server/js/provider_registry.js' %}"></script>
+  <script src="{% static 'server/js/markdown_viewer.js' %}"></script>
+  <script src="{% static 'server/js/export_modal_base.js' %}"></script>
+  <script src="{% static 'server/js/trello.js' %}"></script>
+  <script src="{% static 'server/js/jira.js' %}"></script>
+  <script src="{% static 'server/js/jira_adapter_factory.js' %}"></script>
+  <script src="{% static 'server/js/jira_software.js' %}"></script>
+  <script src="{% static 'server/js/jira_service_desk.js' %}"></script>
+  <script src="{% static 'server/js/jira_business.js' %}"></script>
+  <script src="{% static 'server/js/remote_user.js' %}"></script>
+</body>
+</html>

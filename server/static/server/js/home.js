@@ -62,6 +62,7 @@ document.addEventListener("DOMContentLoaded", function () {
   var chatAttachBtn = document.getElementById("chat-attach-btn");
   var chatAttachmentInput = document.getElementById("chat-attachment-input");
   var chatComposeAttachments = document.getElementById("chat-compose-attachments");
+  var chatPresenceStrip = document.getElementById("chat-presence-strip");
   var chatProjectBtn = document.getElementById("chat-project-btn");
   var activeProjectIdInput = document.getElementById("active-project-id");
   var activeSessionIdInput = document.getElementById("active-session-id");
@@ -442,6 +443,57 @@ document.addEventListener("DOMContentLoaded", function () {
     chatSendBtn.disabled = false;
   }
 
+  function _refreshGateSessionHistory() {
+    var sessionId = activeSessionIdInput ? activeSessionIdInput.value.trim() : "";
+    if (!sessionId || !chatMessages || _gateRefreshInFlight) return;
+    _gateRefreshInFlight = true;
+    fetch("/chat/sessions/" + sessionId + "/", {
+      method: "GET",
+      headers: {
+        "X-CSRFToken": csrfToken,
+      },
+    }).then(function (r) {
+      return r.text().then(function (html) {
+        if (!r.ok) throw new Error("Failed to refresh session history");
+        return html;
+      });
+    }).then(function (html) {
+      chatMessages.innerHTML = html;
+      if (window.renderLocalTimes) window.renderLocalTimes();
+      var gateBadge = chatMessages.querySelector(".chat-status-badge--gate[data-gate-context]");
+      if (gateBadge) {
+        try {
+          var ctx = JSON.parse(gateBadge.dataset.gateContext);
+          setGateMode(ctx);
+        } catch (e) {
+          clearGateMode();
+        }
+      } else {
+        clearGateMode();
+      }
+      _restoreReadinessFromBadge();
+    }).catch(function () {
+      // Keep existing gate state when one refresh fails.
+    }).finally(function () {
+      _gateRefreshInFlight = false;
+    });
+  }
+
+  function _startGateHistoryPolling() {
+    if (_gateHistoryPollTimer) return;
+    _refreshGateSessionHistory();
+    _gateHistoryPollTimer = setInterval(function () {
+      _refreshGateSessionHistory();
+    }, 3000);
+  }
+
+  function _stopGateHistoryPolling() {
+    if (_gateHistoryPollTimer) {
+      clearInterval(_gateHistoryPollTimer);
+      _gateHistoryPollTimer = null;
+    }
+  }
+
   // Activate gate mode on the bottom input bar.
   function setGateMode(data) {
     _gateData = data;
@@ -453,12 +505,14 @@ document.addEventListener("DOMContentLoaded", function () {
       chatInput.placeholder = roundText + " \u2014 enter your response\u2026";
     }
     if (chatStopBtn) chatStopBtn.hidden = false;
+    _startGateHistoryPolling();
     _evalSendBtn();
   }
 
   // Deactivate gate mode and restore the normal input bar state.
   function clearGateMode() {
     _gateData = null;
+    _stopGateHistoryPolling();
     if (chatInput) chatInput.placeholder = "Send a message";
     if (chatStopBtn) chatStopBtn.hidden = true;
     _evalSendBtn();
@@ -494,8 +548,8 @@ document.addEventListener("DOMContentLoaded", function () {
     var text = chatInput ? chatInput.value.trim() : "";
     var hasAttachments = composePendingFiles.length > 0 || composeUploaded.length > 0;
 
-    // Single-assistant mode: text is mandatory.
-    if (_gateData && _gateData.chat_mode === "single_assistant" && !text) {
+    // Single-assistant mode: either text or attachments are required.
+    if (_gateData && _gateData.chat_mode === "single_assistant" && !text && !hasAttachments) {
       if (chatInput) {
         chatInput.focus();
         chatInput.classList.add("input--shake");
@@ -503,7 +557,6 @@ document.addEventListener("DOMContentLoaded", function () {
       }
       return;
     }
-    if (!text && !hasAttachments) return;
 
     if (chatSendBtn) chatSendBtn.disabled = true;
     // committed = true once upload succeeded and we've already appended the
@@ -514,7 +567,9 @@ document.addEventListener("DOMContentLoaded", function () {
     ensureComposeAttachmentsUploaded(sessionId).then(function (attachmentIds) {
       committed = true;
       var attachmentsForBubble = composeUploaded.slice();
-      appendHumanBubble(text || "Attached files", attachmentsForBubble);
+      if (text || attachmentsForBubble.length > 0) {
+        appendHumanBubble(text || "Attached files", attachmentsForBubble);
+      }
       if (chatInput) { chatInput.value = ""; chatInput.style.height = "auto"; chatInput.focus(); }
       clearComposeAttachments();
       clearGateMode();
@@ -562,6 +617,20 @@ document.addEventListener("DOMContentLoaded", function () {
 
   var _activeReader = null;
   var _gateData = null; // non-null while the input bar is in human-gate mode
+  var _gateHistoryPollTimer = null;
+  var _gateRefreshInFlight = false;
+
+  function _toggleWorkingBadge(show) {
+    if (!chatMessages) return;
+    var selector = ".chat-status-badge--running[data-working-badge='1']";
+    chatMessages.querySelectorAll(selector).forEach(function (el) { el.remove(); });
+    if (!show) return;
+    chatMessages.insertAdjacentHTML(
+      "beforeend",
+      '<div class="chat-status-badge chat-status-badge--running" data-working-badge="1">&#x2699; Agents at Work</div>'
+    );
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+  }
 
   function setRunningState(running) {
     if (chatInput) { chatInput.disabled = running; }
@@ -578,6 +647,7 @@ document.addEventListener("DOMContentLoaded", function () {
     document.querySelectorAll(".chat-restart-panel__textarea").forEach(function (ta) {
       ta.disabled = running;
     });
+    _toggleWorkingBadge(!!running);
   }
 
   function appendBubble(html) {
@@ -706,8 +776,26 @@ document.addEventListener("DOMContentLoaded", function () {
 
   var _readinessPollTimer = null;
 
+  function _renderPresenceStrip(rows) {
+    if (!chatPresenceStrip) return;
+    var list = rows || [];
+    if (!list.length) {
+      chatPresenceStrip.hidden = true;
+      chatPresenceStrip.innerHTML = "";
+      return;
+    }
+    var html = list.map(function (u) {
+      var cls = "remote-presence-chip " + (u.online ? "remote-presence-chip--online" : "remote-presence-chip--offline");
+      if (u.checked) cls += " remote-presence-chip--active";
+      return '<span class="' + cls + '">' + escapeHtml(u.name || u.user_id || "User") + '</span>';
+    }).join("");
+    chatPresenceStrip.hidden = false;
+    chatPresenceStrip.innerHTML = html;
+  }
+
   function _teardownReadinessPanel() {
     if (_readinessPollTimer) { clearInterval(_readinessPollTimer); _readinessPollTimer = null; }
+    _renderPresenceStrip([]);
   }
 
   function _showReadinessPanel(sessionId, secretKey, replayTask, replayAttachmentIds) {
@@ -815,6 +903,7 @@ document.addEventListener("DOMContentLoaded", function () {
       }).then(function (data) {
         var users = (data && data.users) || [];
         _renderReadinessRows(panel, users);
+        _renderPresenceStrip(users);
         // All checked are online? -> auto-replay.
         var checked = users.filter(function (u) { return u.checked; });
         var allOnline = checked.length > 0 && checked.every(function (u) { return u.online; });

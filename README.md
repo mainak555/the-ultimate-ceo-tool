@@ -35,6 +35,35 @@ Open **http://127.0.0.1:8000** in your browser.
 
 ---
 
+## Manual & Reference Index
+
+### User guides
+
+- Product and UI flow: [docs/UI.md](docs/UI.md)
+- API and endpoint reference: [docs/API.md](docs/API.md)
+- Human gate + remote collaboration: [docs/human_gate_remote_users.md](docs/human_gate_remote_users.md)
+- Trello export flow: [docs/trello_integration.md](docs/trello_integration.md)
+- Jira export flow: [docs/jira_integration.md](docs/jira_integration.md)
+- Attachment lifecycle and limits: [docs/attachment_storage.md](docs/attachment_storage.md)
+
+### Developer guides
+
+- Architecture and layering contracts: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+- Agent teams/runtime behavior: [docs/agent_teams.md](docs/agent_teams.md)
+- Observability and tracing contracts: [docs/observability.md](docs/observability.md)
+- MCP runtime/config and OAuth: [docs/mcp_integration.md](docs/mcp_integration.md)
+- Database/document schema: [docs/db_schema.md](docs/db_schema.md)
+- SCSS conventions and shared UI contracts: [docs/scss_style_guide.md](docs/scss_style_guide.md)
+
+### Remote participant URL/transport reference
+
+- Invitation page URL: `/chat/<session_id>/remote-user/<token>/`
+- Remote WebSocket: `/ws/chat/<session_id>/remote-user/<token>/`
+- Remote attachments endpoint: `/chat/sessions/<session_id>/remote/attachments/`
+- Remote heartbeat endpoint: `/chat/sessions/<session_id>/remote/heartbeat/`
+
+---
+
 ## Human-In-The-Loop (HITL) Gate
 
 When Human Gate is enabled for a project, the run pauses after each round. The
@@ -78,8 +107,9 @@ idempotent and stable for `REMOTE_USER_TOKEN_TTL_SECONDS` (default 12 h) —
 repeated Copy clicks return the same URL during that window.
 
 > Phase 1 (configuration) and Phase 2 (readiness lobby) are shipped.
-> Phase 3 (in-chat collection of remote replies during a Human Gate pause)
-> is in progress.
+> Phase 3 now includes a remote-user chat page with turn-gated reply
+> submission, attachment upload, copy-to-clipboard parity, and export modal
+> access via delegated capability tokens.
 
 Full reference (config, lifecycle, endpoints, Redis keys, security rules):
 [docs/human_gate_remote_users.md](docs/human_gate_remote_users.md).
@@ -440,9 +470,9 @@ Full documentation: [docs/mcp_integration.md](docs/mcp_integration.md).
 | `REDIS_RUN_HEARTBEAT_SECONDS` | Lease heartbeat interval (seconds) | `20` |
 | `REDIS_CANCEL_SIGNAL_TTL_SECONDS` | Cancel signal TTL (seconds) | `120` |
 | `REMOTE_USER_TOKEN_TTL_SECONDS` | Lifetime of a remote-user join-URL token (seconds). Redis is short-lived run state — the leader's next Copy click after expiry mints a fresh token. | `43200` (12 h) |
-| `REMOTE_USER_PRESENCE_TTL_SECONDS` | How long a remote user is considered online without a heartbeat refresh | `45` |
-| `REMOTE_USER_HEARTBEAT_INTERVAL_SECONDS` | WebSocket presence heartbeat cadence (Phase 3) | `20` |
-| `REMOTE_USER_CHECKED_TTL_SECONDS` | Lifetime of the leader's checked-set in Redis | `43200` (12 h) |
+| `REMOTE_USER_PRESENCE_TTL_SECONDS` | How long a remote user is considered online without a heartbeat refresh | `60` |
+| `REMOTE_USER_HEARTBEAT_INTERVAL_SECONDS` | Presence heartbeat cadence used by remote-user pages (Phase 3) | `30` |
+| `REMOTE_USER_CHECKED_TTL_SECONDS` | Lifetime of the leader's checked-set in Redis. This remains semantically separate from token TTL even if both values are configured equal. | `43200` (12 h) |
 | `REDIS_ATTACHMENT_TTL_SECONDS` | How long extracted attachment text is kept in Redis (seconds). Raise this if sessions span multiple days. | `86400` (24 h) |
 | `MAX_AGENT_STATE_BYTES` | Maximum byte size of serialised AutoGen agent state stored in MongoDB. Raise for long sessions with many attachments or embedded images. MongoDB's document limit is 16 MB (shared with `discussions[]`). | `1000000` (1 MB) |
 | `DEBUG` | Django debug mode | `True` |

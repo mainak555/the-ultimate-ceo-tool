@@ -15,6 +15,8 @@ from urllib.parse import quote
 from datetime import datetime, timezone
 from uuid import uuid4
 
+from asgiref.sync import async_to_sync
+from channels.layers import get_channel_layer
 from django.http import FileResponse, HttpResponse, JsonResponse, StreamingHttpResponse
 from django.shortcuts import render
 from django.template.loader import render_to_string
@@ -428,9 +430,12 @@ def _build_history_messages(session, export_meta):
     """Attach visible export providers to assistant messages for history rendering."""
     history_messages = []
     session_id = session.get("session_id", "") if isinstance(session, dict) else ""
+    is_gate = bool(isinstance(session, dict) and session.get("status") == "awaiting_input")
+    last_user_index = -1
     for msg in (session.get("discussions") if isinstance(session, dict) else []) or []:
         row = dict(msg)
         row["attachments"] = _enrich_attachments_for_display(session_id, row.get("attachments") or [])
+        row["is_current_turn"] = False
         if row.get("role") != "user":
             if row.get("id"):
                 row["visible_export_providers"] = _filter_export_providers(
@@ -439,7 +444,11 @@ def _build_history_messages(session, export_meta):
                 )
             else:
                 row["visible_export_providers"] = []
+        else:
+            last_user_index = len(history_messages)
         history_messages.append(row)
+    if is_gate and last_user_index >= 0 and last_user_index < len(history_messages):
+        history_messages[last_user_index]["is_current_turn"] = True
     return history_messages
 
 
@@ -799,6 +808,72 @@ def _json_error(message: str, status: int) -> HttpResponse:
     return HttpResponse(_json_dumps({"error": message}), status=status, content_type="application/json")
 
 
+def _remote_group_name(session_id: str) -> str:
+    return f"remote_session_{session_id}"
+
+
+def _broadcast_remote_state(session_id: str) -> None:
+    if not session_id:
+        return
+    layer = get_channel_layer()
+    if layer is None:
+        return
+    try:
+        async_to_sync(layer.group_send)(_remote_group_name(session_id), {"type": "remote.state"})
+    except Exception:
+        logger.debug("remote.websocket.broadcast_failed", extra={"session_id": session_id})
+
+
+async def _abroadcast_remote_state(session_id: str) -> None:
+    if not session_id:
+        return
+    layer = get_channel_layer()
+    if layer is None:
+        return
+    try:
+        await layer.group_send(_remote_group_name(session_id), {"type": "remote.state"})
+    except Exception:
+        logger.debug("remote.websocket.broadcast_failed", extra={"session_id": session_id})
+
+
+def _resolve_remote_user_context(request, session_id, token: str = ""):
+    """Resolve and validate a remote user join token for a chat session."""
+    resolved_token = (
+        (token or "").strip()
+        or (request.headers.get("X-Remote-User-Token", "") or "").strip()
+        or (request.GET.get("token", "") or "").strip()
+        or (request.POST.get("token", "") or "").strip()
+    )
+    if not resolved_token:
+        return None
+
+    from agents.session_coordination import lookup_remote_user_token, set_remote_user_online
+
+    user_id = lookup_remote_user_token(session_id, resolved_token)
+    if not user_id:
+        return None
+
+    session = services.get_chat_session(session_id)
+    if session is None:
+        return None
+    project = services.get_project(session.get("project_id", ""))
+    if project is None:
+        return None
+
+    remote_user = services.get_remote_user(project, user_id)
+    if not remote_user:
+        return None
+
+    set_remote_user_online(session_id, user_id)
+    return {
+        "token": resolved_token,
+        "user_id": user_id,
+        "remote_user": remote_user,
+        "session": session,
+        "project": project,
+    }
+
+
 def _friendly_run_error(exc: Exception) -> str:
     """Return a user-readable error string for agent run failures.
 
@@ -1031,6 +1106,8 @@ async def chat_session_run(request, session_id):
         )
         return _json_error("Active session coordinator is unavailable.", 503)
 
+    await _abroadcast_remote_state(session_id)
+
     # Capture request_id now — middleware clears it before event_stream() runs.
     _captured_request_id = get_request_id()
 
@@ -1210,6 +1287,10 @@ async def chat_session_run(request, session_id):
                     "attachments": attachments_for_display,
                     "timestamp": datetime.now(timezone.utc),  # BSON Date in MongoDB
                 })
+                # Persist the human turn immediately so remote viewers get live history.
+                await asyncio.to_thread(services.append_messages, session_id, pending_messages)
+                await _abroadcast_remote_state(session_id)
+                pending_messages = []
                 task = task_for_agent
             else:
                 task_for_agent = task
@@ -1259,6 +1340,23 @@ async def chat_session_run(request, session_id):
                             is_single_assistant_chat_mode or current_round < max_iter
                         ):
                             await asyncio.to_thread(services.set_session_status, session_id, "awaiting_input")
+                            await _abroadcast_remote_state(session_id)
+                            gate_session = await asyncio.to_thread(services.get_chat_session, session_id)
+                            if gate_session and (project.get("human_gate") or {}).get("remote_users"):
+                                from agents.session_coordination import initialize_remote_gate_round
+
+                                turn_state = await asyncio.to_thread(
+                                    services.compute_remote_turn_state,
+                                    project,
+                                    gate_session,
+                                    "",
+                                )
+                                await asyncio.to_thread(
+                                    initialize_remote_gate_round,
+                                    session_id,
+                                    int(gate_session.get("current_round") or 0),
+                                    turn_state.get("required_user_ids") or [],
+                                )
                             gate_data = {
                                 "round": current_round + 1,
                                 "max_rounds": None if is_single_assistant_chat_mode else max_iter,
@@ -1270,6 +1368,7 @@ async def chat_session_run(request, session_id):
                             yield _sse("gate", gate_data)
                         else:
                             await asyncio.to_thread(services.set_session_status, session_id, "completed")
+                            await _abroadcast_remote_state(session_id)
                             evict_team(session_id)
                             done_data = {"status": "completed", "round": current_round}
                             if export_meta:
@@ -1286,7 +1385,8 @@ async def chat_session_run(request, session_id):
                             "content": msg.content,
                             "timestamp": ts_dt,
                         }
-                        pending_messages.append(record)
+                        await asyncio.to_thread(services.append_messages, session_id, [record])
+                        await _abroadcast_remote_state(session_id)
                         sse_record = dict(record)
                         sse_record["timestamp"] = ts_iso
                         # Attach export info for the client to decide button rendering
@@ -1307,7 +1407,8 @@ async def chat_session_run(request, session_id):
                             "content": msg.content,
                             "timestamp": ts_dt,
                         }
-                        pending_messages.append(record)
+                        await asyncio.to_thread(services.append_messages, session_id, [record])
+                        await _abroadcast_remote_state(session_id)
                         sse_record = dict(record)
                         sse_record["timestamp"] = ts_iso
                         if export_meta:
@@ -1454,6 +1555,8 @@ def chat_session_respond(request, session_id):
     if session["status"] != "awaiting_input":
         return _json_error(f"Session is not awaiting input (status: {session['status']})", 409)
 
+    project = services.get_project(session.get("project_id", "")) if session.get("project_id") else None
+
     action = request.POST.get("action", "").strip()
     text = request.POST.get("text", "").strip()
     attachment_ids = _parse_attachment_ids(request.POST)
@@ -1462,12 +1565,30 @@ def chat_session_respond(request, session_id):
         from agents.runtime import evict_team
         services.set_session_status(session_id, "stopped")
         evict_team(session_id)
+        _broadcast_remote_state(session_id)
         return HttpResponse(_json_dumps({"status": "stopped"}), content_type="application/json")
 
     if action == "continue":
+        remote_text, remote_attachment_ids = services.pop_remote_gate_resume_payload(
+            project,
+            session_id,
+            int(session.get("current_round") or 0),
+        )
+        merged_task = text
+        if remote_text:
+            merged_task = (merged_task + remote_text) if merged_task else remote_text.lstrip("\n")
+        merged_attachment_ids = []
+        seen = set()
+        for aid in list(attachment_ids or []) + list(remote_attachment_ids or []):
+            aid_str = str(aid or "").strip()
+            if not aid_str or aid_str in seen:
+                continue
+            merged_attachment_ids.append(aid_str)
+            seen.add(aid_str)
         services.set_session_status(session_id, "idle")
+        _broadcast_remote_state(session_id)
         return HttpResponse(
-            _json_dumps({"status": "ok", "task": text, "attachment_ids": attachment_ids}),
+            _json_dumps({"status": "ok", "task": merged_task, "attachment_ids": merged_attachment_ids}),
             content_type="application/json",
         )
 
@@ -1620,13 +1741,112 @@ def chat_session_readiness_token(request, session_id, user_id):
     base_url = (
         request.build_absolute_uri("/").rstrip("/")
     )
-    # Phase 3 will define the actual remote-user page; the URL shape is fixed
-    # here so the leader can copy and share it now.
-    join_url = f"{base_url}/chat/{session_id}/remote_user/{token}/"
+    # Join URL for the remote participant page.
+    join_url = f"{base_url}/chat/{session_id}/remote-user/{token}/"
     return HttpResponse(
         _json_dumps({"status": "ok", "join_url": join_url}),
         content_type="application/json",
     )
+
+
+@require_GET
+def remote_user_page(request, session_id, token):
+    """Render the remote participant chat page for a session invitation URL."""
+    ctx = _resolve_remote_user_context(request, session_id, token)
+    if not ctx:
+        return HttpResponse("<div class='alert alert-error'>Invitation link is invalid or expired.</div>", status=403)
+
+    session = ctx["session"]
+    project = ctx["project"]
+    remote_user = ctx["remote_user"]
+    export_meta = _build_export_meta(project)
+    turn_state = services.compute_remote_turn_state(project, session, remote_user["user_id"])
+
+    from agents.session_coordination import (
+        get_or_mint_remote_export_capability,
+        get_remote_user_heartbeat_interval_seconds,
+    )
+
+    capability = get_or_mint_remote_export_capability(session_id, remote_user["user_id"])
+
+    participants = [
+        {"name": "Leader", "online": True, "active": bool(session.get("status") == "awaiting_input")}
+    ]
+    for row in turn_state.get("participants") or []:
+        if row.get("user_id") == remote_user["user_id"]:
+            continue
+        participants.append({
+            "name": row.get("name") or row.get("user_id") or "User",
+            "online": bool(row.get("online")),
+            "active": bool(row.get("active")),
+        })
+
+    history_html = render_to_string(
+        "server/partials/chat_session_history.html",
+        {
+            "session": session,
+            "project": project,
+            "history_export_meta": export_meta,
+            "history_messages": _build_history_messages(session, export_meta),
+            "history_viewer_name": ctx["remote_user"].get("name") or "",
+        },
+        request=request,
+    )
+    return render(
+        request,
+        "server/remote_user.html",
+        {
+            "session": session,
+            "project": project,
+            "remote_user": remote_user,
+            "remote_token": token,
+            "remote_export_capability": capability,
+            "heartbeat_interval_seconds": get_remote_user_heartbeat_interval_seconds(),
+            "can_send": bool(turn_state.get("can_send")),
+            "participants": participants,
+            "history_html": history_html,
+        },
+    )
+
+
+@csrf_exempt
+@require_POST
+def chat_session_remote_heartbeat(request, session_id):
+    """Refresh remote participant online presence TTL for a session."""
+    ctx = _resolve_remote_user_context(request, session_id)
+    if not ctx:
+        return _json_error("Unauthorized", 403)
+    from agents.session_coordination import set_remote_user_online
+
+    set_remote_user_online(session_id, ctx["user_id"])
+    return HttpResponse(_json_dumps({"status": "ok"}), content_type="application/json")
+
+
+@csrf_exempt
+@require_POST
+def chat_session_remote_upload_attachments(request, session_id):
+    """Upload one or more files for a remote participant during awaiting_input."""
+    ctx = _resolve_remote_user_context(request, session_id)
+    if not ctx:
+        return _json_error("Unauthorized", 403)
+
+    session = services.get_chat_session(session_id)
+    if session is None:
+        return _json_error("Session not found", 404)
+    if session.get("status") != "awaiting_input":
+        return _json_error("Session is not awaiting input.", 409)
+
+    files = list(request.FILES.getlist("files"))
+    try:
+        uploaded = attachment_service.upload_session_attachments(session=session, files=files)
+    except ValueError as exc:
+        return _json_error(str(exc), 400)
+    except Exception:
+        logger.exception("attachments.remote_upload_failed", extra={"session_id": session_id, "user_id": ctx["user_id"]})
+        return _json_error("Attachment upload failed.", 500)
+
+    enriched = _enrich_attachments_for_display(session_id, uploaded)
+    return HttpResponse(_json_dumps({"status": "ok", "attachments": enriched}), content_type="application/json")
 
 
 # ---------------------------------------------------------------------------
@@ -1651,6 +1871,7 @@ def chat_session_stop(request, session_id):
     session = services.get_chat_session(session_id)
     if session and session.get("status") in ("awaiting_remote_users", "awaiting_oauth"):
         services.set_session_status(session_id, "idle")
+        _broadcast_remote_state(session_id)
 
     from agents.session_coordination import SessionCoordinationError, ensure_redis_available, signal_cancel
 

@@ -21,11 +21,15 @@
   // ---------------------------------------------------------------------------
 
   function _headers() {
-    return {
+    var headers = {
       "X-App-Secret-Key": _state.secretKey || "",
       "X-CSRFToken":      _state.csrfToken  || "",
       "Content-Type":     "application/json",
     };
+    if (_state.authHeaderName && _state.authHeaderValue) {
+      headers[_state.authHeaderName] = _state.authHeaderValue;
+    }
+    return headers;
   }
 
   function _api(method, path, body) {
@@ -661,6 +665,8 @@
         discussionId:     ctx.discussionId || "",
         secretKey:        ctx.secretKey    || "",
         csrfToken:        ctx.csrfToken    || "",
+        authHeaderName:   ctx.authHeaderName  || "",
+        authHeaderValue:  ctx.authHeaderValue || "",
         cards:            [],
         exported:         false,
         lastPushResult:   [],

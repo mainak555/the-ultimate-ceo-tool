@@ -26,6 +26,9 @@ All routes are under the `server` app namespace.
 | `GET` | `/chat/sessions/<session_id>/readiness/status/` | `chat_session_readiness_status` | Readiness snapshot for configured remote users (online/checked/token status) |
 | `POST` | `/chat/sessions/<session_id>/readiness/check/` | `chat_session_readiness_check` | Persist the leader-selected required remote users (`user_ids` repeated form fields) |
 | `POST` | `/chat/sessions/<session_id>/readiness/<user_id>/token/` | `chat_session_readiness_token` | Mint or reuse invitation token and return a join URL for one remote user |
+| `GET` | `/chat/<session_id>/remote-user/<token>/` | `remote_user_page` | Render remote participant page for invitation token |
+| `POST` | `/chat/sessions/<session_id>/remote/heartbeat/` | `chat_session_remote_heartbeat` | Refresh remote participant online presence TTL |
+| `POST` | `/chat/sessions/<session_id>/remote/attachments/` | `chat_session_remote_upload_attachments` | Upload attachments from remote participant page |
 | `GET` | `/chat/sessions/<session_id>/` | `chat_session_detail` | Load chat history panel for one session |
 | `POST` | `/chat/sessions/<session_id>/delete/` | `chat_session_delete` | Delete a chat session |
 | `POST` | `/chat/sessions/<session_id>/update/` | `chat_session_update` | Update chat session description |
@@ -66,6 +69,17 @@ See [docs/trello_integration.md](trello_integration.md) for full Trello integrat
 | `POST` | `/jira/<sid>/export/<did>/<type>/` | `jira_export_data` | Save edited export payload for discussion |
 | `GET` | `/jira/<sid>/reference/<did>/` | `jira_reference` | Raw markdown from `discussion.content` (shared across types) |
 | `POST` | `/jira/<sid>/push/<type>/` | `jira_push` | Push issues to Jira → `{status, result: [{issue_key, summary, url, warnings, temp_id}]}`. For `type=software` the push is BFS over the parent/child tree (`temp_id` / `parent_temp_id`) and may also assign the issue to a sprint via `/rest/agile/1.0/sprint/{id}/issue` when `sprint` is non-empty. See [`docs/jira_integration.md`](jira_integration.md#jira-software-hierarchical-export). |
+
+Session-scoped Trello/Jira auth (Phase 3):
+
+- Leader/admin requests use `X-App-Secret-Key`.
+- Remote export requests from invitation pages may use `X-Remote-Export-Capability` instead (delegated session-scoped token).
+
+Remote user WebSocket transport (Phase 3):
+
+- `WS /ws/chat/<session_id>/remote-user/<token>/`
+- Client messages: `heartbeat`, `sync_state`, `submit_reply`
+- Server messages: `state`, `ack`, `error`
 
 ### Project-scoped (config page — `/jira/project/<pid>/`)
 

@@ -11,8 +11,8 @@ machine-enforced contract for code changes lives in
 this document is the human-readable counterpart.
 
 > **Status**: Phase 1 (configuration) and Phase 2 (readiness lobby) are
-> shipped. Phase 3 (in-chat collection of remote-user replies during a Human
-> Gate pause) is in progress.
+> shipped. Phase 3 now includes a dedicated remote-user page for turn-gated
+> replies, attachment upload, and delegated export access.
 
 ---
 
@@ -117,7 +117,7 @@ Behavior:
    repeatedly during the same session returns the **same URL**, safe to
    share via Slack / email / SMS.
 3. **Status pill** flips Offline → Online when the remote user opens the
-   invitation URL in their browser; flips back to Offline within ~45 s of
+  invitation URL in their browser; flips back to Offline within ~60 s of
    the browser tab closing or the network dropping.
 4. The run **auto-starts** as soon as every checked row is online. No extra
    click is needed.
@@ -152,7 +152,7 @@ prompting for OAuth credentials if the humans aren't even present.
 ### Invitation URL shape
 
 ```
-{BASE_URL}/chat/{session_id}/remote_user/{token}/
+{BASE_URL}/chat/{session_id}/remote-user/{token}/
 ```
 
 - `token` is `secrets.token_urlsafe(32)` — never derived from `user_id`.
@@ -185,8 +185,8 @@ the run-coordination layer (lease, cancel signal, presence) already works.
 | Env var | Default | What it controls |
 |---|---|---|
 | `REMOTE_USER_TOKEN_TTL_SECONDS` | `43200` (12 h) | Lifetime of a minted invitation token (and its reverse-lookup key). |
-| `REMOTE_USER_PRESENCE_TTL_SECONDS` | `45` | How long the remote user is considered online without a fresh heartbeat. |
-| `REMOTE_USER_HEARTBEAT_INTERVAL_SECONDS` | `20` | How often the remote user's browser refreshes its presence key (Phase 3 cadence). Must satisfy `presence_ttl ≥ 2 × heartbeat_interval`. |
+| `REMOTE_USER_PRESENCE_TTL_SECONDS` | `60` | How long the remote user is considered online without a fresh heartbeat. |
+| `REMOTE_USER_HEARTBEAT_INTERVAL_SECONDS` | `30` | How often the remote user's browser refreshes its presence key (Phase 3 cadence). Must satisfy `presence_ttl ≥ 2 × heartbeat_interval`. |
 | `REMOTE_USER_CHECKED_TTL_SECONDS` | `43200` (12 h) | Lifetime of the leader's "required for this run" checkbox set. |
 
 12 h covers a normal working day. If your operational pattern is different
@@ -223,8 +223,26 @@ recovery and second-tab views show the same gate state.
 | `POST /chat/sessions/<id>/readiness/<user_id>/token/` | **Idempotent** — returns existing or freshly-minted invitation URL. |
 | `POST /chat/sessions/<id>/stop/` | Resets `awaiting_remote_users` → `idle` and tears down the lobby. |
 
-All four endpoints require `X-App-Secret-Key`. There is **no** unauthenticated
-or cookie-based variant.
+All readiness endpoints above require `X-App-Secret-Key`. There is **no**
+unauthenticated or cookie-based variant for the leader-side readiness lobby.
+
+### Phase 3 remote-user endpoints
+
+| Method + path | Auth | Purpose |
+|---|---|---|
+| `GET /chat/<session_id>/remote-user/<token>/` | join URL token | Render remote-user page (chat history, turn-gated input, presence strip). |
+| `POST /chat/sessions/<id>/remote/heartbeat/` | `X-Remote-User-Token` | Refresh online presence TTL. |
+| `POST /chat/sessions/<id>/remote/attachments/` | `X-Remote-User-Token` | Upload remote participant attachments during gate turn. |
+| `WS /ws/chat/<session_id>/remote-user/<token>/` | join URL token | Live remote channel: receives pushed `state` updates and accepts `submit_reply`, `heartbeat`, and `sync_state` client messages. |
+
+### Remote export authorization
+
+Remote pages never receive `APP_SECRET_KEY`. Export popup calls use delegated
+header `X-Remote-Export-Capability` (session-scoped Redis token bound to
+`{session_id, user_id}`). Session-scoped Trello/Jira routes accept either:
+
+- `X-App-Secret-Key` (leader/admin path), or
+- `X-Remote-Export-Capability` (remote path).
 
 ---
 
@@ -255,7 +273,7 @@ These are mandatory; violations are caught by `.agents/skills/observability_logg
 | MongoDB `project_settings.human_gate.remote_users` | Configured roster (`name`, `description`, derived `id`) | Permanent (until the project is edited). |
 | MongoDB `chat_sessions.status` + `pending_remote_users` | Current gate state for resume | Until session is deleted or run completes. |
 | Redis `{ns}:remote_user_token:*` and `*_token_by_user:*` | Active invitation tokens (forward + reverse) | `REMOTE_USER_TOKEN_TTL_SECONDS` (12 h). |
-| Redis `{ns}:remote_user_online:*` | Per-user presence flag | `REMOTE_USER_PRESENCE_TTL_SECONDS` (45 s). |
+| Redis `{ns}:remote_user_online:*` | Per-user presence flag | `REMOTE_USER_PRESENCE_TTL_SECONDS` (60 s). |
 | Redis `{ns}:remote_user_checked:*` | Leader's checkbox set for this session | `REMOTE_USER_CHECKED_TTL_SECONDS` (12 h). |
 
 No token, URL, or presence flag is ever written to MongoDB or to disk.
@@ -315,7 +333,7 @@ When the run resumes after a Human Gate pause, remote user replies will be
 collected via:
 
 1. WebSocket / Channels delivery to a remote-user chat surface served at
-   `/chat/<id>/remote_user/<token>/`.
+  `/chat/<id>/remote-user/<token>/`.
 2. A Redis hash keyed by `(session_id, gate_round)` accumulates incoming
    replies until the configured `quorum` is satisfied.
 3. The `ExternalTermination` for the active gate is then released; collected

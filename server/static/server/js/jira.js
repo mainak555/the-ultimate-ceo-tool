@@ -23,6 +23,9 @@
       "X-CSRFToken":      (ctx && ctx.csrfToken)   || "",
       "Content-Type":     "application/json",
     };
+    if (ctx && ctx.authHeaderName && ctx.authHeaderValue) {
+      headers[ctx.authHeaderName] = ctx.authHeaderValue;
+    }
     var opts = { method: method, headers: headers };
     if (body) opts.body = JSON.stringify(body);
     return fetch(path, opts).then(function (r) {

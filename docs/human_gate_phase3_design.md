@@ -195,7 +195,7 @@ All leader endpoints remain X-App-Secret-Key protected.
 
 ### 9.2 Remote join and WS
 
-1. GET /chat/<session_id>/remote_user/<token>/
+1. GET /chat/<session_id>/remote-user/<token>/
 - Serves remote-user page after token lookup.
 
 2. WS /ws/chat/<session_id>/remote-user/<token>/
