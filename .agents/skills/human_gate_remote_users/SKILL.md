@@ -189,10 +189,10 @@ human presence before triggering external authorizations.
 
 | Key pattern | Value | TTL |
 |---|---|---|
-| `{ns}:remote_user_token:{session_id}:{token}` | `user_id` | `REMOTE_USER_TOKEN_TTL_SECONDS` (24 h default) |
+| `{ns}:remote_user_token:{session_id}:{token}` | `user_id` | `REMOTE_USER_TOKEN_TTL_SECONDS` (12 h / 43200 default) |
 | `{ns}:remote_user_token_by_user:{session_id}:{user_id}` | `token` (active token for rotation) | matches token TTL |
 | `{ns}:remote_user_online:{session_id}:{user_id}` | `"1"` | `REMOTE_USER_PRESENCE_TTL_SECONDS` (45 s default) |
-| `{ns}:remote_user_checked:{session_id}` | JSON list of `user_id`s | `REMOTE_USER_CHECKED_TTL_SECONDS` (24 h default) |
+| `{ns}:remote_user_checked:{session_id}` | JSON list of `user_id`s | `REMOTE_USER_CHECKED_TTL_SECONDS` (12 h / 43200 default) |
 
 All four prefixes are purged on session delete via
 `agents.session_coordination.purge_remote_users_state(session_id)`. **Never log
@@ -200,6 +200,7 @@ token strings or join URLs**.
 
 ## Helpers in `agents/session_coordination.py`
 
+- `get_or_mint_remote_user_token(session_id, user_id) -> token` — idempotent default path used by readiness token endpoint
 - `mint_remote_user_token(session_id, user_id) -> token` — atomically rotates
 - `lookup_remote_user_token(session_id, token) -> user_id|None`
 - `set_remote_user_online(session_id, user_id)` / `clear_remote_user_online(...)`

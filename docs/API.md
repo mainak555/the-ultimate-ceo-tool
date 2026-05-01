@@ -23,6 +23,9 @@ All routes are under the `server` app namespace.
 | `POST` | `/chat/sessions/<session_id>/attachments/` | `chat_session_upload_attachments` | Upload chat attachments for a session (multipart) |
 | `GET` | `/chat/sessions/<session_id>/attachments/<attachment_id>/content/` | `chat_session_attachment_content` | Inline/download attachment content (used for thumbnails) |
 | `POST` | `/chat/sessions/<session_id>/stop/` | `chat_session_stop` | Stop an in-progress run |
+| `GET` | `/chat/sessions/<session_id>/readiness/status/` | `chat_session_readiness_status` | Readiness snapshot for configured remote users (online/checked/token status) |
+| `POST` | `/chat/sessions/<session_id>/readiness/check/` | `chat_session_readiness_check` | Persist the leader-selected required remote users (`user_ids` repeated form fields) |
+| `POST` | `/chat/sessions/<session_id>/readiness/<user_id>/token/` | `chat_session_readiness_token` | Mint or reuse invitation token and return a join URL for one remote user |
 | `GET` | `/chat/sessions/<session_id>/` | `chat_session_detail` | Load chat history panel for one session |
 | `POST` | `/chat/sessions/<session_id>/delete/` | `chat_session_delete` | Delete a chat session |
 | `POST` | `/chat/sessions/<session_id>/update/` | `chat_session_update` | Update chat session description |
@@ -103,6 +106,9 @@ This keeps provider behavior consistent while allowing provider-specific payload
 - `agents[0][temperature]` — float string
 - `human_gate[enabled]` — `"on"` if checked
 - `human_gate[name]` — string
+- `human_gate[quorum]` — `"yes"` | `"first_win"` | `"team_config"` (defaults to `"yes"`)
+- `human_gate[remote_users][N][name]` — string (required per non-empty row; names must be unique case-insensitively)
+- `human_gate[remote_users][N][description]` — string
 - `team[type]` — `round_robin` | `selector`
 - `team[max_iterations]` — integer string
 - `team[model]` — model name (required when `team[type]=selector`)
@@ -113,8 +119,13 @@ This keeps provider behavior consistent while allowing provider-specific payload
 Single-assistant chat mode semantics:
 - When exactly one assistant is configured, `human_gate[enabled]` is required.
 - `team[type]=selector` is invalid with one assistant.
+- Any non-empty `human_gate[remote_users]` list is invalid with one assistant.
 - Team Setup controls may be hidden in the UI for one-assistant projects; server-side validation remains authoritative.
 - On save, the persisted project document may omit the `team` object in one-assistant mode.
+
+Remote-user readiness semantics:
+- `human_gate[remote_users]` rows are only meaningful when `human_gate[enabled]` is enabled and the project has at least two assistants.
+- Remote-user `id` values are server-derived slugs from `name`; clients submit `name`/`description` fields only.
 
 **Success response**: HTML partial (`config_form.html`) with `HX-Trigger: refreshSidebar`
 
@@ -181,7 +192,10 @@ Model runtime notes:
   "project_id": "<project_id>",
   "description": "...",
   "discussions": [],
-  "status": "idle | running | awaiting_input | completed | stopped",
+  "status": "idle | running | awaiting_input | awaiting_oauth | awaiting_remote_users | completed | stopped",
+  "pending_remote_users": [
+    {"user_id": "partner_ops", "name": "Partner Ops"}
+  ],
   "current_round": 0,
   "agent_state": {
     "source": "autogen_team_state",
@@ -191,6 +205,8 @@ Model runtime notes:
   }
 }
 ```
+
+`pending_remote_users` is present only while `status` is `awaiting_remote_users`.
 
 Restart endpoint contract:
 
@@ -247,6 +263,13 @@ Active run coordination contract:
 - `POST /chat/sessions/<session_id>/stop/` writes a Redis cancel signal so
   cancellation propagates across workers/pods.
 - MongoDB remains the durable source for `discussions` and `agent_state`.
+
+Pre-run gate order (when remote users are configured):
+- `POST /chat/sessions/<session_id>/run/` first checks remote-user readiness.
+- If required users are not online, returns `409` with
+  `{ "status": "awaiting_remote_users", "users": [{"user_id", "name"}, ...] }`.
+- Only after readiness clears does run-start evaluate MCP OAuth requirements
+  (`status = "awaiting_oauth"` when OAuth is pending).
 
 Run behavior by mode:
 - Multi-assistant gated runs pause after each full round and may auto-complete when `current_round` reaches `team.max_iterations`.
