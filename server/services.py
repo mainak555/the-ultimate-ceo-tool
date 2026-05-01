@@ -1130,6 +1130,10 @@ def pop_remote_gate_resume_payload(project, session_id, round_no):
     """Build resume task additions from queued remote gate responses.
 
     Returns tuple: (remote_text_block, remote_attachment_ids)
+
+    The text block is intentionally empty because remote user responses are
+    already persisted as chat bubbles in discussion history. Returning the
+    same text here would duplicate content in the leader view.
     """
     if not isinstance(project, dict) or not session_id or int(round_no or 0) <= 0:
         return "", []
@@ -1140,7 +1144,6 @@ def pop_remote_gate_resume_payload(project, session_id, round_no):
     if not payload_rows:
         return "", []
 
-    lines = []
     attachment_ids = []
     for raw in payload_rows:
         try:
@@ -1149,19 +1152,15 @@ def pop_remote_gate_resume_payload(project, session_id, round_no):
             continue
         if not isinstance(row, dict):
             continue
-        user_name = str(row.get("name") or row.get("user_id") or "Remote User").strip() or "Remote User"
-        text = str(row.get("text") or "").strip()
-        lines.append(f"- {user_name}: {text or '[Attachment only]'}")
         for aid in row.get("attachment_ids") or []:
             aid_str = str(aid or "").strip()
             if aid_str:
                 attachment_ids.append(aid_str)
 
-    if not lines and not attachment_ids:
+    if not attachment_ids:
         return "", []
 
-    remote_block = "\n\n---\nRemote participant responses:\n" + "\n".join(lines)
-    return remote_block, attachment_ids
+    return "", attachment_ids
 
 
 def get_remote_users_status(project, session_id, base_url=""):

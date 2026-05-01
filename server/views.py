@@ -1591,14 +1591,14 @@ def chat_session_respond(request, session_id):
         return HttpResponse(_json_dumps({"status": "stopped"}), content_type="application/json")
 
     if action == "continue":
-        remote_text, remote_attachment_ids = services.pop_remote_gate_resume_payload(
+        _remote_text, remote_attachment_ids = services.pop_remote_gate_resume_payload(
             project,
             session_id,
             int(session.get("current_round") or 0),
         )
+        # Remote user responses are already persisted as chat bubbles.
+        # Do not concatenate them into the resume task to avoid duplicate text.
         merged_task = text
-        if remote_text:
-            merged_task = (merged_task + remote_text) if merged_task else remote_text.lstrip("\n")
         merged_attachment_ids = []
         seen = set()
         for aid in list(attachment_ids or []) + list(remote_attachment_ids or []):
