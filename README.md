@@ -53,23 +53,36 @@ bottom input bar switches to **gate mode**:
 HITL notes sent with Send are rendered as markdown in both live chat and
 persisted session history.
 
-### Multi-User Collaboration (configuration only — Phase 1)
+### Multi-User Collaboration (remote participants)
 
 Multi-assistant projects with Human Gate enabled may also configure **remote
-users** under Project Configuration → Human Gate. Each remote user has a
-`name`, a `description` (used by Selector routing), and an `enabled` toggle.
-A `quorum` selector controls how many remote responses are required before
-the agent loop continues:
+users** under *Project Configuration → Human Gate*. Each remote user has a
+`name` and a `description` (used by Selector routing). A `quorum` selector
+controls how many remote responses are required to continue past a Human
+Gate pause:
 
-- `yes` — wait for **all** remote users to reply.
+- `yes` — wait for **all** required remote users to reply.
 - `first_win` — the **first** remote response continues the run.
 - `team_config` — the **agent team** (Selector) decides who must reply.
 
 The local user (the person running this app) is the **session leader**: they
 own MCP authorizations and start every run. Remote users only join an active
-chat session via a per-session join URL and respond at the Human Gate. Phase 1
-ships configuration only — runtime collection of remote responses lands in
-Phase 3.
+chat session via a per-session **invitation URL** that the leader copies and
+shares.
+
+Before each run starts, the leader sees an in-history **readiness lobby**
+listing every configured remote user with a checkbox, a Copy/Generate
+Invitation Link button, and an Online/Offline status pill. The run starts
+automatically once every checked user is online. Invitation URLs are
+idempotent and stable for `REMOTE_USER_TOKEN_TTL_SECONDS` (default 12 h) —
+repeated Copy clicks return the same URL during that window.
+
+> Phase 1 (configuration) and Phase 2 (readiness lobby) are shipped.
+> Phase 3 (in-chat collection of remote replies during a Human Gate pause)
+> is in progress.
+
+Full reference (config, lifecycle, endpoints, Redis keys, security rules):
+[docs/human_gate_remote_users.md](docs/human_gate_remote_users.md).
 
 Single-assistant contract:
 
@@ -426,6 +439,10 @@ Full documentation: [docs/mcp_integration.md](docs/mcp_integration.md).
 | `REDIS_RUN_LEASE_TTL_SECONDS` | Active run lease TTL (seconds) | `300` |
 | `REDIS_RUN_HEARTBEAT_SECONDS` | Lease heartbeat interval (seconds) | `20` |
 | `REDIS_CANCEL_SIGNAL_TTL_SECONDS` | Cancel signal TTL (seconds) | `120` |
+| `REMOTE_USER_TOKEN_TTL_SECONDS` | Lifetime of a remote-user join-URL token (seconds). Redis is short-lived run state — the leader's next Copy click after expiry mints a fresh token. | `43200` (12 h) |
+| `REMOTE_USER_PRESENCE_TTL_SECONDS` | How long a remote user is considered online without a heartbeat refresh | `45` |
+| `REMOTE_USER_HEARTBEAT_INTERVAL_SECONDS` | WebSocket presence heartbeat cadence (Phase 3) | `20` |
+| `REMOTE_USER_CHECKED_TTL_SECONDS` | Lifetime of the leader's checked-set in Redis | `43200` (12 h) |
 | `REDIS_ATTACHMENT_TTL_SECONDS` | How long extracted attachment text is kept in Redis (seconds). Raise this if sessions span multiple days. | `86400` (24 h) |
 | `MAX_AGENT_STATE_BYTES` | Maximum byte size of serialised AutoGen agent state stored in MongoDB. Raise for long sessions with many attachments or embedded images. MongoDB's document limit is 16 MB (shared with `discussions[]`). | `1000000` (1 MB) |
 | `DEBUG` | Django debug mode | `True` |

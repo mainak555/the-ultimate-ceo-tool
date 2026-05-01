@@ -136,12 +136,9 @@
           <div class="remote-users__rows" id="remote-users-rows">
             {% for ru in project.human_gate.remote_users %}
             <fieldset class="remote-users__row form-group--nested" data-remote-index="{{ forloop.counter0 }}">
-              <input type="hidden"
-                     class="js-remote-user-id"
-                     name="human_gate[remote_users][{{ forloop.counter0 }}][id]"
-                     value="{{ ru.id }}">
               <div class="remote-users__row-header">
                 <strong>{{ ru.name|default:"(unnamed)" }}</strong>
+                {% if ru.id %}<code class="remote-users__id-badge" title="Stable identifier derived from name">{{ ru.id }}</code>{% endif %}
                 <button type="button"
                         class="chat-session-item__delete js-delete-remote-user"
                         aria-label="Remove remote user"

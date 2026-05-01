@@ -49,6 +49,18 @@ REDIS_SOCKET_CONNECT_TIMEOUT = float(os.getenv("REDIS_SOCKET_CONNECT_TIMEOUT", "
 REDIS_RUN_LEASE_TTL_SECONDS = int(os.getenv("REDIS_RUN_LEASE_TTL_SECONDS", "300"))
 REDIS_RUN_HEARTBEAT_SECONDS = int(os.getenv("REDIS_RUN_HEARTBEAT_SECONDS", "20"))
 REDIS_CANCEL_SIGNAL_TTL_SECONDS = int(os.getenv("REDIS_CANCEL_SIGNAL_TTL_SECONDS", "120"))
+# Multi-user Human Gate — remote-user readiness/presence/token TTLs.
+# REMOTE_USER_TOKEN_TTL_SECONDS: lifetime of a join-URL token (default 12 h).
+#   Redis is short-lived run state, NOT long-term persistence — sessions resumed
+#   after this window re-mint on the leader's next "Copy Invitation Link" click.
+# REMOTE_USER_PRESENCE_TTL_SECONDS: how long a remote user is considered online
+#   without a heartbeat refresh (default 45 s).
+# REMOTE_USER_HEARTBEAT_INTERVAL_SECONDS: client-side WS ping cadence (Phase 3).
+# REMOTE_USER_CHECKED_TTL_SECONDS: lifetime of the leader's checked-set in Redis.
+REMOTE_USER_TOKEN_TTL_SECONDS = int(os.getenv("REMOTE_USER_TOKEN_TTL_SECONDS", "43200"))
+REMOTE_USER_PRESENCE_TTL_SECONDS = int(os.getenv("REMOTE_USER_PRESENCE_TTL_SECONDS", "45"))
+REMOTE_USER_HEARTBEAT_INTERVAL_SECONDS = int(os.getenv("REMOTE_USER_HEARTBEAT_INTERVAL_SECONDS", "20"))
+REMOTE_USER_CHECKED_TTL_SECONDS = int(os.getenv("REMOTE_USER_CHECKED_TTL_SECONDS", "43200"))
 # How long extracted attachment text is kept in Redis (seconds). Default 24 h.
 # Raise this if sessions span multiple days; lower it to reduce Redis memory use.
 REDIS_ATTACHMENT_TTL_SECONDS = int(os.getenv("REDIS_ATTACHMENT_TTL_SECONDS", "86400"))

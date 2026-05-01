@@ -661,17 +661,9 @@ document.addEventListener("DOMContentLoaded", function () {
   });
 
   // ---- Human Gate: Remote Users rows ----
-  function _genUuid() {
-    if (window.crypto && typeof window.crypto.randomUUID === "function") {
-      return window.crypto.randomUUID();
-    }
-    // RFC 4122 v4 fallback
-    return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function (c) {
-      var r = (Math.random() * 16) | 0;
-      var v = c === "x" ? r : (r & 0x3) | 0x8;
-      return v.toString(16);
-    });
-  }
+  // Note: `id` is derived server-side from `name` (slug), so the client does
+  // not mint UUIDs. The hidden id input is omitted on new rows; the server
+  // will assign a stable slug (e.g. "Alice Smith" → "Alice_Smith").
 
   function reindexRemoteUsers() {
     var container = document.getElementById("remote-users-rows");
@@ -701,11 +693,8 @@ document.addEventListener("DOMContentLoaded", function () {
       var container = document.getElementById("remote-users-rows");
       if (!container) return;
       var idx = container.querySelectorAll(".remote-users__row").length;
-      var rid = _genUuid();
       var html =
         '<fieldset class="remote-users__row form-group--nested" data-remote-index="' + idx + '">' +
-          '<input type="hidden" class="js-remote-user-id" ' +
-            'name="human_gate[remote_users][' + idx + '][id]" value="' + rid + '">' +
           '<div class="remote-users__row-header">' +
             '<strong>New remote user</strong>' +
             '<button type="button" class="chat-session-item__delete js-delete-remote-user" ' +

@@ -198,8 +198,12 @@ Cross-references: [docs/API.md](API.md) (form fields + HTTP schema), [AGENTS.md]
       }
     }
   ],
-  "status": "idle | running | awaiting_input | completed | stopped",
+  "status": "idle | running | awaiting_input | awaiting_oauth | awaiting_remote_users | completed | stopped",
   "current_round": 0,
+  "pending_oauth_servers": ["server_name", ...],   // present only when status=awaiting_oauth
+  "pending_remote_users": [                         // present only when status=awaiting_remote_users
+    { "user_id": "slug", "name": "string" }
+  ],
   "agent_state": {
     "source": "string",
     "version": "string",
@@ -306,7 +310,7 @@ The `integrations` root never holds an `export_agent` field in new documents.
 | `human_gate.name` | str | required when `enabled=true` |
 | `human_gate.quorum` | str | `"yes"` \| `"first_win"` \| `"team_config"`; reset to `"yes"` when disabled |
 | `human_gate.remote_users[].name` | str | non-empty, unique within list |
-| `human_gate.remote_users[].id` | str | server-minted UUID, preserved across saves |
+| `human_gate.remote_users[].id` | str | slug derived from `name` (same rules as agent names: spaces/hyphens → `_`, must be a Python identifier). Re-derived on every save. |
 | `human_gate.remote_users` | list | reset to `[]` when `enabled=false`; rejected when `len(agents)==1`; per-user enable/disable is runtime-only (not stored) |
 | `team.type` | str | `"round_robin"` or `"selector"` |
 | `team.max_iterations` | int | ≥ 1; ≤ 10 when `human_gate.enabled=false` |

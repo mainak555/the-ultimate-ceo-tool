@@ -235,9 +235,10 @@ def _parse_remote_users(post_data):
     """
     Extract Human Gate remote_users list from POST form fields.
 
-    Form fields: human_gate[remote_users][N][id], [name], [description]
-    Skips rows with empty name (blank rows are ignored). Preserves submitted
-    `id` so server-minted UUIDs round-trip across saves.
+    Form fields: human_gate[remote_users][N][name], [description]
+    Skips rows with empty name (blank rows are ignored). The `id` is derived
+    server-side in `validate_human_gate` from `name` (slug). Any submitted
+    `[id]` field is ignored.
     """
     rows = []
     idx = 0
@@ -249,7 +250,6 @@ def _parse_remote_users(post_data):
         name = post_data.get(f"{prefix}[{idx}][name]", "").strip()
         if name:
             rows.append({
-                "id": post_data.get(f"{prefix}[{idx}][id]", "").strip(),
                 "name": name,
                 "description": post_data.get(f"{prefix}[{idx}][description]", "").strip(),
             })
@@ -904,7 +904,7 @@ async def chat_session_run(request, session_id):
     if session is None:
         return _json_error("Session not found", 404)
 
-    valid_states = ("idle", "awaiting_input", "awaiting_oauth")
+    valid_states = ("idle", "awaiting_input", "awaiting_oauth", "awaiting_remote_users")
     if session["status"] not in valid_states:
         return _json_error(f"Session is currently '{session['status']}'", 409)
 
@@ -934,6 +934,28 @@ async def chat_session_run(request, session_id):
     )
     if is_single_assistant_gate and not is_first_run and not task:
         return _json_error("A message is required to continue.", 400)
+
+    # Multi-user Human Gate — remote-user readiness pre-run gate.
+    # Runs BEFORE the MCP OAuth gate so the leader can resolve human-presence
+    # before triggering any external authorization. Does not acquire the lease.
+    pending_remote = await asyncio.to_thread(
+        services.compute_pending_remote_users, project, session_id
+    )
+    if pending_remote:
+        await asyncio.to_thread(
+            services.set_session_awaiting_remote_users, session_id, pending_remote
+        )
+        logger.info(
+            "agents.session.awaiting_remote_users",
+            extra={
+                "session_id": session_id,
+                "pending_count": len(pending_remote),
+            },
+        )
+        return JsonResponse(
+            {"status": "awaiting_remote_users", "users": pending_remote},
+            status=409,
+        )
 
     # MCP OAuth pre-run gate: any reachable MCP server that requires OAuth and
     # has no session-scoped Bearer token in Redis blocks the run start. The
@@ -1492,6 +1514,122 @@ def chat_session_restart(request, session_id):
 
 
 # ---------------------------------------------------------------------------
+# Multi-user Human Gate — remote-user readiness endpoints (Phase 2)
+# ---------------------------------------------------------------------------
+
+@require_GET
+def chat_session_readiness_status(request, session_id):
+    """
+    GET /chat/sessions/<id>/readiness/status/
+
+    Return the readiness snapshot for the leader's pre-run lobby.
+    Shape: ``{"users": [{"user_id", "name", "description", "online", "checked", "has_token"}]}``.
+    """
+    if not _has_valid_secret(request):
+        return _json_error("Unauthorized", 403)
+    session = services.get_chat_session(session_id)
+    if session is None:
+        return _json_error("Session not found", 404)
+    project = services.get_project(session["project_id"])
+    if project is None:
+        return _json_error("Project not found", 404)
+    base_url = request.build_absolute_uri("/").rstrip("/")
+    return HttpResponse(
+        _json_dumps(services.get_remote_users_status(project, session_id, base_url=base_url)),
+        content_type="application/json",
+    )
+
+
+@csrf_exempt
+@require_POST
+def chat_session_readiness_check(request, session_id):
+    """
+    POST /chat/sessions/<id>/readiness/check/
+
+    Body: ``user_ids`` (repeated form field) — the leader's checked-set.
+    Validates each ID against the configured remote-user list and persists in Redis.
+    """
+    if not _has_valid_secret(request):
+        return _json_error("Unauthorized", 403)
+    session = services.get_chat_session(session_id)
+    if session is None:
+        return _json_error("Session not found", 404)
+    project = services.get_project(session["project_id"])
+    if project is None:
+        return _json_error("Project not found", 404)
+
+    configured_ids = {
+        str(u.get("id") or "").strip()
+        for u in (project.get("human_gate") or {}).get("remote_users") or []
+        if isinstance(u, dict) and u.get("id")
+    }
+    submitted = [str(uid).strip() for uid in request.POST.getlist("user_ids") if uid]
+    invalid = [uid for uid in submitted if uid not in configured_ids]
+    if invalid:
+        return _json_error("Unknown remote user id(s): " + ", ".join(invalid), 400)
+
+    from agents.session_coordination import SessionCoordinationError, ensure_redis_available, set_checked_remote_users
+
+    if not ensure_redis_available():
+        return _json_error("Active session coordinator is unavailable.", 503)
+    try:
+        set_checked_remote_users(session_id, submitted)
+    except SessionCoordinationError:
+        return _json_error("Unable to persist checked-set.", 503)
+    return HttpResponse(
+        _json_dumps({"status": "ok", "checked": submitted}),
+        content_type="application/json",
+    )
+
+
+@csrf_exempt
+@require_POST
+def chat_session_readiness_token(request, session_id, user_id):
+    """
+    POST /chat/sessions/<id>/readiness/<user_id>/token/
+
+    Mint (or rotate) a join-URL token for a remote user. Returns ``{token, join_url}``.
+    Tokens are URL-safe random strings, never logged.
+    """
+    if not _has_valid_secret(request):
+        return _json_error("Unauthorized", 403)
+    session = services.get_chat_session(session_id)
+    if session is None:
+        return _json_error("Session not found", 404)
+    project = services.get_project(session["project_id"])
+    if project is None:
+        return _json_error("Project not found", 404)
+
+    configured_ids = {
+        str(u.get("id") or "").strip()
+        for u in (project.get("human_gate") or {}).get("remote_users") or []
+        if isinstance(u, dict) and u.get("id")
+    }
+    if user_id not in configured_ids:
+        return _json_error("Unknown remote user id.", 400)
+
+    from agents.session_coordination import SessionCoordinationError, ensure_redis_available, get_or_mint_remote_user_token
+
+    if not ensure_redis_available():
+        return _json_error("Active session coordinator is unavailable.", 503)
+    try:
+        token = get_or_mint_remote_user_token(session_id, user_id)
+    except SessionCoordinationError:
+        return _json_error("Unable to mint token.", 503)
+
+    base_url = (
+        request.build_absolute_uri("/").rstrip("/")
+    )
+    # Phase 3 will define the actual remote-user page; the URL shape is fixed
+    # here so the leader can copy and share it now.
+    join_url = f"{base_url}/chat/{session_id}/remote_user/{token}/"
+    return HttpResponse(
+        _json_dumps({"status": "ok", "join_url": join_url}),
+        content_type="application/json",
+    )
+
+
+# ---------------------------------------------------------------------------
 # Mid-run abort
 # ---------------------------------------------------------------------------
 
@@ -1506,6 +1644,13 @@ def chat_session_stop(request, session_id):
     """
     if not _has_valid_secret(request):
         return _json_error("Unauthorized", 403)
+
+    # If the session is parked at a pre-run gate (awaiting_remote_users /
+    # awaiting_oauth) there is no SSE stream to catch CancelledError, so flip
+    # the status back to idle directly. The frontend treats this as "cancelled".
+    session = services.get_chat_session(session_id)
+    if session and session.get("status") in ("awaiting_remote_users", "awaiting_oauth"):
+        services.set_session_status(session_id, "idle")
 
     from agents.session_coordination import SessionCoordinationError, ensure_redis_available, signal_cancel
 

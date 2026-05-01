@@ -286,18 +286,26 @@ def normalize_project(project):
         raw_remote = raw_human_gate.get("remote_users") or []
         remote_users = []
         if isinstance(raw_remote, list):
+            import re as _re
             for entry in raw_remote:
                 if not isinstance(entry, dict):
                     continue
-                rid = (entry.get("id") or "").strip()
-                if not rid:
-                    import uuid as _uuid
-                    rid = str(_uuid.uuid4())
                 rname = (entry.get("name") or "").strip()
                 if not rname:
                     continue
+                # Derive id from name (slug) for read-side normalisation. This
+                # silently migrates legacy UUID-based ids to the slug format
+                # on first read; the next save will persist the slug via
+                # validate_human_gate.
+                slug = _re.sub(r"[\s\-]+", "_", rname)
+                slug = _re.sub(r"[^\w]", "", slug)
+                if slug and slug[0].isdigit():
+                    slug = "_" + slug
+                if not slug or not slug.isidentifier():
+                    # Defensive: skip un-sluggable rows rather than crashing reads.
+                    continue
                 remote_users.append({
-                    "id": rid,
+                    "id": slug,
                     "name": rname,
                     "description": (entry.get("description") or "").strip(),
                 })
@@ -748,6 +756,17 @@ def normalize_chat_session(doc):
     pending_oauth = doc.get("pending_oauth_servers") or []
     if not isinstance(pending_oauth, list):
         pending_oauth = []
+    pending_remote = doc.get("pending_remote_users") or []
+    if not isinstance(pending_remote, list):
+        pending_remote = []
+    cleaned_remote = []
+    for entry in pending_remote:
+        if not isinstance(entry, dict):
+            continue
+        uid = str(entry.get("user_id") or "").strip()
+        name = str(entry.get("name") or "").strip()
+        if uid and name:
+            cleaned_remote.append({"user_id": uid, "name": name})
     return {
         "session_id": str(doc["_id"]),
         "project_id": doc.get("project_id", ""),
@@ -759,6 +778,7 @@ def normalize_chat_session(doc):
         "has_agent_state": isinstance(agent_state, dict) and isinstance(agent_state.get("state"), dict),
         "agent_state_meta": state_meta,
         "pending_oauth_servers": [str(s) for s in pending_oauth if isinstance(s, str)],
+        "pending_remote_users": cleaned_remote,
     }
 
 
@@ -827,9 +847,10 @@ def set_session_status(session_id, status):
 
 @traced_function("service.chat.try_set_running")
 def try_set_session_running(session_id):
-    """Atomically set status to running only from idle/awaiting_input/awaiting_oauth.
+    """Atomically set status to running only from idle/awaiting_input/awaiting_oauth/awaiting_remote_users.
 
-    Also clears any ``pending_oauth_servers`` left over from an awaiting_oauth gate.
+    Also clears any ``pending_oauth_servers`` / ``pending_remote_users`` left
+    over from a prior gate.
     """
     try:
         oid = ObjectId(session_id)
@@ -838,8 +859,21 @@ def try_set_session_running(session_id):
 
     col = get_collection(CHAT_SESSIONS_COLLECTION)
     result = col.update_one(
-        {"_id": oid, "status": {"$in": ["idle", "awaiting_input", "awaiting_oauth"]}},
-        {"$set": {"status": "running"}, "$unset": {"pending_oauth_servers": ""}},
+        {
+            "_id": oid,
+            "status": {
+                "$in": [
+                    "idle",
+                    "awaiting_input",
+                    "awaiting_oauth",
+                    "awaiting_remote_users",
+                ]
+            },
+        },
+        {
+            "$set": {"status": "running"},
+            "$unset": {"pending_oauth_servers": "", "pending_remote_users": ""},
+        },
     )
     return result.modified_count == 1
 
@@ -903,6 +937,139 @@ def compute_pending_oauth_servers(raw_project, session_id):
     from agents.session_coordination import list_authorized_oauth_servers
     authorized = set(list_authorized_oauth_servers(session_id, needs_auth))
     return [name for name in needs_auth if name not in authorized]
+
+
+@traced_function("service.chat.set_awaiting_remote_users")
+def set_session_awaiting_remote_users(session_id, pending_users):
+    """Mark a chat session as awaiting remote-user readiness.
+
+    ``pending_users`` is a list of ``{user_id, name}`` dicts (the configured
+    remote users that the leader still needs online). Idempotent.
+    """
+    try:
+        oid = ObjectId(session_id)
+    except (InvalidId, TypeError):
+        return
+    cleaned = []
+    for entry in pending_users or []:
+        if not isinstance(entry, dict):
+            continue
+        uid = str(entry.get("user_id") or "").strip()
+        name = str(entry.get("name") or "").strip()
+        if uid and name:
+            cleaned.append({"user_id": uid, "name": name})
+    col = get_collection(CHAT_SESSIONS_COLLECTION)
+    col.update_one(
+        {"_id": oid},
+        {"$set": {"status": "awaiting_remote_users", "pending_remote_users": cleaned}},
+    )
+
+
+def compute_pending_remote_users(project, session_id):
+    """Return the list of configured remote users still required for this run.
+
+    A user is *pending* iff they are in the leader's checked-set (default: all
+    configured users) AND not currently marked online in Redis.
+
+    Returns a list of ``{user_id, name}`` dicts in the project's configured
+    order. Empty list means the gate is clear (run can proceed).
+    """
+    if not isinstance(project, dict) or not session_id:
+        return []
+    gate = project.get("human_gate") or {}
+    if not gate.get("enabled"):
+        return []
+    configured = gate.get("remote_users") or []
+    if not isinstance(configured, list) or not configured:
+        return []
+    cleaned = []
+    for entry in configured:
+        if not isinstance(entry, dict):
+            continue
+        uid = str(entry.get("id") or "").strip()
+        name = str(entry.get("name") or "").strip()
+        if uid and name:
+            cleaned.append({"user_id": uid, "name": name})
+    if not cleaned:
+        return []
+
+    from agents.session_coordination import (
+        get_checked_remote_users,
+        list_online_remote_users,
+    )
+
+    checked = get_checked_remote_users(session_id)
+    if checked is None:
+        # Leader has not selected — default to all configured users.
+        checked_set = {u["user_id"] for u in cleaned}
+    else:
+        checked_set = {str(c) for c in checked if isinstance(c, str)}
+    if not checked_set:
+        return []
+    online = set(list_online_remote_users(session_id, list(checked_set)))
+    return [u for u in cleaned if u["user_id"] in checked_set and u["user_id"] not in online]
+
+
+def get_remote_users_status(project, session_id, base_url=""):
+    """Return a status snapshot for the readiness panel.
+
+    Shape: ``{"users": [{"user_id", "name", "description", "online", "checked",
+    "has_token", "join_url"}]}``. ``join_url`` is populated only when an
+    active token already exists for the user (no minting happens here).
+    Pass ``base_url`` (e.g. ``request.build_absolute_uri('/').rstrip('/')``)
+    so the URL is fully qualified for clipboard sharing.
+    """
+    if not isinstance(project, dict):
+        return {"users": []}
+    gate = project.get("human_gate") or {}
+    configured = gate.get("remote_users") or []
+    rows = []
+    cleaned_ids = []
+    for entry in configured:
+        if not isinstance(entry, dict):
+            continue
+        uid = str(entry.get("id") or "").strip()
+        name = str(entry.get("name") or "").strip()
+        if not uid or not name:
+            continue
+        rows.append({
+            "user_id": uid,
+            "name": name,
+            "description": str(entry.get("description") or ""),
+        })
+        cleaned_ids.append(uid)
+    if not rows:
+        return {"users": []}
+
+    from agents.session_coordination import (
+        get_checked_remote_users,
+        get_remote_user_token_for_user,
+        list_online_remote_users,
+        list_remote_users_with_token,
+    )
+
+    checked = get_checked_remote_users(session_id)
+    if checked is None:
+        checked_set = set(cleaned_ids)  # default: all checked
+    else:
+        checked_set = {str(c) for c in checked if isinstance(c, str)}
+    online_set = set(list_online_remote_users(session_id, cleaned_ids))
+    token_set = set(list_remote_users_with_token(session_id, cleaned_ids))
+
+    for row in rows:
+        uid = row["user_id"]
+        row["checked"] = uid in checked_set
+        row["online"] = uid in online_set
+        row["has_token"] = uid in token_set
+        if row["has_token"] and base_url:
+            tok = get_remote_user_token_for_user(session_id, uid)
+            row["join_url"] = (
+                f"{base_url.rstrip('/')}/chat/{session_id}/remote_user/{tok}/"
+                if tok else ""
+            )
+        else:
+            row["join_url"] = ""
+    return {"users": rows}
 
 
 @traced_function("service.chat.append_messages")
@@ -1129,6 +1296,17 @@ def delete_chat_session(session_id):
     except (InvalidId, TypeError):
         raise ValueError(f"Invalid session ID '{session_id}'.")
     attachment_service.delete_session_attachments(session_id)
+    # Purge ephemeral coordination state (OAuth tokens + remote-user readiness).
+    try:
+        from agents.session_coordination import (
+            purge_mcp_oauth_tokens,
+            purge_remote_users_state,
+        )
+        purge_mcp_oauth_tokens(session_id)
+        purge_remote_users_state(session_id)
+    except Exception:  # noqa: BLE001
+        # Best-effort cleanup; never block the session delete on Redis.
+        pass
     col = get_collection(CHAT_SESSIONS_COLLECTION)
     result = col.delete_one({"_id": oid})
     if result.deleted_count == 0:

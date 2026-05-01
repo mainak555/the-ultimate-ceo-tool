@@ -699,6 +699,247 @@ document.addEventListener("DOMContentLoaded", function () {
   }
 
   // ------------------------------------------------------------------
+  // Multi-user Human Gate — remote-user readiness lobby (Phase 2)
+  // Mirrors _showOAuthGatePanel: in-history card, leader-only, polling
+  // status. When all checked users come online, replays /run/ automatically.
+  // ------------------------------------------------------------------
+
+  var _readinessPollTimer = null;
+
+  function _teardownReadinessPanel() {
+    if (_readinessPollTimer) { clearInterval(_readinessPollTimer); _readinessPollTimer = null; }
+  }
+
+  function _showReadinessPanel(sessionId, secretKey, replayTask, replayAttachmentIds) {
+    setRunningState(false);
+    _teardownReadinessPanel();
+
+    chatMessages
+      .querySelectorAll(".chat-status-badge, .chat-restart-panel, .chat-oauth-panel, .chat-readiness-panel")
+      .forEach(function (el) { el.remove(); });
+
+    chatMessages.insertAdjacentHTML(
+      "beforeend",
+      '<div class="chat-readiness-panel" data-session-id="' + escapeHtml(sessionId) + '">'
+      + '<div class="chat-readiness-panel__title">&#x1F465; Waiting for remote participants</div>'
+      + '<p class="chat-readiness-panel__hint">'
+      + 'Check the participants required for this run, share the invitation link with each one,'
+      + ' and the run will start automatically once everyone is online. You are the session'
+      + ' leader and are always counted as online.'
+      + '</p>'
+      + '<div class="chat-readiness-panel__rows"></div>'
+      + '<div class="chat-readiness-panel__footer">'
+      + '<p class="chat-readiness-panel__disclaimer">'
+      + '&#x1F512; Participant configuration is locked for this chat. To add or remove'
+      + ' remote participants, start a new chat session.'
+      + '</p>'
+      + '<div class="chat-readiness-panel__actions">'
+      + '<button type="button" class="btn btn--danger chat-readiness-cancel-btn">Cancel run</button>'
+      + '</div>'
+      + '</div>'
+      + '</div>'
+    );
+
+    var panel = chatMessages.querySelector(".chat-readiness-panel");
+    if (!panel) return;
+    panel._replayTask = replayTask || "";
+    panel._replayAttachmentIds = (replayAttachmentIds || []).slice();
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+
+    _attachReadinessBehavior(panel, sessionId, secretKey);
+  }
+
+  function _renderReadinessRows(panel, users) {
+    var container = panel.querySelector(".chat-readiness-panel__rows");
+    if (!container) return;
+    var html = (users || []).map(function (u) {
+      var safeId = escapeHtml(u.user_id);
+      var safeName = escapeHtml(u.name);
+      var checked = u.checked ? " checked" : "";
+      var online = !!u.online;
+      var statusCls = online ? "chat-readiness-panel__status--online" : "chat-readiness-panel__status--offline";
+      var statusText = online ? "Online" : "Offline";
+      var rowCls = online ? " chat-readiness-panel__row--online" : "";
+      var joinUrl = u.join_url || "";
+      var btnLabel = joinUrl ? "Copy Invitation Link" : "Generate Invitation Link";
+      return '<div class="chat-readiness-panel__row' + rowCls + '" data-user-id="' + safeId + '" data-join-url="' + escapeHtml(joinUrl) + '">'
+        + '<input type="checkbox" class="chat-readiness-check"' + checked + ' data-user-id="' + safeId + '" />'
+        + '<span class="chat-readiness-panel__name">' + safeName + '</span>'
+        + '<button type="button" class="btn btn--secondary chat-readiness-copy-btn" data-user-id="' + safeId + '">' + btnLabel + '</button>'
+        + '<span class="chat-readiness-panel__status ' + statusCls + '">' + statusText + '</span>'
+        + '</div>';
+    }).join("");
+    container.innerHTML = html;
+  }
+
+  function _copyInvitationToClipboard(url, btn) {
+    var prev = btn.textContent;
+    function _flash(label) {
+      btn.textContent = label;
+      btn.classList.add("chat-readiness-copy-btn--copied");
+      setTimeout(function () {
+        btn.textContent = prev;
+        btn.classList.remove("chat-readiness-copy-btn--copied");
+      }, 1800);
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(url)
+        .then(function () { _flash("Copied \u2713"); })
+        .catch(function () {
+          // fallback below
+          var ta = document.createElement("textarea");
+          ta.value = url; ta.style.position = "fixed"; ta.style.opacity = "0";
+          document.body.appendChild(ta); ta.select();
+          try { document.execCommand("copy"); _flash("Copied \u2713"); } catch (_) { /* silent */ }
+          document.body.removeChild(ta);
+        });
+    } else {
+      var ta = document.createElement("textarea");
+      ta.value = url; ta.style.position = "fixed"; ta.style.opacity = "0";
+      document.body.appendChild(ta); ta.select();
+      try { document.execCommand("copy"); _flash("Copied \u2713"); } catch (_) { /* silent */ }
+      document.body.removeChild(ta);
+    }
+  }
+
+  function _attachReadinessBehavior(panel, sessionId, secretKey) {
+    var checkInFlight = null;
+
+    function _refreshStatus() {
+      return fetch("/chat/sessions/" + sessionId + "/readiness/status/", {
+        method: "GET",
+        headers: { "X-App-Secret-Key": secretKey },
+      }).then(function (r) {
+        if (!r.ok) throw new Error("status failed");
+        return r.json();
+      }).then(function (data) {
+        var users = (data && data.users) || [];
+        _renderReadinessRows(panel, users);
+        // All checked are online? -> auto-replay.
+        var checked = users.filter(function (u) { return u.checked; });
+        var allOnline = checked.length > 0 && checked.every(function (u) { return u.online; });
+        // Edge case: nothing checked at all -> the gate would clear server-side;
+        // also auto-replay so /run/ proceeds.
+        if (allOnline || checked.length === 0) {
+          _onAllRemoteUsersReady();
+        }
+      }).catch(function () { /* keep polling */ });
+    }
+
+    function _onAllRemoteUsersReady() {
+      _teardownReadinessPanel();
+      var task = panel._replayTask || "";
+      var ids = panel._replayAttachmentIds || [];
+      panel.remove();
+      _doStartRun(sessionId, secretKey, task, ids);
+      setRunningState(true);
+    }
+
+    // Checkbox change -> POST /readiness/check/ with the full current set.
+    panel.addEventListener("change", function (e) {
+      var box = e.target && e.target.classList && e.target.classList.contains("chat-readiness-check") ? e.target : null;
+      if (!box) return;
+      var ids = Array.prototype.slice.call(panel.querySelectorAll(".chat-readiness-check:checked"))
+        .map(function (n) { return n.dataset.userId; })
+        .filter(Boolean);
+      var body = new URLSearchParams();
+      ids.forEach(function (id) { body.append("user_ids", id); });
+      if (checkInFlight) { /* let the latest call win */ }
+      checkInFlight = fetch("/chat/sessions/" + sessionId + "/readiness/check/", {
+        method: "POST",
+        headers: {
+          "X-App-Secret-Key": secretKey,
+          "X-CSRFToken": csrfToken,
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: body.toString(),
+      }).finally(function () { checkInFlight = null; });
+    });
+
+    // Copy/Generate Invitation Link button -> idempotent get_or_mint + clipboard.
+    panel.addEventListener("click", function (e) {
+      var btn = e.target && e.target.closest ? e.target.closest(".chat-readiness-copy-btn") : null;
+      if (btn) {
+        var userId = btn.dataset.userId;
+        if (!userId) return;
+        var row = btn.closest(".chat-readiness-panel__row");
+        var cachedUrl = row && row.getAttribute("data-join-url");
+        // Fast path: token already known from /readiness/status/ — copy without round-trip.
+        if (cachedUrl) {
+          _copyInvitationToClipboard(cachedUrl, btn);
+          return;
+        }
+        btn.disabled = true;
+        var prev = btn.textContent;
+        btn.textContent = "Generating\u2026";
+        fetch("/chat/sessions/" + sessionId + "/readiness/" + encodeURIComponent(userId) + "/token/", {
+          method: "POST",
+          headers: {
+            "X-App-Secret-Key": secretKey,
+            "X-CSRFToken": csrfToken,
+          },
+        }).then(function (r) {
+          return r.json().then(function (d) {
+            if (!r.ok) throw new Error(d.error || "Mint failed");
+            return d;
+          });
+        }).then(function (data) {
+          var url = data.join_url || "";
+          if (row) row.setAttribute("data-join-url", url);
+          btn.disabled = false;
+          btn.textContent = "Copy Invitation Link";
+          if (url) _copyInvitationToClipboard(url, btn);
+        }).catch(function () {
+          btn.textContent = prev;
+          btn.disabled = false;
+          alert("Unable to generate invitation link. Try again.");
+        });
+        return;
+      }
+      var cancelBtn = e.target && e.target.closest ? e.target.closest(".chat-readiness-cancel-btn") : null;
+      if (cancelBtn) {
+        cancelBtn.disabled = true;
+        fetch("/chat/sessions/" + sessionId + "/stop/", {
+          method: "POST",
+          headers: {
+            "X-App-Secret-Key": secretKey,
+            "X-CSRFToken": csrfToken,
+          },
+        }).finally(function () {
+          _teardownReadinessPanel();
+          panel.remove();
+          setRunningState(false);
+        });
+      }
+    });
+
+    // Initial render + 3 s polling cadence (mirrors OAuth gate).
+    _refreshStatus();
+    _readinessPollTimer = setInterval(function () {
+      if (!document.body.contains(panel)) {
+        _teardownReadinessPanel();
+        return;
+      }
+      _refreshStatus();
+    }, 3000);
+  }
+
+  // Reload-recovery: when chat history shows the awaiting_remote_users badge,
+  // re-render the panel from /readiness/status/. No replay task is available
+  // on a cold reload — leader can re-trigger Send to start a fresh run.
+  function _restoreReadinessFromBadge() {
+    if (!chatMessages) return;
+    var badge = chatMessages.querySelector(".chat-status-badge--remote-users[data-readiness-context]");
+    if (!badge) return;
+    var sessionId = badge.dataset.sessionId
+      || (activeSessionIdInput ? activeSessionIdInput.value.trim() : "");
+    var secretKey = getSecretKey();
+    if (!sessionId || !secretKey) return;
+    badge.remove();
+    _showReadinessPanel(sessionId, secretKey, "", []);
+  }
+
+  // ------------------------------------------------------------------
   // MCP OAuth in-history authorization panel
   // ------------------------------------------------------------------
 
@@ -882,15 +1123,15 @@ document.addEventListener("DOMContentLoaded", function () {
     var secretKey = getSecretKey();
     if (!secretKey) { alert("Enter the Secret Key first."); return; }
 
-    chatMessages.querySelectorAll(".chat-status-badge, .chat-restart-panel, .chat-oauth-panel").forEach(function (el) {
+    chatMessages.querySelectorAll(".chat-status-badge, .chat-restart-panel, .chat-oauth-panel, .chat-readiness-panel").forEach(function (el) {
       el.remove();
     });
 
     setRunningState(true);
 
-    // OAuth gate is now driven by the server: /run/ returns 409 +
-    // {status:"awaiting_oauth", servers:[...]} when authorization is needed,
-    // and the SSE stream may also emit `awaiting_oauth` mid-run. Both paths
+    // Server-driven gates: /run/ returns 409 + {status:"awaiting_remote_users",
+    // users:[...]} (Phase 2) or {status:"awaiting_oauth", servers:[...]}.
+    // The SSE stream may also emit `awaiting_oauth` mid-run. Both paths
     // are handled inside _doStartRun.
     _doStartRun(sessionId, secretKey, task, attachmentIds);
   }
@@ -912,9 +1153,14 @@ document.addEventListener("DOMContentLoaded", function () {
       body: body.toString(),
     }).then(function (response) {
       if (response.status === 409) {
-        // Either awaiting_oauth (our gate) or "already running"/"changed".
-        // Distinguish by JSON body.
+        // Either awaiting_remote_users (readiness gate) or awaiting_oauth (MCP gate)
+        // or "already running"/"changed". Distinguish by JSON body. The readiness
+        // gate runs first server-side, so it is checked before OAuth.
         return response.json().then(function (d) {
+          if (d && d.status === "awaiting_remote_users") {
+            _showReadinessPanel(sessionId, secretKey, task, attachmentIds);
+            return;
+          }
           if (d && d.status === "awaiting_oauth") {
             _showOAuthGatePanel(sessionId, secretKey, d.servers || [], task, attachmentIds);
             return;
@@ -1297,6 +1543,8 @@ document.addEventListener("DOMContentLoaded", function () {
     } else {
       clearGateMode();
     }
+    // Multi-user readiness lobby restoration (Phase 2).
+    _restoreReadinessFromBadge();
   });
 
   document.body.addEventListener("input", function (e) {
@@ -1360,4 +1608,6 @@ document.addEventListener("DOMContentLoaded", function () {
       setGateMode(JSON.parse(initialGateBadge.dataset.gateContext));
     } catch (e) { /* malformed JSON — ignore */ }
   }
+  // Multi-user readiness lobby restoration on first render (Phase 2).
+  _restoreReadinessFromBadge();
 });

@@ -362,13 +362,17 @@ def validate_human_gate(data):
             "'human_gate.quorum' must be one of 'yes', 'first_win', or 'team_config'."
         )
 
-    # Remote users — list of {id, name, description, enabled}.
-    import uuid as _uuid
+    # Remote users — list of {id, name, description}. `id` is derived from
+    # `name` using the same slug rules as agent names (letters/digits/_, must
+    # start with a letter), so it is stable, readable, and safe to use in
+    # Redis keys / URLs. Display `name` is preserved verbatim.
+    import re as _re
     raw_remote = data.get("remote_users") or []
     if not isinstance(raw_remote, list):
         raise ValueError("'human_gate.remote_users' must be a list.")
     remote_users = []
     seen_names = set()
+    seen_ids = set()
     for entry in raw_remote:
         if not isinstance(entry, dict):
             raise ValueError("Each 'human_gate.remote_users' entry must be a JSON object.")
@@ -382,11 +386,24 @@ def validate_human_gate(data):
                 f"'human_gate.remote_users': duplicate name '{rname}' (names must be unique)."
             )
         seen_names.add(key)
-        rid = (entry.get("id") or "").strip()
-        if not rid:
-            rid = str(_uuid.uuid4())
+        # Derive id from name (same sanitisation as agent names).
+        slug = _re.sub(r"[\s\-]+", "_", rname)
+        slug = _re.sub(r"[^\w]", "", slug)
+        if slug and slug[0].isdigit():
+            slug = "_" + slug
+        if not slug or not slug.isidentifier():
+            raise ValueError(
+                f"'human_gate.remote_users': name '{rname}' must contain at least "
+                "one letter (used to derive a stable identifier)."
+            )
+        if slug in seen_ids:
+            raise ValueError(
+                f"'human_gate.remote_users': name '{rname}' produces a duplicate "
+                f"identifier '{slug}'. Choose a more distinct name."
+            )
+        seen_ids.add(slug)
         remote_users.append({
-            "id": rid,
+            "id": slug,
             "name": rname,
             "description": (entry.get("description") or "").strip(),
         })

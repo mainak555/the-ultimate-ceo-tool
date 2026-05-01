@@ -480,7 +480,20 @@ select.input {
     display: flex;
     justify-content: space-between;
     align-items: center;
+    gap: $space-sm;
     margin-bottom: $space-sm;
+  }
+
+  &__id-badge {
+    margin-left: auto;
+    margin-right: $space-sm;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: $font-size-sm;
+    color: $color-text-muted;
+    background: $color-bg;
+    border: 1px solid $color-border;
+    border-radius: $radius;
+    padding: 2px $space-xs;
   }
 }
 
@@ -2074,6 +2087,114 @@ select.input {
       border: 1px solid $color-success;
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Multi-user Human Gate — remote-user readiness lobby (Phase 2)
+// Mirrors .chat-oauth-panel rhythm; tokens only.
+// ---------------------------------------------------------------------------
+.chat-readiness-panel {
+  margin: $space-md;
+  padding: $space-md;
+  background: lighten($color-bg, 1.5%);
+  border: 1px solid $color-border;
+  border-left: 4px solid $color-primary;
+  border-radius: $radius;
+
+  &__title {
+    font-size: $font-size-base;
+    font-weight: 700;
+    color: $color-text;
+    margin-bottom: $space-xs;
+  }
+
+  &__hint {
+    font-size: $font-size-sm;
+    color: $color-text-muted;
+    line-height: 1.5;
+    margin-bottom: $space-sm;
+  }
+
+  &__rows {
+    display: flex;
+    flex-direction: column;
+    gap: $space-xs;
+  }
+
+  &__row {
+    display: grid;
+    grid-template-columns: auto 1fr auto auto;
+    align-items: center;
+    gap: $space-sm;
+    padding: $space-sm $space-md;
+    background: $color-surface;
+    border: 1px solid $color-border;
+    border-radius: $radius;
+
+    &--online {
+      border-color: $color-success;
+    }
+  }
+
+  &__name {
+    font-weight: 500;
+    font-size: $font-size-sm;
+    color: $color-text;
+  }
+
+  &__status {
+    font-size: $font-size-sm;
+    padding: 2px $space-xs;
+    border-radius: $radius;
+    border: 1px solid $color-border;
+
+    &--offline {
+      color: $color-text-muted;
+      background: $color-bg;
+    }
+
+    &--online {
+      color: $color-success;
+      background: transparent;
+      border-color: $color-success;
+    }
+  }
+
+  &__footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    gap: $space-md;
+    margin-top: $space-md;
+  }
+
+  &__disclaimer {
+    flex: 1 1 auto;
+    margin: 0;
+    font-size: $font-size-sm;
+    color: $color-text-muted;
+    line-height: 1.5;
+    text-align: left;
+  }
+
+  &__actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: $space-sm;
+    flex-shrink: 0;
+  }
+}
+
+.chat-readiness-copy-btn--copied {
+  color: $color-success !important;
+  border-color: $color-success !important;
+}
+
+.chat-status-badge--remote-users {
+  // Same pill rhythm as the gate badge; tokens only.
+  background: lighten($color-bg, 1.5%);
+  color: $color-text-muted;
+  border-left: 4px solid $color-primary;
 }
 
 // ---------------------------------------------------------------------------

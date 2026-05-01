@@ -433,27 +433,280 @@ def get_mcp_oauth_test_status(project_id: str, server_name: str) -> bool:
         return False
 
 
+# ---------------------------------------------------------------------------
+# Multi-user Human Gate — remote-user readiness state (Phase 2)
+# ---------------------------------------------------------------------------
+#
+# Redis is the only store for these keys. They are deliberately ephemeral
+# and reset on session delete. NEVER log token strings or join URLs from
+# this section — fingerprints / counts only.
+# ---------------------------------------------------------------------------
+
+import secrets as _secrets
+
+
+def _remote_user_token_ttl() -> int:
+    raw = int(getattr(settings, "REMOTE_USER_TOKEN_TTL_SECONDS", 43200) or 43200)
+    return max(60, raw)
+
+
+def _remote_user_presence_ttl() -> int:
+    raw = int(getattr(settings, "REMOTE_USER_PRESENCE_TTL_SECONDS", 45) or 45)
+    return max(10, raw)
+
+
+def _remote_user_checked_ttl() -> int:
+    # Should outlive any reasonable readiness wait.
+    raw = int(getattr(settings, "REMOTE_USER_CHECKED_TTL_SECONDS", 43200) or 43200)
+    return max(60, raw)
+
+
+def get_remote_user_heartbeat_interval_seconds() -> int:
+    raw = int(getattr(settings, "REMOTE_USER_HEARTBEAT_INTERVAL_SECONDS", 20) or 20)
+    return max(5, raw)
+
+
+def _remote_user_token_key(session_id: str, token: str) -> str:
+    return f"{_namespace()}:remote_user_token:{session_id}:{token}"
+
+
+def _remote_user_token_by_user_key(session_id: str, user_id: str) -> str:
+    return f"{_namespace()}:remote_user_token_by_user:{session_id}:{user_id}"
+
+
+def _remote_user_online_key(session_id: str, user_id: str) -> str:
+    return f"{_namespace()}:remote_user_online:{session_id}:{user_id}"
+
+
+def _remote_user_checked_key(session_id: str) -> str:
+    return f"{_namespace()}:remote_user_checked:{session_id}"
+
+
+@traced_function("agents.remote_user.token_mint")
+def mint_remote_user_token(session_id: str, user_id: str) -> str:
+    """Mint a fresh single-use-per-rotation token for (session_id, user_id).
+
+    Any previously active token for the same user is invalidated atomically.
+    Returns the new opaque token. Tokens are URL-safe random strings; never
+    derived from user_id and never logged.
+    """
+    if not session_id or not user_id:
+        raise SessionCoordinationError("session_id and user_id are required.")
+    token = _secrets.token_urlsafe(32)
+    ttl = _remote_user_token_ttl()
+    by_user_key = _remote_user_token_by_user_key(session_id, user_id)
+    new_key = _remote_user_token_key(session_id, token)
+    try:
+        client = _get_client()
+        # Invalidate any prior token for this user
+        prior = client.get(by_user_key)
+        pipe = client.pipeline(transaction=True)
+        if prior:
+            pipe.delete(_remote_user_token_key(session_id, prior))
+        pipe.set(new_key, user_id, ex=ttl)
+        pipe.set(by_user_key, token, ex=ttl)
+        pipe.execute()
+    except Exception as exc:  # noqa: BLE001
+        raise SessionCoordinationError("Unable to mint remote-user token.") from exc
+    logger.info(
+        "agents.remote_user.token_minted",
+        extra={"session_id": session_id, "user_id": user_id, "rotated": bool(prior)},
+    )
+    return token
+
+
+def lookup_remote_user_token(session_id: str, token: str) -> str | None:
+    """Resolve a token to its user_id, or None when missing/expired."""
+    if not session_id or not token:
+        return None
+    try:
+        return _get_client().get(_remote_user_token_key(session_id, token))
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def get_remote_user_token_for_user(session_id: str, user_id: str) -> str | None:
+    """Return the active token for ``(session_id, user_id)`` or ``None``.
+
+    Used to render a stable invitation link in the readiness lobby without
+    rotating the token. Token value is never logged.
+    """
+    if not session_id or not user_id:
+        return None
+    try:
+        return _get_client().get(_remote_user_token_by_user_key(session_id, user_id))
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def get_or_mint_remote_user_token(session_id: str, user_id: str) -> str:
+    """Return the existing token for ``(session_id, user_id)`` or mint a fresh one.
+
+    Reuse is the default — an invitation link stays stable for the configured
+    Redis TTL so the leader can copy it once and the URL keeps working. Use
+    :func:`mint_remote_user_token` directly only when an explicit rotation is
+    required.
+    """
+    existing = get_remote_user_token_for_user(session_id, user_id)
+    if existing:
+        return existing
+    return mint_remote_user_token(session_id, user_id)
+
+
+def set_remote_user_online(session_id: str, user_id: str) -> None:
+    """Mark a remote user as online (refreshes presence TTL)."""
+    if not session_id or not user_id:
+        return
+    ttl = _remote_user_presence_ttl()
+    try:
+        _get_client().set(_remote_user_online_key(session_id, user_id), "1", ex=ttl)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def clear_remote_user_online(session_id: str, user_id: str) -> None:
+    """Immediately mark a remote user as offline (e.g. on WS disconnect)."""
+    if not session_id or not user_id:
+        return
+    try:
+        _get_client().delete(_remote_user_online_key(session_id, user_id))
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def list_online_remote_users(session_id: str, user_ids: list[str]) -> list[str]:
+    """Return the subset of user_ids currently marked online for this session."""
+    if not session_id or not user_ids:
+        return []
+    try:
+        client = _get_client()
+        pipe = client.pipeline(transaction=False)
+        for uid in user_ids:
+            pipe.exists(_remote_user_online_key(session_id, uid))
+        results = pipe.execute()
+        return [uid for uid, ex in zip(user_ids, results) if bool(ex)]
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def set_checked_remote_users(session_id: str, user_ids: list[str]) -> None:
+    """Persist the leader's selected (checked) remote-user set for this session.
+
+    An empty list explicitly means 'no remote users required for this run' —
+    distinct from the default (key absent) which means 'wait for everyone'.
+    """
+    import json as _json
+
+    if not session_id:
+        return
+    cleaned = [str(u) for u in (user_ids or []) if isinstance(u, str)]
+    try:
+        _get_client().set(
+            _remote_user_checked_key(session_id),
+            _json.dumps(cleaned),
+            ex=_remote_user_checked_ttl(),
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def get_checked_remote_users(session_id: str) -> list[str] | None:
+    """Return the persisted checked-set, or None when the leader has not chosen yet."""
+    import json as _json
+
+    if not session_id:
+        return None
+    try:
+        raw = _get_client().get(_remote_user_checked_key(session_id))
+        if raw is None:
+            return None
+        decoded = _json.loads(raw)
+        if not isinstance(decoded, list):
+            return None
+        return [str(u) for u in decoded if isinstance(u, str)]
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def list_remote_users_with_token(session_id: str, user_ids: list[str]) -> list[str]:
+    """Return the subset of user_ids that currently hold an active token.
+
+    Uses a pipelined ``EXISTS`` so cost is one round-trip. Never reads the
+    token value itself.
+    """
+    if not session_id or not user_ids:
+        return []
+    try:
+        client = _get_client()
+        pipe = client.pipeline(transaction=False)
+        for uid in user_ids:
+            pipe.exists(_remote_user_token_by_user_key(session_id, uid))
+        results = pipe.execute()
+        return [uid for uid, ex in zip(user_ids, results) if bool(ex)]
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def purge_remote_users_state(session_id: str) -> None:
+    """Delete all readiness/presence/token keys for a session (called on session delete)."""
+    if not session_id:
+        return
+    patterns = [
+        f"{_namespace()}:remote_user_token:{session_id}:*",
+        f"{_namespace()}:remote_user_token_by_user:{session_id}:*",
+        f"{_namespace()}:remote_user_online:{session_id}:*",
+        f"{_namespace()}:remote_user_checked:{session_id}",
+    ]
+    try:
+        client = _get_client()
+        for pattern in patterns:
+            if "*" not in pattern:
+                client.delete(pattern)
+                continue
+            cursor = 0
+            while True:
+                cursor, keys = client.scan(cursor=cursor, match=pattern, count=100)
+                if keys:
+                    client.delete(*keys)
+                if cursor == 0:
+                    break
+    except Exception:  # noqa: BLE001
+        pass
+
+
 __all__ = [
     "SessionCoordinationError",
     "acquire_run_lease",
     "clear_cancel_signal",
+    "clear_remote_user_online",
     "clear_run_traceparent",
     "ensure_redis_available",
+    "get_checked_remote_users",
     "get_heartbeat_interval_seconds",
     "get_instance_id",
     "get_mcp_oauth_test_status",
     "get_mcp_oauth_token",
     "get_and_delete_mcp_oauth_state",
     "get_redis_client",
+    "get_remote_user_heartbeat_interval_seconds",
+    "get_remote_user_token_for_user",
+    "get_or_mint_remote_user_token",
     "get_run_traceparent",
     "is_cancel_signaled",
     "list_authorized_oauth_servers",
+    "list_online_remote_users",
+    "list_remote_users_with_token",
+    "lookup_remote_user_token",
+    "mint_remote_user_token",
     "purge_mcp_oauth_tokens",
+    "purge_remote_users_state",
     "release_run_lease",
     "renew_run_lease",
+    "set_checked_remote_users",
     "set_mcp_oauth_state",
     "set_mcp_oauth_test_status",
     "set_mcp_oauth_token",
+    "set_remote_user_online",
     "signal_cancel",
     "store_run_traceparent",
 ]

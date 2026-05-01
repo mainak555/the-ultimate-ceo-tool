@@ -139,6 +139,17 @@
   </div>
 {% endif %}
 
+{# Multi-user Human Gate \u2014 readiness lobby badge for reload recovery (Phase 2). #}
+{# Frontend (home.js) detects this and re-renders the .chat-readiness-panel via /readiness/status/. #}
+{% if session.status == "awaiting_remote_users" and session.pending_remote_users %}
+  <div class="chat-status-badge chat-status-badge--remote-users"
+       data-readiness-context="1"
+       data-session-id="{{ session.session_id }}">
+    &#x1F465; Waiting for remote participants &mdash;
+    {% for u in session.pending_remote_users %}{{ u.name }}{% if not forloop.last %}, {% endif %}{% endfor %}
+  </div>
+{% endif %}
+
 {% if session.has_agent_state %}
 {% if session.status == "completed" or session.status == "stopped" %}
   <div class="chat-restart-panel" data-session-id="{{ session.session_id }}">
