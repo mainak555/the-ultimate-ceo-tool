@@ -92,6 +92,7 @@ class RemoteUserConsumer(AsyncJsonWebsocketConsumer):
         )
         if msg_type == "heartbeat":
             await sync_to_async(self._mark_online, thread_sensitive=True)()
+            await self._send_state()
             return
         if msg_type == "sync_state":
             await self._send_state()
@@ -226,8 +227,13 @@ class RemoteUserConsumer(AsyncJsonWebsocketConsumer):
                 session,
                 self.user_id,
             )
+            leader_online = await sync_to_async(self._is_leader_online, thread_sensitive=True)()
             participants = [
-                {"name": "Leader", "online": True, "active": bool(session.get("status") == "awaiting_input")}
+                {
+                    "name": "Leader",
+                    "online": bool(leader_online),
+                    "active": bool(session.get("status") == "awaiting_input"),
+                }
             ]
             for row in turn_state.get("participants") or []:
                 if row.get("user_id") == self.user_id:
@@ -261,6 +267,11 @@ class RemoteUserConsumer(AsyncJsonWebsocketConsumer):
         from agents.session_coordination import set_remote_user_online
 
         set_remote_user_online(self.session_id, self.user_id)
+
+    def _is_leader_online(self) -> bool:
+        from agents.session_coordination import is_leader_online
+
+        return is_leader_online(self.session_id)
 
     def _record_gate_response(self, round_no: int, payload_json: str) -> None:
         from agents.session_coordination import record_remote_gate_response

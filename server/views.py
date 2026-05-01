@@ -1676,6 +1676,12 @@ def chat_session_readiness_status(request, session_id):
     project = services.get_project(session["project_id"])
     if project is None:
         return _json_error("Project not found", 404)
+    from agents.session_coordination import set_leader_online
+
+    # Leader page polls this endpoint; refresh leader-presence TTL here so
+    # remote participants can see online/offline state when the leader tab
+    # is open/closed.
+    set_leader_online(session_id)
     base_url = request.build_absolute_uri("/").rstrip("/")
     return HttpResponse(
         _json_dumps(services.get_remote_users_status(project, session_id, base_url=base_url)),
@@ -1787,12 +1793,17 @@ def remote_user_page(request, session_id, token):
     from agents.session_coordination import (
         get_or_mint_remote_export_capability,
         get_remote_user_heartbeat_interval_seconds,
+        is_leader_online,
     )
 
     capability = get_or_mint_remote_export_capability(session_id, remote_user["user_id"])
 
     participants = [
-        {"name": "Leader", "online": True, "active": bool(session.get("status") == "awaiting_input")}
+        {
+            "name": "Leader",
+            "online": bool(is_leader_online(session_id)),
+            "active": bool(session.get("status") == "awaiting_input"),
+        }
     ]
     for row in turn_state.get("participants") or []:
         if row.get("user_id") == remote_user["user_id"]:

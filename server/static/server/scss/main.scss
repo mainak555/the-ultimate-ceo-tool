@@ -1067,7 +1067,9 @@ select.input {
   }
 
   &--offline {
-    color: $color-text-muted;
+    color: $color-error;
+    border-color: lighten($color-error, 20%);
+    background: lighten($color-error, 40%);
   }
 
   &--active {

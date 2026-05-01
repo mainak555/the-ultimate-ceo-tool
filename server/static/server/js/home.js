@@ -246,6 +246,10 @@ document.addEventListener("DOMContentLoaded", function () {
 
     if (!hasSecret) {
       closeExportDropdowns();
+      _stopPresencePolling();
+      _renderPresenceStrip([]);
+    } else {
+      _syncPresenceStripPolling();
     }
     _evalSendBtn();
   }
@@ -775,6 +779,7 @@ document.addEventListener("DOMContentLoaded", function () {
   // ------------------------------------------------------------------
 
   var _readinessPollTimer = null;
+  var _presencePollTimer = null;
 
   function _renderPresenceStrip(rows) {
     if (!chatPresenceStrip) return;
@@ -785,17 +790,74 @@ document.addEventListener("DOMContentLoaded", function () {
       return;
     }
     var html = list.map(function (u) {
-      var cls = "remote-presence-chip " + (u.online ? "remote-presence-chip--online" : "remote-presence-chip--offline");
-      if (u.checked) cls += " remote-presence-chip--active";
+      var cls = "remote-presence-chip";
+      if (u.active || u.checked) {
+        cls += " remote-presence-chip--active";
+      } else if (u.online) {
+        cls += " remote-presence-chip--online";
+      } else {
+        cls += " remote-presence-chip--offline";
+      }
       return '<span class="' + cls + '">' + escapeHtml(u.name || u.user_id || "User") + '</span>';
     }).join("");
     chatPresenceStrip.hidden = false;
     chatPresenceStrip.innerHTML = html;
   }
 
+  function _stopPresencePolling() {
+    if (_presencePollTimer) {
+      clearInterval(_presencePollTimer);
+      _presencePollTimer = null;
+    }
+  }
+
+  function _syncPresenceStripOnce() {
+    var sessionId = activeSessionIdInput ? activeSessionIdInput.value.trim() : "";
+    var secretKey = getSecretKey();
+
+    if (!sessionId || !secretKey) {
+      _renderPresenceStrip([]);
+      return Promise.resolve();
+    }
+
+    // When readiness panel is active, that flow drives presence updates.
+    if (chatMessages && chatMessages.querySelector(".chat-readiness-panel")) {
+      return Promise.resolve();
+    }
+
+    return fetch("/chat/sessions/" + sessionId + "/readiness/status/", {
+      method: "GET",
+      headers: { "X-App-Secret-Key": secretKey },
+    }).then(function (r) {
+      if (!r.ok) throw new Error("presence status failed");
+      return r.json();
+    }).then(function (data) {
+      _renderPresenceStrip((data && data.users) || []);
+    }).catch(function () {
+      // Keep UI quiet on transient failures.
+    });
+  }
+
+  function _syncPresenceStripPolling() {
+    var sessionId = activeSessionIdInput ? activeSessionIdInput.value.trim() : "";
+    var secretKey = getSecretKey();
+
+    if (!sessionId || !secretKey) {
+      _stopPresencePolling();
+      _renderPresenceStrip([]);
+      return;
+    }
+
+    _syncPresenceStripOnce();
+    if (_presencePollTimer) return;
+    _presencePollTimer = setInterval(function () {
+      _syncPresenceStripOnce();
+    }, 3000);
+  }
+
   function _teardownReadinessPanel() {
     if (_readinessPollTimer) { clearInterval(_readinessPollTimer); _readinessPollTimer = null; }
-    _renderPresenceStrip([]);
+    _syncPresenceStripPolling();
   }
 
   function _showReadinessPanel(sessionId, secretKey, replayTask, replayAttachmentIds) {
@@ -1492,6 +1554,7 @@ document.addEventListener("DOMContentLoaded", function () {
             chatMessages.innerHTML = '<div class="chat-history" id="chat-history-msgs"></div>';
           }
           var sid = activeSessionIdInput ? activeSessionIdInput.value.trim() : "";
+          _syncPresenceStripPolling();
           return runWithSession(sid);
         }).catch(function (err) {
           appendBubble('<div class="chat-bubble chat-bubble--error">Error: ' + err.message + '</div>');
@@ -1606,6 +1669,7 @@ document.addEventListener("DOMContentLoaded", function () {
 
     if (activeProjectIdInput) activeProjectIdInput.value = projectId || "";
     if (activeSessionIdInput) activeSessionIdInput.value = "";
+    _syncPresenceStripPolling();
   });
 
   document.body.addEventListener("htmx:beforeRequest", function (e) {
@@ -1634,6 +1698,7 @@ document.addEventListener("DOMContentLoaded", function () {
     }
     // Multi-user readiness lobby restoration (Phase 2).
     _restoreReadinessFromBadge();
+    _syncPresenceStripPolling();
   });
 
   document.body.addEventListener("input", function (e) {
@@ -1699,4 +1764,5 @@ document.addEventListener("DOMContentLoaded", function () {
   }
   // Multi-user readiness lobby restoration on first render (Phase 2).
   _restoreReadinessFromBadge();
+  _syncPresenceStripPolling();
 });

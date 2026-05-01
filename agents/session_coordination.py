@@ -478,6 +478,10 @@ def _remote_user_online_key(session_id: str, user_id: str) -> str:
     return f"{_namespace()}:remote_user_online:{session_id}:{user_id}"
 
 
+def _leader_online_key(session_id: str) -> str:
+    return f"{_namespace()}:leader_online:{session_id}"
+
+
 def _remote_user_checked_key(session_id: str) -> str:
     return f"{_namespace()}:remote_user_checked:{session_id}"
 
@@ -646,6 +650,28 @@ def clear_remote_user_online(session_id: str, user_id: str) -> None:
         _get_client().delete(_remote_user_online_key(session_id, user_id))
     except Exception:  # noqa: BLE001
         pass
+
+
+def set_leader_online(session_id: str) -> None:
+    """Mark the leader UI as online for a session (refreshes presence TTL)."""
+    if not session_id:
+        return
+    ttl = _remote_user_presence_ttl()
+    try:
+        _get_client().set(_leader_online_key(session_id), "1", ex=ttl)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def is_leader_online(session_id: str) -> bool:
+    """Return whether leader presence is currently online for a session."""
+    if not session_id:
+        return False
+    try:
+        return bool(_get_client().exists(_leader_online_key(session_id)))
+    except Exception:  # noqa: BLE001
+        # Keep previous UX on transient Redis failures.
+        return True
 
 
 def list_online_remote_users(session_id: str, user_ids: list[str]) -> list[str]:
@@ -832,6 +858,7 @@ def purge_remote_users_state(session_id: str) -> None:
         f"{_namespace()}:remote_user_token:{session_id}:*",
         f"{_namespace()}:remote_user_token_by_user:{session_id}:*",
         f"{_namespace()}:remote_user_online:{session_id}:*",
+        f"{_namespace()}:leader_online:{session_id}",
         f"{_namespace()}:remote_user_checked:{session_id}",
         f"{_namespace()}:remote_export_capability:{session_id}:*",
         f"{_namespace()}:remote_export_capability_by_user:{session_id}:*",
@@ -866,6 +893,7 @@ __all__ = [
     "get_checked_remote_users",
     "get_heartbeat_interval_seconds",
     "get_instance_id",
+    "is_leader_online",
     "get_mcp_oauth_test_status",
     "get_mcp_oauth_token",
     "get_and_delete_mcp_oauth_state",
@@ -893,6 +921,7 @@ __all__ = [
     "release_run_lease",
     "renew_run_lease",
     "set_checked_remote_users",
+    "set_leader_online",
     "set_mcp_oauth_state",
     "set_mcp_oauth_test_status",
     "set_mcp_oauth_token",
