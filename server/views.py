@@ -164,6 +164,8 @@ def _build_project_data(post_data, existing_project=None):
         "human_gate": {
             "enabled": human_gate_enabled,
             "name": post_data.get("human_gate[name]", "").strip(),
+            "quorum": post_data.get("human_gate[quorum]", "yes").strip() or "yes",
+            "remote_users": _parse_remote_users(post_data),
         },
         "team": {
             "type": post_data.get("team[type]", "round_robin").strip(),
@@ -227,6 +229,32 @@ def _parse_mcp_secrets(post_data):
             secrets[key] = value
         idx += 1
     return secrets
+
+
+def _parse_remote_users(post_data):
+    """
+    Extract Human Gate remote_users list from POST form fields.
+
+    Form fields: human_gate[remote_users][N][id], [name], [description]
+    Skips rows with empty name (blank rows are ignored). Preserves submitted
+    `id` so server-minted UUIDs round-trip across saves.
+    """
+    rows = []
+    idx = 0
+    prefix = "human_gate[remote_users]"
+    while any(
+        f"{prefix}[{idx}][{field}]" in post_data
+        for field in ("id", "name", "description")
+    ):
+        name = post_data.get(f"{prefix}[{idx}][name]", "").strip()
+        if name:
+            rows.append({
+                "id": post_data.get(f"{prefix}[{idx}][id]", "").strip(),
+                "name": name,
+                "description": post_data.get(f"{prefix}[{idx}][description]", "").strip(),
+            })
+        idx += 1
+    return rows
 
 
 def _normalize_export_agents(raw_agents):

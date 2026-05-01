@@ -270,6 +270,15 @@ document.addEventListener("DOMContentLoaded", function () {
       humanGateSingleHint.hidden = !isSingleAssistant;
     }
 
+    // Remote Users block is multi-assistant only.
+    var remoteBlock = document.getElementById("human-gate-remote-block");
+    if (remoteBlock) {
+      remoteBlock.hidden = isSingleAssistant;
+      remoteBlock.querySelectorAll("input, select, textarea").forEach(function (field) {
+        if (isSingleAssistant) field.disabled = true;
+      });
+    }
+
     if (teamFieldset) {
       teamFieldset.hidden = isSingleAssistant;
       teamFieldset.querySelectorAll("input, select, textarea").forEach(function (field) {
@@ -648,6 +657,87 @@ document.addEventListener("DOMContentLoaded", function () {
     if (badge) {
       badge.textContent = data.success ? "✓ Authorized" : "✗ Failed";
       badge.className = "mcp-oauth-status mcp-oauth-status--" + (data.success ? "ok" : "error");
+    }
+  });
+
+  // ---- Human Gate: Remote Users rows ----
+  function _genUuid() {
+    if (window.crypto && typeof window.crypto.randomUUID === "function") {
+      return window.crypto.randomUUID();
+    }
+    // RFC 4122 v4 fallback
+    return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function (c) {
+      var r = (Math.random() * 16) | 0;
+      var v = c === "x" ? r : (r & 0x3) | 0x8;
+      return v.toString(16);
+    });
+  }
+
+  function reindexRemoteUsers() {
+    var container = document.getElementById("remote-users-rows");
+    if (!container) return;
+    container.querySelectorAll(".remote-users__row").forEach(function (row, idx) {
+      row.setAttribute("data-remote-index", idx);
+      row.querySelectorAll("[name^='human_gate[remote_users]']").forEach(function (el) {
+        el.name = el.name.replace(
+          /^human_gate\[remote_users\]\[\d+\]/,
+          "human_gate[remote_users][" + idx + "]"
+        );
+      });
+      // Reindex matching label/input ids so labels stay associated.
+      var nameInput = row.querySelector(".js-remote-user-name");
+      if (nameInput) nameInput.id = "remote_user_name_" + idx;
+      var nameLabel = row.querySelector("label[for^='remote_user_name_']");
+      if (nameLabel) nameLabel.htmlFor = "remote_user_name_" + idx;
+      var descInput = row.querySelector(".js-remote-user-description");
+      if (descInput) descInput.id = "remote_user_desc_" + idx;
+      var descLabel = row.querySelector("label[for^='remote_user_desc_']");
+      if (descLabel) descLabel.htmlFor = "remote_user_desc_" + idx;
+    });
+  }
+
+  document.body.addEventListener("click", function (e) {
+    if (e.target.matches(".js-add-remote-user")) {
+      var container = document.getElementById("remote-users-rows");
+      if (!container) return;
+      var idx = container.querySelectorAll(".remote-users__row").length;
+      var rid = _genUuid();
+      var html =
+        '<fieldset class="remote-users__row form-group--nested" data-remote-index="' + idx + '">' +
+          '<input type="hidden" class="js-remote-user-id" ' +
+            'name="human_gate[remote_users][' + idx + '][id]" value="' + rid + '">' +
+          '<div class="remote-users__row-header">' +
+            '<strong>New remote user</strong>' +
+            '<button type="button" class="chat-session-item__delete js-delete-remote-user" ' +
+              'aria-label="Remove remote user" title="Remove remote user">×</button>' +
+          '</div>' +
+          '<div class="form-row">' +
+            '<div class="form-group">' +
+              '<label for="remote_user_name_' + idx + '">Name</label>' +
+              '<input type="text" id="remote_user_name_' + idx + '" ' +
+                'class="input input--sm js-remote-user-name" ' +
+                'name="human_gate[remote_users][' + idx + '][name]" ' +
+                'placeholder="e.g. Alice" autocomplete="off">' +
+            '</div>' +
+          '</div>' +
+          '<div class="form-group">' +
+            '<label for="remote_user_desc_' + idx + '">Description</label>' +
+            '<textarea id="remote_user_desc_' + idx + '" ' +
+              'class="input input--textarea js-remote-user-description" ' +
+              'name="human_gate[remote_users][' + idx + '][description]" rows="2" ' +
+              'placeholder="Role / responsibility — shown to agents and used by Selector routing."></textarea>' +
+            '<small class="form-hint">Plain-language role description shown to the agent team when this remote user is addressed.</small>' +
+          '</div>' +
+        '</fieldset>';
+      container.insertAdjacentHTML("beforeend", html);
+      return;
+    }
+    if (e.target.matches(".js-delete-remote-user")) {
+      var row = e.target.closest(".remote-users__row");
+      if (row) {
+        row.remove();
+        reindexRemoteUsers();
+      }
     }
   });
 

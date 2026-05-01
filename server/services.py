@@ -270,11 +270,46 @@ def normalize_project(project):
     human_gate = {
         "enabled": False,
         "name": "",
+        "remote_users": [],
+        "quorum": "yes",
     }
     if isinstance(raw_human_gate, dict):
+        # Legacy quorum migration: bool True → "yes", bool False → "first_win"
+        raw_quorum = raw_human_gate.get("quorum", "yes")
+        if isinstance(raw_quorum, bool):
+            quorum = "yes" if raw_quorum else "first_win"
+        else:
+            quorum = (str(raw_quorum) or "yes").strip().lower()
+            if quorum not in ("yes", "first_win", "team_config"):
+                quorum = "yes"
+
+        raw_remote = raw_human_gate.get("remote_users") or []
+        remote_users = []
+        if isinstance(raw_remote, list):
+            for entry in raw_remote:
+                if not isinstance(entry, dict):
+                    continue
+                rid = (entry.get("id") or "").strip()
+                if not rid:
+                    import uuid as _uuid
+                    rid = str(_uuid.uuid4())
+                rname = (entry.get("name") or "").strip()
+                if not rname:
+                    continue
+                remote_users.append({
+                    "id": rid,
+                    "name": rname,
+                    "description": (entry.get("description") or "").strip(),
+                })
+
+        enabled = bool(raw_human_gate.get("enabled", True))
         human_gate = {
-            "enabled": bool(raw_human_gate.get("enabled", True)),
+            "enabled": enabled,
             "name": (raw_human_gate.get("name") or "").strip(),
+            # When the gate is disabled, remote users and quorum are not meaningful;
+            # reset to safe defaults so a future re-enable starts clean.
+            "remote_users": remote_users if enabled else [],
+            "quorum": quorum if enabled else "yes",
         }
 
     raw_team = project.get("team") or {}

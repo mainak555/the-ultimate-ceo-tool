@@ -47,8 +47,22 @@ Cross-references: [docs/API.md](API.md) (form fields + HTTP schema), [AGENTS.md]
 
   // ── Human gate (optional) ─────────────────────────────────────────────────
   "human_gate": {
-    "enabled":          true,      // bool
-    "name":             "string"  // required when enabled=true
+    "enabled":      true,        // bool
+    "name":         "string",    // required when enabled=true (the local "leader" gate name)
+    "quorum":       "yes",       // "yes" | "first_win" | "team_config"
+                                 //   yes        — wait for all enabled remote users to reply
+                                 //   first_win  — first remote response continues the run
+                                 //   team_config — agent team (Selector) decides who must reply
+                                 // Legacy bool tolerated on read: True→"yes", False→"first_win"
+    "remote_users": [            // [] when enabled=false; multi-assistant only
+      {
+        "id":          "uuid",   // server-minted, preserved across saves
+        "name":        "string", // unique within the list, non-empty
+        "description": "string"  // shown to the agent team and used by Selector routing
+      }
+      // Per-user enable/disable is a runtime concern (lobby/readiness in Phase 2),
+      // not a stored config field.
+    ]
   },
 
   // ── Team ──────────────────────────────────────────────────────────────────
@@ -290,6 +304,10 @@ The `integrations` root never holds an `export_agent` field in new documents.
 | `agents[].system_prompt` | str | non-empty |
 | `agents[].temperature` | float | 0.0 ≤ value ≤ 2.0 |
 | `human_gate.name` | str | required when `enabled=true` |
+| `human_gate.quorum` | str | `"yes"` \| `"first_win"` \| `"team_config"`; reset to `"yes"` when disabled |
+| `human_gate.remote_users[].name` | str | non-empty, unique within list |
+| `human_gate.remote_users[].id` | str | server-minted UUID, preserved across saves |
+| `human_gate.remote_users` | list | reset to `[]` when `enabled=false`; rejected when `len(agents)==1`; per-user enable/disable is runtime-only (not stored) |
 | `team.type` | str | `"round_robin"` or `"selector"` |
 | `team.max_iterations` | int | ≥ 1; ≤ 10 when `human_gate.enabled=false` |
 | `single-assistant rule` | logical | if `len(agents)==1`, then `human_gate.enabled=true` and `team.type != "selector"` |

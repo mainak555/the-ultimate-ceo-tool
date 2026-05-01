@@ -341,6 +341,8 @@ def validate_human_gate(data):
         return {
             "enabled": False,
             "name": "",
+            "remote_users": [],
+            "quorum": "yes",
         }
 
     enabled = bool(data.get("enabled", False))
@@ -349,12 +351,57 @@ def validate_human_gate(data):
     if enabled and not name:
         raise ValueError("'human_gate.name' is required when human gate is enabled.")
 
+    # Quorum mode (3-value enum). Accept legacy bool for forward-migration.
+    raw_quorum = data.get("quorum", "yes")
+    if isinstance(raw_quorum, bool):
+        quorum = "yes" if raw_quorum else "first_win"
+    else:
+        quorum = (str(raw_quorum) or "yes").strip().lower()
+    if quorum not in ("yes", "first_win", "team_config"):
+        raise ValueError(
+            "'human_gate.quorum' must be one of 'yes', 'first_win', or 'team_config'."
+        )
+
+    # Remote users — list of {id, name, description, enabled}.
+    import uuid as _uuid
+    raw_remote = data.get("remote_users") or []
+    if not isinstance(raw_remote, list):
+        raise ValueError("'human_gate.remote_users' must be a list.")
+    remote_users = []
+    seen_names = set()
+    for entry in raw_remote:
+        if not isinstance(entry, dict):
+            raise ValueError("Each 'human_gate.remote_users' entry must be a JSON object.")
+        rname = (entry.get("name") or "").strip()
+        if not rname:
+            # Skip blank rows silently (form may submit a fresh empty row).
+            continue
+        key = rname.lower()
+        if key in seen_names:
+            raise ValueError(
+                f"'human_gate.remote_users': duplicate name '{rname}' (names must be unique)."
+            )
+        seen_names.add(key)
+        rid = (entry.get("id") or "").strip()
+        if not rid:
+            rid = str(_uuid.uuid4())
+        remote_users.append({
+            "id": rid,
+            "name": rname,
+            "description": (entry.get("description") or "").strip(),
+        })
+
     if not enabled:
+        # Disabled gate cannot carry name / remote users / quorum mode.
         name = ""
+        remote_users = []
+        quorum = "yes"
 
     return {
         "enabled": enabled,
         "name": name,
+        "remote_users": remote_users,
+        "quorum": quorum,
     }
 
 
@@ -659,6 +706,11 @@ def validate_project(data):
     if assistant_count == 1 and not human_gate["enabled"]:
         raise ValueError(
             "Single-assistant chat mode requires Human Gate to be enabled."
+        )
+    if assistant_count == 1 and human_gate["remote_users"]:
+        raise ValueError(
+            "Single-assistant chat mode does not support remote users. "
+            "Remove remote users or add a second assistant agent."
         )
 
     team = validate_team(

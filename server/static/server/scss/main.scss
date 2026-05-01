@@ -460,6 +460,30 @@ select.input {
   }
 }
 
+// Human Gate — Remote Users (collaborative, multi-assistant only).
+// Reuses the shared nested-row pattern (see .mcp-oauth-configs).
+.remote-users {
+  &__rows {
+    display: flex;
+    flex-direction: column;
+    gap: $space-sm;
+  }
+
+  &__row {
+    border: 1px solid $color-border;
+    border-radius: $radius;
+    padding: $space-sm $space-md;
+    background: lighten($color-bg, 1.5%);
+  }
+
+  &__row-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: $space-sm;
+  }
+}
+
 // OAuth status badge (config form — Test Authorization result)
 .mcp-oauth-status {
   font-size: $font-size-sm;

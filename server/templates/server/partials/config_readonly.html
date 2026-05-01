@@ -49,6 +49,28 @@
     <h3>Human Gate</h3>
     {% if project.human_gate.enabled %}
       <p><strong>Name:</strong> {{ project.human_gate.name }}</p>
+      {% if project.agents|length > 1 %}
+        <p>
+          <strong>Quorum mode:</strong>
+          {% if project.human_gate.quorum == 'yes' %}Yes — wait for all enabled remote users
+          {% elif project.human_gate.quorum == 'first_win' %}First wins — first remote response continues
+          {% elif project.human_gate.quorum == 'team_config' %}Team config — agents decide who must reply
+          {% else %}{{ project.human_gate.quorum }}{% endif %}
+        </p>
+        {% if project.human_gate.remote_users %}
+          <p><strong>Remote users:</strong></p>
+          <ul class="config-readonly__list">
+            {% for ru in project.human_gate.remote_users %}
+              <li>
+                <strong>{{ ru.name }}</strong>
+                {% if ru.description %}<br><small>{{ ru.description }}</small>{% endif %}
+              </li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <p><em>No remote users configured.</em></p>
+        {% endif %}
+      {% endif %}
     {% else %}
       <p>Human gate disabled.</p>
     {% endif %}

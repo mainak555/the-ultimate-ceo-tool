@@ -53,6 +53,24 @@ bottom input bar switches to **gate mode**:
 HITL notes sent with Send are rendered as markdown in both live chat and
 persisted session history.
 
+### Multi-User Collaboration (configuration only — Phase 1)
+
+Multi-assistant projects with Human Gate enabled may also configure **remote
+users** under Project Configuration → Human Gate. Each remote user has a
+`name`, a `description` (used by Selector routing), and an `enabled` toggle.
+A `quorum` selector controls how many remote responses are required before
+the agent loop continues:
+
+- `yes` — wait for **all** remote users to reply.
+- `first_win` — the **first** remote response continues the run.
+- `team_config` — the **agent team** (Selector) decides who must reply.
+
+The local user (the person running this app) is the **session leader**: they
+own MCP authorizations and start every run. Remote users only join an active
+chat session via a per-session join URL and respond at the Human Gate. Phase 1
+ships configuration only — runtime collection of remote responses lands in
+Phase 3.
+
 Single-assistant contract:
 
 - With exactly one assistant, the project runs in **chat mode**.

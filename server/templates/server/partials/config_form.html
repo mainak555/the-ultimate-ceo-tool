@@ -102,6 +102,77 @@
       </div>
       <small class="form-hint" id="human-gate-default-hint" {% if not project.agents or project.agents|length == 1 %}hidden{% endif %}>During chat pause, the reviewer selects Approve or Reject, can add optional notes, then chooses Continue or Stop. If disabled, team max iterations cannot exceed 10.</small>
       <small class="form-hint" id="human-gate-single-assistant-hint" {% if project.agents and project.agents|length != 1 %}hidden{% endif %}>Single-assistant chat mode requires Human Gate. The loop continues until the human chooses Stop.</small>
+
+      {# ── Remote users (multi-user collaboration) — multi-assistant only ── #}
+      <fieldset class="form-group form-group--nested-l2 section-fieldset"
+                id="human-gate-remote-block"
+                {% if not project.agents or project.agents|length == 1 %}hidden{% endif %}>
+        <legend>Remote Users (collaborative)</legend>
+        <small class="form-hint">
+          The local user (the person running this app) is the <strong>session leader</strong>: they own MCP authorizations and start every run.
+          Remote users join the same chat session via a per-session URL and may answer at the Human Gate. Quorum mode controls how many remote responses are required before the agent loop continues.
+        </small>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label for="human_gate_quorum">Quorum mode</label>
+            <select id="human_gate_quorum" name="human_gate[quorum]" class="input">
+              <option value="yes"          {% if project.human_gate.quorum == 'yes' %}selected{% endif %}>Yes — wait for all remote users to reply</option>
+              <option value="first_win"    {% if project.human_gate.quorum == 'first_win' %}selected{% endif %}>First wins — first remote response continues the run</option>
+              <option value="team_config"  {% if project.human_gate.quorum == 'team_config' %}selected{% endif %}>Team config — let the agent team decide who must reply</option>
+            </select>
+            <small class="form-hint">Applies only when at least one remote user is configured.</small>
+          </div>
+        </div>
+
+        <div class="mcp-secrets__subsection">
+          <div class="mcp-secrets__subsection-header">
+            <strong>Remote Users</strong>
+            <button type="button" class="btn btn--secondary btn--sm js-add-remote-user">+ Add Remote User</button>
+          </div>
+          <p class="form-hint form-hint--compact">
+            Each remote user gets a per-session join URL. Description is shown to the agent team and used by Selector routing to decide who to address.
+          </p>
+          <div class="remote-users__rows" id="remote-users-rows">
+            {% for ru in project.human_gate.remote_users %}
+            <fieldset class="remote-users__row form-group--nested" data-remote-index="{{ forloop.counter0 }}">
+              <input type="hidden"
+                     class="js-remote-user-id"
+                     name="human_gate[remote_users][{{ forloop.counter0 }}][id]"
+                     value="{{ ru.id }}">
+              <div class="remote-users__row-header">
+                <strong>{{ ru.name|default:"(unnamed)" }}</strong>
+                <button type="button"
+                        class="chat-session-item__delete js-delete-remote-user"
+                        aria-label="Remove remote user"
+                        title="Remove remote user">×</button>
+              </div>
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="remote_user_name_{{ forloop.counter0 }}">Name</label>
+                  <input type="text"
+                         id="remote_user_name_{{ forloop.counter0 }}"
+                         class="input input--sm js-remote-user-name"
+                         name="human_gate[remote_users][{{ forloop.counter0 }}][name]"
+                         value="{{ ru.name }}"
+                         placeholder="e.g. Alice"
+                         autocomplete="off">
+                </div>
+              </div>
+              <div class="form-group">
+                <label for="remote_user_desc_{{ forloop.counter0 }}">Description</label>
+                <textarea id="remote_user_desc_{{ forloop.counter0 }}"
+                          class="input input--textarea js-remote-user-description"
+                          name="human_gate[remote_users][{{ forloop.counter0 }}][description]"
+                          rows="2"
+                          placeholder="Role / responsibility — shown to agents and used by Selector routing.">{{ ru.description }}</textarea>
+                <small class="form-hint">Plain-language role description shown to the agent team when this remote user is addressed.</small>
+              </div>
+            </fieldset>
+            {% endfor %}
+          </div>
+        </div>
+      </fieldset>
     </div>
   </fieldset>
 
