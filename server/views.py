@@ -9,7 +9,6 @@ Each view:
 
 import asyncio
 import io
-import json
 import logging
 from urllib.parse import quote
 from datetime import datetime, timezone
@@ -25,6 +24,7 @@ from django.views.decorators.http import require_GET, require_POST, require_http
 
 from . import services
 from . import attachment_service
+from .util import json_dumps
 from .logging_utils import bind_request_id, clear_request_id, get_request_id
 from core.tracing import context_from_traceparent, start_root_span
 
@@ -52,7 +52,6 @@ def _has_valid_secret(request):
     """Check the secret key passed in the request headers."""
     key = request.headers.get("X-App-Secret-Key", "").strip()
     return services.verify_secret_key(key)
-
 
 def _get_form_context(project=None, mode="create", success=None):
     """Return shared context for create and update forms."""
@@ -785,27 +784,14 @@ def chat_session_update(request, session_id):
 # SSE helpers
 # ---------------------------------------------------------------------------
 
-def _json_default(value):
-    """JSON serializer fallback for datetime payload values."""
-    if isinstance(value, datetime):
-        if value.tzinfo is None:
-            value = value.replace(tzinfo=timezone.utc)
-        return value.isoformat()
-    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
-
-
-def _json_dumps(payload) -> str:
-    """Serialize JSON payloads with datetime support."""
-    return json.dumps(payload, default=_json_default)
-
 def _sse(event: str, data: dict) -> str:
     """Format a single SSE frame."""
-    return f"event: {event}\ndata: {_json_dumps(data)}\n\n"
+    return f"event: {event}\ndata: {json_dumps(data)}\n\n"
 
 
 def _json_error(message: str, status: int) -> HttpResponse:
     """Return a standard JSON error response."""
-    return HttpResponse(_json_dumps({"error": message}), status=status, content_type="application/json")
+    return HttpResponse(json_dumps({"error": message}), status=status, content_type="application/json")
 
 
 def _remote_group_name(session_id: str) -> str:
@@ -1670,7 +1656,7 @@ def chat_session_respond(request, session_id):
         services.set_session_status(session_id, "stopped")
         evict_team(session_id)
         _broadcast_remote_state(session_id)
-        return HttpResponse(_json_dumps({"status": "stopped"}), content_type="application/json")
+        return HttpResponse(json_dumps({"status": "stopped"}), content_type="application/json")
 
     if action in {"continue", "continue_auto"}:
         # Enforce remote-user quorum server-side before resuming.
@@ -1725,7 +1711,7 @@ def chat_session_respond(request, session_id):
         services.set_session_status(session_id, "idle")
         _broadcast_remote_state(session_id)
         return HttpResponse(
-            _json_dumps(
+            json_dumps(
                 {
                     "status": "ok",
                     # Leader-authored task only; runtime context is carried
@@ -1744,7 +1730,7 @@ def chat_session_respond(request, session_id):
             content_type="application/json",
         )
 
-    return HttpResponse(_json_dumps({"error": "Invalid action: continue, continue_auto, or stop"}), status=400,
+    return HttpResponse(json_dumps({"error": "Invalid action: continue, continue_auto, or stop"}), status=400,
                         content_type="application/json")
 
 
@@ -1783,7 +1769,7 @@ def chat_session_restart(request, session_id):
 
     services.set_session_status(session_id, "idle")
     task = text if mode == "continue_with_context" else ""
-    return HttpResponse(_json_dumps({"status": "ok", "task": task, "mode": mode}), content_type="application/json")
+    return HttpResponse(json_dumps({"status": "ok", "task": task, "mode": mode}), content_type="application/json")
 
 
 # ---------------------------------------------------------------------------
@@ -1814,7 +1800,7 @@ def chat_session_readiness_status(request, session_id):
     set_leader_online(session_id)
     base_url = request.build_absolute_uri("/").rstrip("/")
     return HttpResponse(
-        _json_dumps(services.get_remote_users_status(project, session_id, base_url=base_url)),
+        json_dumps(services.get_remote_users_status(project, session_id, base_url=base_url)),
         content_type="application/json",
     )
 
@@ -1860,7 +1846,7 @@ def chat_session_readiness_check(request, session_id):
         return _json_error("Unable to persist checked-set.", 503)
     _broadcast_remote_state(session_id)
     return HttpResponse(
-        _json_dumps({"status": "ok", "checked": submitted}),
+        json_dumps({"status": "ok", "checked": submitted}),
         content_type="application/json",
     )
 
@@ -1907,7 +1893,7 @@ def chat_session_readiness_token(request, session_id, user_id):
     join_url = f"{base_url}/chat/{session_id}/remote-user/{token}/"
     _broadcast_remote_state(session_id)
     return HttpResponse(
-        _json_dumps({"status": "ok", "join_url": join_url}),
+        json_dumps({"status": "ok", "join_url": join_url}),
         content_type="application/json",
     )
 
@@ -2000,7 +1986,7 @@ def chat_session_remote_heartbeat(request, session_id):
 
     set_remote_user_online(session_id, ctx["user_id"])
     _broadcast_remote_state(session_id)
-    return HttpResponse(_json_dumps({"status": "ok"}), content_type="application/json")
+    return HttpResponse(json_dumps({"status": "ok"}), content_type="application/json")
 
 
 @csrf_exempt
@@ -2027,7 +2013,7 @@ def chat_session_remote_upload_attachments(request, session_id):
         return _json_error("Attachment upload failed.", 500)
 
     enriched = _enrich_attachments_for_display(session_id, uploaded)
-    return HttpResponse(_json_dumps({"status": "ok", "attachments": enriched}), content_type="application/json")
+    return HttpResponse(json_dumps({"status": "ok", "attachments": enriched}), content_type="application/json")
 
 
 @csrf_exempt
@@ -2056,7 +2042,7 @@ def chat_session_readiness_resume(request, session_id):
         )
         _broadcast_remote_state(session_id)
         return HttpResponse(
-            _json_dumps({
+            json_dumps({
                 "status": "awaiting_remote_users",
                 "users": pending_remote,
                 "lock_selection": True,
@@ -2076,7 +2062,7 @@ def chat_session_readiness_resume(request, session_id):
         "human_name": (project.get("human_gate") or {}).get("name") or "You",
         "chat_mode": "single_assistant" if len(project.get("agents") or []) == 1 else "team",
     }
-    return HttpResponse(_json_dumps({"status": "ok", "gate": gate_data}), content_type="application/json")
+    return HttpResponse(json_dumps({"status": "ok", "gate": gate_data}), content_type="application/json")
 
 
 # ---------------------------------------------------------------------------
@@ -2119,7 +2105,7 @@ def chat_session_stop(request, session_id):
 
     from agents.runtime import cancel_team
     cancel_team(session_id)
-    return HttpResponse(_json_dumps({"status": "cancelling"}), content_type="application/json")
+    return HttpResponse(json_dumps({"status": "cancelling"}), content_type="application/json")
 
 
 @csrf_exempt
@@ -2143,7 +2129,7 @@ def chat_session_upload_attachments(request, session_id):
         return _json_error("Attachment upload failed.", 500)
 
     enriched = _enrich_attachments_for_display(session_id, uploaded)
-    return HttpResponse(_json_dumps({"status": "ok", "attachments": enriched}), content_type="application/json")
+    return HttpResponse(json_dumps({"status": "ok", "attachments": enriched}), content_type="application/json")
 
 
 @require_GET

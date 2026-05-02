@@ -135,6 +135,7 @@ See [docs/agent_factory.md](agent_factory.md) for the full `agent_models.json` s
 - **Provider endpoints**: Endpoint resolution order is per-model `endpoint` in `agent_models.json`, then provider env fallback `{PROVIDER_UPPER}_API_URL`. Azure providers still require a resolved endpoint after fallback.
 - **No Django ORM**: `DATABASES = {}`. Sessions use signed cookies.
 - **Collection names are constants-only**: never hardcode MongoDB collection literals in runtime modules. Define and maintain collection-name constants in `server/db.py`, then import and use those constants for every `get_collection(...)` call.
+- **Utility helper reuse is mandatory**: cross-feature pure helpers (datetime, normalization, JSON serialization, auth guards) must be implemented once in shared utility modules and imported by feature modules. Avoid duplicating helper logic across services/views.
 - **Runtime state split**: Redis serves two roles — (1) active run coordination (lease per `session_id`, heartbeat, cross-instance cancel signal via `agents/session_coordination.py`); (2) attachment text cache (`{REDIS_NAMESPACE}:attachment:{session_id}:{attachment_id}:text`, TTL `REDIS_ATTACHMENT_TTL_SECONDS`, default 24 h). MongoDB persists durable discussion history and `agent_state` resume data (no file content). Azure Blob holds raw attachment bytes.
 - **Secret key auth**: GET/POST HTMX requests can carry `X-App-Secret-Key`; invalid or missing keys get read-only views or rejected saves.
 - **Model catalog**: `agent_models.json` is keyed by model name; Azure deployments use the optional `deployment_name` field (defaults to model key). See [docs/agent_factory.md](agent_factory.md) for schema details.
@@ -182,6 +183,7 @@ Repo-local extension skills live under `.agents/skills/`.
 - `.agents/skills/active_session_coordination/SKILL.md` — Redis lease/heartbeat/cancel and Mongo resume-state contract for chat run lifecycle changes.
 - `.agents/skills/chat_attachment_workflow/SKILL.md` — attachment upload/bind/Redis-cache/vision/delete contract and implementation checklist.
 - `.agents/skills/mongo_collection_constants/SKILL.md` — mandatory collection-name constant usage and no-hardcoded-literals checklist for Mongo call sites.
+- `.agents/skills/shared_utility_reuse/SKILL.md` — helper deduplication standard, extraction boundaries, and verification checklist for shared utility reuse.
 
 ## Integration Docs
 

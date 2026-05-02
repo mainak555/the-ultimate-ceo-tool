@@ -187,7 +187,7 @@ class RemoteUserConsumer(AsyncJsonWebsocketConsumer):
             }
             await sync_to_async(self._record_gate_response, thread_sensitive=True)(
                 int(session.get("current_round") or 0),
-                views._json_dumps(payload),
+                views.json_dumps(payload),
             )
             await sync_to_async(self._mark_online, thread_sensitive=True)()
 

@@ -13,6 +13,7 @@ from bson import ObjectId
 from bson.errors import InvalidId
 
 from .db import CHAT_SESSIONS_COLLECTION, PROJECT_SETTINGS_COLLECTION, get_collection
+from .util import coerce_confidence, normalize_labels
 from . import services
 from . import jira_client
 from . import jira_software_service
@@ -23,15 +24,6 @@ from core.tracing import traced_function
 logger = logging.getLogger(__name__)
 
 JIRA_TYPES = ("software", "service_desk", "business")
-
-
-def _coerce_confidence(value):
-    try:
-        out = float(value)
-    except (TypeError, ValueError):
-        return 0.0
-    return max(0.0, min(1.0, out))
-
 
 def _provider_key(type_name):
     """Return the Jira exports subkey for a given Jira type."""
@@ -346,15 +338,15 @@ def normalize_export_items(items, type_name):
 
         if type_name == "software":
             normalized.append(
-                jira_software_service.normalize_item(item, _normalize_labels, _coerce_confidence)
+                jira_software_service.normalize_item(item, normalize_labels, coerce_confidence)
             )
         elif type_name == "service_desk":
             normalized.append(
-                jira_service_desk_service.normalize_item(item, _normalize_labels, _coerce_confidence)
+                jira_service_desk_service.normalize_item(item, normalize_labels, coerce_confidence)
             )
         elif type_name == "business":
             normalized.append(
-                jira_business_service.normalize_item(item, _normalize_labels, _coerce_confidence)
+                jira_business_service.normalize_item(item, normalize_labels, coerce_confidence)
             )
         else:
             raise ValueError(f"Unknown Jira type '{type_name}'.")
@@ -363,19 +355,6 @@ def normalize_export_items(items, type_name):
         normalized = jira_software_service.repair_hierarchy(normalized)
 
     return normalized
-
-
-def _normalize_labels(labels):
-    if not isinstance(labels, list):
-        return []
-    seen = set()
-    out = []
-    for lbl in labels:
-        txt = str(lbl or "").strip()
-        if txt and txt.lower() not in seen:
-            seen.add(txt.lower())
-            out.append(txt)
-    return out
 
 
 # ---------------------------------------------------------------------------

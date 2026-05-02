@@ -11,6 +11,7 @@ from bson import ObjectId
 from bson.errors import InvalidId
 
 from .db import CHAT_SESSIONS_COLLECTION, PROJECT_SETTINGS_COLLECTION, get_collection
+from .util import coerce_confidence, normalize_labels
 from . import services
 from . import trello_client
 from core.tracing import traced_function
@@ -254,32 +255,6 @@ def create_list(session_id, name, board_id):
 
 PRIORITY_VALUES = {"low": "Low", "medium": "Medium", "high": "High", "critical": "Critical"}
 
-
-def _coerce_confidence(value):
-    try:
-        out = float(value)
-    except (TypeError, ValueError):
-        return 0.0
-    return max(0.0, min(1.0, out))
-
-
-def _normalize_labels(labels):
-    if not isinstance(labels, list):
-        return []
-    seen = set()
-    cleaned = []
-    for label in labels:
-        text = str(label or "").strip()
-        if not text:
-            continue
-        key = text.lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        cleaned.append(text)
-    return cleaned
-
-
 def _normalize_custom_fields(custom_fields):
     if not isinstance(custom_fields, list):
         return []
@@ -370,9 +345,9 @@ def normalize_export_items(items):
             "card_description": card_description,
             "checklists": _normalize_checklists(item),
             "custom_fields": _normalize_custom_fields(item.get("custom_fields")),
-            "labels": _normalize_labels(item.get("labels")),
+            "labels": normalize_labels(item.get("labels")),
             "priority": priority,
-            "confidence_score": _coerce_confidence(item.get("confidence_score", 0.0)),
+            "confidence_score": coerce_confidence(item.get("confidence_score", 0.0)),
         })
 
     return normalized
