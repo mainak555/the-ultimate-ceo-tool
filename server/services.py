@@ -18,7 +18,12 @@ from bson.errors import InvalidId
 logger = logging.getLogger(__name__)
 from pymongo.errors import DuplicateKeyError
 
-from .db import get_collection, ensure_indexes, CHAT_SESSIONS_COLLECTION
+from .db import (
+    CHAT_SESSIONS_COLLECTION,
+    PROJECT_SETTINGS_COLLECTION,
+    ensure_indexes,
+    get_collection,
+)
 from . import attachment_service
 from .model_catalog import (
     get_agent_model_names,
@@ -415,7 +420,7 @@ def normalize_project(project):
 def list_projects():
     """Return all project settings, sorted by project_name ascending."""
     ensure_indexes()
-    col = get_collection("project_settings")
+    col = get_collection(PROJECT_SETTINGS_COLLECTION)
     cursor = col.find({}).sort("project_name", 1)
     projects = [normalize_project(p) for p in cursor]
     project_ids = [p["project_id"] for p in projects if p.get("project_id")]
@@ -439,7 +444,7 @@ def get_project(project_id):
         oid = ObjectId(project_id)
     except (InvalidId, TypeError):
         return None
-    col = get_collection("project_settings")
+    col = get_collection(PROJECT_SETTINGS_COLLECTION)
     project = col.find_one({"_id": oid})
     normalized = normalize_project(project)
     if not normalized:
@@ -461,7 +466,7 @@ def get_project_raw(project_id):
         oid = ObjectId(project_id)
     except (InvalidId, TypeError):
         return None
-    col = get_collection("project_settings")
+    col = get_collection(PROJECT_SETTINGS_COLLECTION)
     doc = col.find_one({"_id": oid})
     if doc:
         doc["project_id"] = str(doc.pop("_id"))
@@ -479,7 +484,7 @@ def create_project(data):
     cleaned = validate_project(data)
 
     ensure_indexes()
-    col = get_collection("project_settings")
+    col = get_collection(PROJECT_SETTINGS_COLLECTION)
     doc = cleaned.copy()
     now = _utc_now()
     doc["created_at"] = now
@@ -522,7 +527,7 @@ def update_project(project_id, data):
 
     # Load existing doc to preserve masked secrets
     ensure_indexes()
-    col = get_collection("project_settings")
+    col = get_collection(PROJECT_SETTINGS_COLLECTION)
     existing = col.find_one({"_id": oid})
     if existing is None:
         raise ValueError("Project not found.")
@@ -624,7 +629,7 @@ def delete_project(project_id):
             "Cannot delete project while chat sessions exist. Delete chat sessions first."
         )
 
-    col = get_collection("project_settings")
+    col = get_collection(PROJECT_SETTINGS_COLLECTION)
     result = col.delete_one({"_id": oid})
     if result.deleted_count == 0:
         raise ValueError("Project not found.")
@@ -645,7 +650,7 @@ def clone_project(project_id):
         raise ValueError("Project not found.")
 
     ensure_indexes()
-    col = get_collection("project_settings")
+    col = get_collection(PROJECT_SETTINGS_COLLECTION)
     raw = col.find_one({"_id": oid})
     if raw is None:
         raise ValueError("Project not found.")

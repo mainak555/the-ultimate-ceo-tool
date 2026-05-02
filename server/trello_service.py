@@ -10,7 +10,7 @@ from urllib.parse import quote
 from bson import ObjectId
 from bson.errors import InvalidId
 
-from .db import get_collection, CHAT_SESSIONS_COLLECTION
+from .db import CHAT_SESSIONS_COLLECTION, PROJECT_SETTINGS_COLLECTION, get_collection
 from . import services
 from . import trello_client
 from core.tracing import traced_function
@@ -67,7 +67,7 @@ def store_project_token(project_id, token):
     except (InvalidId, TypeError):
         raise ValueError(f"Invalid project ID '{project_id}'.")
 
-    col = get_collection("project_settings")
+    col = get_collection(PROJECT_SETTINGS_COLLECTION)
     now_dt = datetime.now(timezone.utc)  # BSON Date stored in MongoDB
     now_iso = now_dt.isoformat()          # ISO string returned to caller / JSON
     result = col.update_one(
@@ -89,7 +89,7 @@ def get_project_token(project_id):
     except (InvalidId, TypeError):
         return None
 
-    col = get_collection("project_settings")
+    col = get_collection(PROJECT_SETTINGS_COLLECTION)
     doc = col.find_one({"_id": oid}, {"integrations.trello.token": 1, "integrations.trello.token_generated_at": 1})
     if not doc:
         return None
@@ -124,7 +124,7 @@ def _resolve_project_credentials(project_id):
     except (InvalidId, TypeError):
         raise ValueError("Invalid project ID.")
 
-    col = get_collection("project_settings")
+    col = get_collection(PROJECT_SETTINGS_COLLECTION)
     project = col.find_one({"_id": project_oid})
     if not project:
         raise ValueError("Project not found.")
@@ -149,7 +149,7 @@ def build_project_auth_url(project_id, callback_url):
     except (InvalidId, TypeError):
         raise ValueError("Invalid project ID.")
 
-    col = get_collection("project_settings")
+    col = get_collection(PROJECT_SETTINGS_COLLECTION)
     project = col.find_one({"_id": oid})
     if not project:
         raise ValueError("Project not found.")
@@ -443,8 +443,7 @@ def run_export_extract(session_id, discussion_id):
     if not project_id:
         raise ValueError("Session is not linked to a project.")
 
-    from .db import get_collection as _gc
-    project_col = _gc("project_settings")
+    project_col = get_collection(PROJECT_SETTINGS_COLLECTION)
     try:
         project_oid = ObjectId(project_id)
     except (InvalidId, TypeError):
