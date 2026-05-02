@@ -255,10 +255,11 @@ the gate then defaults to "all configured users are required".
 ## Helpers in `server/services.py`
 
 - `compute_pending_remote_users(project, session_id) -> list[{user_id, name}]`
-- `set_session_awaiting_remote_users(session_id, pending_users)` (mirrors
+- `set_session_awaiting_remote_users(session_id, pending_users, lock_selection=False)` (mirrors
   `set_session_awaiting_oauth`)
+- `resume_from_locked_readiness(session_id)`
 - `get_remote_users_status(project, session_id) -> {users: [{user_id, name,
-  description, online, checked, has_token}]}`
+  description, online, checked, has_token}], readiness_locked}`
 
 ## Invitation links — stable for the Redis TTL
 
@@ -284,10 +285,11 @@ the gate then defaults to "all configured users are required".
 | Method + path | Purpose |
 |---|---|
 | `GET  /chat/sessions/<id>/readiness/status/` | Snapshot consumed by the lobby panel and websocket sync. |
-| `POST /chat/sessions/<id>/readiness/check/` | Form field `user_ids` (repeated). Persists checked-set in Redis. Validates IDs against project config. |
+| `POST /chat/sessions/<id>/readiness/check/` | Form field `user_ids` (repeated). Persists checked-set in Redis. Validates IDs against project config. Returns `409` while selection is locked. |
+| `POST /chat/sessions/<id>/readiness/resume/` | Resume from locked readiness to `awaiting_input` once required users are online again. |
 | `POST /chat/sessions/<id>/readiness/<user_id>/token/` | Mints (or rotates) a token. Returns `{join_url}`. |
 
-All three are admin-secret gated (`X-App-Secret-Key`). Tokens are URL-safe
+All four are admin-secret gated (`X-App-Secret-Key`). Tokens are URL-safe
 random strings (`secrets.token_urlsafe(32)`) — never derived from `user_id`.
 
 ## Pre-run gate in `chat_session_run`
@@ -295,13 +297,23 @@ random strings (`secrets.token_urlsafe(32)`) — never derived from `user_id`.
 ```python
 pending_remote = compute_pending_remote_users(project, session_id)
 if pending_remote:
-    set_session_awaiting_remote_users(session_id, pending_remote)
-    return JsonResponse({"status": "awaiting_remote_users", "users": pending_remote}, status=409)
+  set_session_awaiting_remote_users(session_id, pending_remote, lock_selection=False)
+  return JsonResponse({"status": "awaiting_remote_users", "users": pending_remote, "lock_selection": False}, status=409)
 ```
 
 This block lives **before** the existing MCP OAuth check and **before** lease
 acquisition. `chat_session_stop` flips `awaiting_remote_users` → `idle` so
 the Cancel button on the lobby panel resets cleanly without an SSE stream.
+
+Locked readiness mode contract:
+
+- If required remotes disconnect after the run has reached Human Gate, session
+  state may be parked in `awaiting_remote_users` with
+  `pending_remote_lock_selection=true` and 409 payload
+  `{status:"awaiting_remote_users", users:[...], lock_selection:true}`.
+- In this mode, checkbox writes via `readiness/check` must be rejected (409).
+- `readiness/resume` transitions `awaiting_remote_users(lock)` →
+  `awaiting_input` once required remotes are online, preserving gate round.
 
 ## Frontend (`server/static/server/js/home.js`)
 
@@ -316,6 +328,8 @@ the Cancel button on the lobby panel resets cleanly without an SSE stream.
 - Leader readiness websocket (`/ws/chat/<session_id>/leader/`) pushes `state`
   updates; auto-replays `_doStartRun` once every checked user is online (or
   none are checked).
+- For `lock_selection=true`, checkbox controls are disabled and readiness
+  completion calls `readiness/resume` instead of replaying `run` directly.
 - Home gate mode refresh is websocket-driven: while status is
   `awaiting_input`, leader `state` payloads include `history_html`; apply via
   `home.js::_applyGateHistoryFromWs()` and do not run a `/chat/sessions/<id>/`

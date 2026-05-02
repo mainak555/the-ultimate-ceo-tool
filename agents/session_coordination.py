@@ -673,6 +673,16 @@ def set_leader_online(session_id: str) -> None:
         pass
 
 
+def clear_leader_online(session_id: str) -> None:
+    """Immediately mark the leader UI as offline (e.g. on WS disconnect)."""
+    if not session_id:
+        return
+    try:
+        _get_client().delete(_leader_online_key(session_id))
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def is_leader_online(session_id: str) -> bool:
     """Return whether leader presence is currently online for a session."""
     if not session_id:

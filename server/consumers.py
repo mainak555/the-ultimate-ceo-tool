@@ -79,6 +79,8 @@ class RemoteUserConsumer(AsyncJsonWebsocketConsumer):
     async def disconnect(self, code):
         if getattr(self, "session_id", ""):
             await self.channel_layer.group_discard(_group_name(self.session_id), self.channel_name)
+            await sync_to_async(self._clear_online, thread_sensitive=True)()
+            await self.channel_layer.group_send(_group_name(self.session_id), {"type": "remote.state"})
             logger.info(
                 "agents.remote_user.websocket_disconnected",
                 extra={
@@ -236,11 +238,17 @@ class RemoteUserConsumer(AsyncJsonWebsocketConsumer):
                 self.user_id,
             )
             leader_online = await sync_to_async(self._is_leader_online, thread_sensitive=True)()
+            leader_name = str((project.get("human_gate") or {}).get("name") or "Leader").strip() or "Leader"
             participants = [
                 {
-                    "name": "Leader",
+                    "name": leader_name,
+                    "role": "leader",
                     "online": bool(leader_online),
-                    "active": bool(session.get("status") == "awaiting_input"),
+                    "active": bool(turn_state.get("leader_required")),
+                    "is_turn_active": bool(turn_state.get("leader_required")),
+                    "is_required_participant": True,
+                    "is_non_participant": False,
+                    "is_disconnected": not bool(leader_online),
                 }
             ]
             for row in turn_state.get("participants") or []:
@@ -249,8 +257,13 @@ class RemoteUserConsumer(AsyncJsonWebsocketConsumer):
                 participants.append(
                     {
                         "name": row.get("name") or row.get("user_id") or "User",
+                        "role": row.get("role") or "remote",
                         "online": bool(row.get("online")),
                         "active": bool(row.get("active")),
+                        "is_turn_active": bool(row.get("active")),
+                        "is_required_participant": bool(row.get("is_required_participant")),
+                        "is_non_participant": bool(row.get("is_non_participant")),
+                        "is_disconnected": bool(row.get("is_disconnected")),
                     }
                 )
 
@@ -280,6 +293,11 @@ class RemoteUserConsumer(AsyncJsonWebsocketConsumer):
         from agents.session_coordination import is_leader_online
 
         return is_leader_online(self.session_id)
+
+    def _clear_online(self) -> None:
+        from agents.session_coordination import clear_remote_user_online
+
+        clear_remote_user_online(self.session_id, self.user_id)
 
     def _record_gate_response(self, round_no: int, payload_json: str) -> None:
         from agents.session_coordination import record_remote_gate_response
@@ -325,6 +343,8 @@ class LeaderReadinessConsumer(AsyncJsonWebsocketConsumer):
     async def disconnect(self, code):
         if getattr(self, "session_id", ""):
             await self.channel_layer.group_discard(_group_name(self.session_id), self.channel_name)
+            await sync_to_async(self._clear_leader_online, thread_sensitive=True)()
+            await self.channel_layer.group_send(_group_name(self.session_id), {"type": "remote.state"})
 
     async def receive_json(self, content, **kwargs):
         msg_type = str((content or {}).get("type") or "").strip().lower()
@@ -362,6 +382,7 @@ class LeaderReadinessConsumer(AsyncJsonWebsocketConsumer):
                 "type": "state",
                 "status": "ok",
                 "users": (users or {}).get("users") or [],
+                "readiness_locked": bool((users or {}).get("readiness_locked")),
                 "session_status": session.get("status", "idle"),
             }
 
@@ -389,3 +410,8 @@ class LeaderReadinessConsumer(AsyncJsonWebsocketConsumer):
         from agents.session_coordination import set_leader_online
 
         set_leader_online(self.session_id)
+
+    def _clear_leader_online(self) -> None:
+        from agents.session_coordination import clear_leader_online
+
+        clear_leader_online(self.session_id)

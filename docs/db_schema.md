@@ -204,6 +204,7 @@ Cross-references: [docs/API.md](API.md) (form fields + HTTP schema), [AGENTS.md]
   "pending_remote_users": [                         // present only when status=awaiting_remote_users
     { "user_id": "slug", "name": "string" }
   ],
+  "pending_remote_lock_selection": true,            // present only when status=awaiting_remote_users; true means readiness checkbox set is immutable for this session
   "agent_state": {
     "source": "string",
     "version": "string",
@@ -212,6 +213,10 @@ Cross-references: [docs/API.md](API.md) (form fields + HTTP schema), [AGENTS.md]
   }
 }
 ```
+
+`pending_remote_lock_selection` lifecycle:
+- Set by readiness transitions when the session is parked in locked readiness mode.
+- Unset when the session returns to `running`, `awaiting_input` (via readiness resume), or `idle`.
 
 ## Collection: `chat_attachments`
 

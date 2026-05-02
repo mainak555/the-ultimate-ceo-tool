@@ -790,6 +790,25 @@ document.addEventListener("DOMContentLoaded", function () {
   var _leaderReadinessReconnectTimer = null;
   var _leaderReadinessHeartbeatTimer = null;
 
+  function _presenceChipClass(row) {
+    var cls = "remote-presence-chip";
+    var role = (row && row.role) || "remote";
+    cls += role === "leader" ? " remote-presence-chip--leader" : " remote-presence-chip--remote";
+    if (row && row.is_non_participant) {
+      return cls + " remote-presence-chip--non-participant";
+    }
+    if (row && row.is_disconnected) {
+      return cls + " remote-presence-chip--disconnected";
+    }
+    if (row && (row.is_turn_active || row.active)) {
+      return cls + " remote-presence-chip--turn";
+    }
+    if (row && row.online) {
+      return cls + " remote-presence-chip--online";
+    }
+    return cls + " remote-presence-chip--offline";
+  }
+
   function _renderPresenceStrip(rows) {
     if (!chatPresenceStrip) return;
     var list = rows || [];
@@ -799,14 +818,7 @@ document.addEventListener("DOMContentLoaded", function () {
       return;
     }
     var html = list.map(function (u) {
-      var cls = "remote-presence-chip";
-      if (u.active || u.checked) {
-        cls += " remote-presence-chip--active";
-      } else if (u.online) {
-        cls += " remote-presence-chip--online";
-      } else {
-        cls += " remote-presence-chip--offline";
-      }
+      var cls = _presenceChipClass(u || {});
       return '<span class="' + cls + '">' + escapeHtml(u.name || u.user_id || "User") + '</span>';
     }).join("");
     chatPresenceStrip.hidden = false;
@@ -843,8 +855,9 @@ document.addEventListener("DOMContentLoaded", function () {
     _renderPresenceStrip(rows);
     var panel = chatMessages ? chatMessages.querySelector(".chat-readiness-panel") : null;
     if (!panel) return;
+    panel._lockSelection = !!(data && data.readiness_locked);
     _renderReadinessRows(panel, rows);
-    var checked = rows.filter(function (u) { return u.checked; });
+    var checked = rows.filter(function (u) { return !!u.checked && !u.is_non_participant; });
     var allOnline = checked.length > 0 && checked.every(function (u) { return u.online; });
     if ((allOnline || checked.length === 0) && typeof panel._onAllRemoteUsersReady === "function") {
       panel._onAllRemoteUsersReady();
@@ -919,7 +932,7 @@ document.addEventListener("DOMContentLoaded", function () {
     _ensureLeaderReadinessWs();
   }
 
-  function _showReadinessPanel(sessionId, secretKey, replayTask, replayAttachmentIds, replayContextTaskSuffix, replayContextAttachmentIds) {
+  function _showReadinessPanel(sessionId, secretKey, replayTask, replayAttachmentIds, replayContextTaskSuffix, replayContextAttachmentIds, lockSelection) {
     setRunningState(false);
     _teardownReadinessPanel();
 
@@ -951,6 +964,7 @@ document.addEventListener("DOMContentLoaded", function () {
 
     var panel = chatMessages.querySelector(".chat-readiness-panel");
     if (!panel) return;
+    panel._lockSelection = !!lockSelection;
     panel._replayTask = replayTask || "";
     panel._replayAttachmentIds = (replayAttachmentIds || []).slice();
     panel._replayContextTaskSuffix = replayContextTaskSuffix || "";
@@ -963,18 +977,36 @@ document.addEventListener("DOMContentLoaded", function () {
   function _renderReadinessRows(panel, users) {
     var container = panel.querySelector(".chat-readiness-panel__rows");
     if (!container) return;
+    var lockSelection = !!panel._lockSelection;
     var html = (users || []).map(function (u) {
       var safeId = escapeHtml(u.user_id);
       var safeName = escapeHtml(u.name);
       var checked = u.checked ? " checked" : "";
-      var online = !!u.online;
-      var statusCls = online ? "chat-readiness-panel__status--online" : "chat-readiness-panel__status--offline";
-      var statusText = online ? "Online" : "Offline";
-      var rowCls = online ? " chat-readiness-panel__row--online" : "";
+      var disabled = lockSelection ? " disabled" : "";
+      var statusCls = "chat-readiness-panel__status--offline";
+      var statusText = "Offline";
+      var rowCls = "";
+      if (u.is_non_participant) {
+        statusCls = "chat-readiness-panel__status--non-participant";
+        statusText = "Not Participating";
+        rowCls = " chat-readiness-panel__row--non-participant";
+      } else if (u.is_disconnected) {
+        statusCls = "chat-readiness-panel__status--disconnected";
+        statusText = "Disconnected";
+        rowCls = " chat-readiness-panel__row--disconnected";
+      } else if (u.is_turn_active) {
+        statusCls = "chat-readiness-panel__status--turn";
+        statusText = "Turn";
+        rowCls = " chat-readiness-panel__row--turn";
+      } else if (u.online) {
+        statusCls = "chat-readiness-panel__status--online";
+        statusText = "Online";
+        rowCls = " chat-readiness-panel__row--online";
+      }
       var joinUrl = u.join_url || "";
       var btnLabel = joinUrl ? "Copy Invitation Link" : "Generate Invitation Link";
       return '<div class="chat-readiness-panel__row' + rowCls + '" data-user-id="' + safeId + '" data-join-url="' + escapeHtml(joinUrl) + '">'
-        + '<input type="checkbox" class="chat-readiness-check"' + checked + ' data-user-id="' + safeId + '" />'
+        + '<input type="checkbox" class="chat-readiness-check"' + checked + disabled + ' data-user-id="' + safeId + '" />'
         + '<span class="chat-readiness-panel__name">' + safeName + '</span>'
         + '<button type="button" class="btn btn--secondary chat-readiness-copy-btn" data-user-id="' + safeId + '">' + btnLabel + '</button>'
         + '<span class="chat-readiness-panel__status ' + statusCls + '">' + statusText + '</span>'
@@ -1017,6 +1049,31 @@ document.addEventListener("DOMContentLoaded", function () {
     var checkInFlight = null;
 
     function _onAllRemoteUsersReady() {
+      if (panel._lockSelection) {
+        fetch("/chat/sessions/" + sessionId + "/readiness/resume/", {
+          method: "POST",
+          headers: {
+            "X-App-Secret-Key": secretKey,
+            "X-CSRFToken": csrfToken,
+          },
+        }).then(function (r) {
+          return r.json().then(function (d) {
+            if (!r.ok) throw new Error(d.error || "Unable to resume gate");
+            return d;
+          });
+        }).then(function (d) {
+          _teardownReadinessPanel();
+          panel.remove();
+          setRunningState(false);
+          if (d && d.gate) {
+            appendGateBadge(d.gate);
+            setGateMode(d.gate);
+          }
+        }).catch(function () {
+          _requestLeaderReadinessSync();
+        });
+        return;
+      }
       _teardownReadinessPanel();
       var task = panel._replayTask || "";
       var ids = panel._replayAttachmentIds || [];
@@ -1031,6 +1088,7 @@ document.addEventListener("DOMContentLoaded", function () {
 
     // Checkbox change -> POST /readiness/check/ with the full current set.
     panel.addEventListener("change", function (e) {
+      if (panel._lockSelection) return;
       var box = e.target && e.target.classList && e.target.classList.contains("chat-readiness-check") ? e.target : null;
       if (!box) return;
       var ids = Array.prototype.slice.call(panel.querySelectorAll(".chat-readiness-check:checked"))
@@ -1121,8 +1179,9 @@ document.addEventListener("DOMContentLoaded", function () {
       || (activeSessionIdInput ? activeSessionIdInput.value.trim() : "");
     var secretKey = getSecretKey();
     if (!sessionId || !secretKey) return;
+    var lockSelection = badge.dataset.readinessLocked === "1";
     badge.remove();
-    _showReadinessPanel(sessionId, secretKey, "", [], "", []);
+    _showReadinessPanel(sessionId, secretKey, "", [], "", [], lockSelection);
   }
 
   // ------------------------------------------------------------------
@@ -1365,7 +1424,8 @@ document.addEventListener("DOMContentLoaded", function () {
               task,
               attachmentIds,
               contextTaskSuffix,
-              contextAttachmentIds
+              contextAttachmentIds,
+              !!d.lock_selection
             );
             return;
           }
@@ -1529,6 +1589,12 @@ document.addEventListener("DOMContentLoaded", function () {
       var secretKey = getSecretKey();
       if (sessionId && secretKey) {
         _showOAuthGatePanel(sessionId, secretKey, data.servers || [], "", []);
+      }
+    } else if (eventName === "awaiting_remote_users") {
+      var readySessionId = activeSessionIdInput ? activeSessionIdInput.value.trim() : "";
+      var readySecret = getSecretKey();
+      if (readySessionId && readySecret) {
+        _showReadinessPanel(readySessionId, readySecret, "", [], "", [], !!(data && data.lock_selection));
       }
     }
   }

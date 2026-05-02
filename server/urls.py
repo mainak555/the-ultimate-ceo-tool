@@ -39,6 +39,7 @@ urlpatterns = [
     path("chat/sessions/<str:session_id>/stop/", views.chat_session_stop, name="chat_session_stop"),
     path("chat/sessions/<str:session_id>/readiness/status/", views.chat_session_readiness_status, name="chat_session_readiness_status"),
     path("chat/sessions/<str:session_id>/readiness/check/", views.chat_session_readiness_check, name="chat_session_readiness_check"),
+    path("chat/sessions/<str:session_id>/readiness/resume/", views.chat_session_readiness_resume, name="chat_session_readiness_resume"),
     path("chat/sessions/<str:session_id>/readiness/<str:user_id>/token/", views.chat_session_readiness_token, name="chat_session_readiness_token"),
     path("chat/sessions/<str:session_id>/remote/heartbeat/", views.chat_session_remote_heartbeat, name="chat_session_remote_heartbeat"),
     path("chat/sessions/<str:session_id>/remote/attachments/", views.chat_session_remote_upload_attachments, name="chat_session_remote_upload_attachments"),

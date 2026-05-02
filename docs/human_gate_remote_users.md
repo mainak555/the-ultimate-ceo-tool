@@ -120,10 +120,26 @@ Behavior:
 3. **Status pill** flips Offline → Online when the remote user opens the
   invitation URL in their browser; flips back to Offline within ~60 s of
    the browser tab closing or the network dropping.
+  The readiness panel uses border-only success/error state styling (no
+  filled Online/Disconnected row backgrounds).
 4. The run **auto-starts** as soon as every checked row is online. No extra
    click is needed.
 5. **Cancel run** abandons the lobby, returns the session to `idle`, and
    removes the panel.
+
+### Locked readiness mode (post-start disconnect)
+
+If a run already reached Human Gate and then one or more **required** remote
+participants disconnect, the session is parked back in `awaiting_remote_users`
+with selection **locked** for that chat session:
+
+- Checkboxes remain visible but disabled.
+- Copy / Generate invitation link actions remain available so the leader can
+  quickly re-share links.
+- `readiness/check` mutations are rejected with HTTP 409.
+- Once all required users are online, the panel calls readiness-resume,
+  returning to the existing gate round (`awaiting_input`) without advancing
+  `current_round`.
 
 ### Reload safety
 
@@ -240,9 +256,10 @@ recovery and second-tab views show the same gate state.
 
 | Method + path | Purpose |
 |---|---|
-| `POST /chat/sessions/<id>/run/` | Returns HTTP 409 `{status: "awaiting_remote_users", users: [...]}` when the readiness gate is unsatisfied. |
-| `GET  /chat/sessions/<id>/readiness/status/` | Snapshot endpoint used by the lobby panel and websocket sync. Returns per-row `{user_id, name, description, online, checked, has_token, join_url}`. `join_url` is populated when a token is already alive. |
-| `POST /chat/sessions/<id>/readiness/check/` | Form field `user_ids` repeated; persists the leader's checkbox set. |
+| `POST /chat/sessions/<id>/run/` | Returns HTTP 409 `{status: "awaiting_remote_users", users: [...], lock_selection: bool}` when the readiness gate is unsatisfied. |
+| `GET  /chat/sessions/<id>/readiness/status/` | Snapshot endpoint used by the lobby panel and websocket sync. Returns per-row `{user_id, name, description, online, checked, has_token, join_url}` plus top-level `readiness_locked`. `join_url` is populated when a token is already alive. |
+| `POST /chat/sessions/<id>/readiness/check/` | Form field `user_ids` repeated; persists the leader's checkbox set. Returns 409 when readiness selection is locked. |
+| `POST /chat/sessions/<id>/readiness/resume/` | Resume from locked readiness back to Human Gate (`awaiting_input`) once required remotes are online. |
 | `POST /chat/sessions/<id>/readiness/<user_id>/token/` | **Idempotent** — returns existing or freshly-minted invitation URL. |
 | `POST /chat/sessions/<id>/stop/` | Resets `awaiting_remote_users` → `idle` and tears down the lobby. |
 
@@ -302,6 +319,7 @@ These are mandatory; violations are caught by `.agents/skills/observability_logg
 |---|---|---|
 | MongoDB `project_settings.human_gate.remote_users` | Configured roster (`name`, `description`, derived `id`) | Permanent (until the project is edited). |
 | MongoDB `chat_sessions.status` + `pending_remote_users` | Current gate state for resume | Until session is deleted or run completes. |
+| MongoDB `chat_sessions.pending_remote_lock_selection` | Whether readiness checkbox selection is locked for this session | Present only while `status=awaiting_remote_users`. |
 | MongoDB `chat_sessions.remote_users` | Frozen selected remote users for this session run (used by readiness and quorum paths) | Until session is deleted. |
 | Redis `{ns}:remote_user:{session_id}:token:*` and `{ns}:remote_user:{session_id}:token_by_user:*` | Active invitation tokens (forward + reverse) | `REMOTE_USER_TOKEN_TTL_SECONDS` (12 h). |
 | Redis `{ns}:remote_user:{session_id}:online:*` | Per-user presence flag | `REMOTE_USER_PRESENCE_TTL_SECONDS` (60 s). |
@@ -318,8 +336,8 @@ No token, URL, or presence flag is ever written to MongoDB or to disk.
 | File | Responsibility |
 |---|---|
 | [server/schemas.py](../server/schemas.py) | `validate_human_gate()` — slug derivation, duplicate rejection, quorum enum, single-assistant guard. |
-| [server/services.py](../server/services.py) | `normalize_project()` (read-side migration), `compute_pending_remote_users()`, `set_session_awaiting_remote_users()`, `get_remote_users_status(project, session_id, base_url)`. |
-| [server/views.py](../server/views.py) | `_parse_remote_users()` form parser, `chat_session_run` 409 branch, `chat_session_readiness_status / _check / _token` endpoints. |
+| [server/services.py](../server/services.py) | `normalize_project()` (read-side migration), `compute_pending_remote_users()`, `set_session_awaiting_remote_users(..., lock_selection=bool)`, `resume_from_locked_readiness()`, `get_remote_users_status(project, session_id, base_url)`. |
+| [server/views.py](../server/views.py) | `_parse_remote_users()` form parser, `chat_session_run` 409 branch, `chat_session_readiness_status / _check / _resume / _token` endpoints. |
 | [agents/session_coordination.py](../agents/session_coordination.py) | All Redis key construction + helpers: `mint_remote_user_token`, `get_or_mint_remote_user_token`, `lookup_remote_user_token`, `set/clear/list_remote_user_online`, `set/get_checked_remote_users`, `purge_remote_users_state`. |
 | [config/settings.py](../config/settings.py) | The four `REMOTE_USER_*` env-var defaults. |
 
@@ -375,7 +393,7 @@ collected and consumed by the next resume flow:
   `attachment_ids`) for `(session_id, gate_round)`.
 3. `POST /chat/sessions/<id>/respond/` with `action=continue` first enforces
   quorum server-side. If responders are still pending, it returns HTTP 409
-  `{status:"awaiting_remote_users", users:[...]}` and does not resume.
+  `{status:"awaiting_remote_users", users:[...], lock_selection:true}` and does not resume.
 4. When quorum is satisfied, queued remote payloads are popped and merged into
   the next run task as a `Remote participant responses:` context block; queued
   remote attachment IDs are also merged into the resume attachment set.
@@ -395,5 +413,6 @@ input prompts.
 3. ☐ No log line, span attribute, or template output contains a token, join URL, or any derived value.
 4. ☐ Single-assistant projects still reject `remote_users` configuration.
 5. ☐ New session-status values are added to `valid_states` AND `try_set_session_running()` `$in` AND `chat_session_history.html` reload-recovery scan.
-6. ☐ Session delete still calls `purge_remote_users_state(session_id)`.
-7. ☐ Datetime fields (if any added) follow [`.agents/skills/datetime_storage/SKILL.md`](../.agents/skills/datetime_storage/SKILL.md).
+6. ☐ If adding or changing locked readiness behavior, keep `pending_remote_lock_selection` lifecycle consistent (`set_session_awaiting_remote_users(..., lock_selection=...)`, `resume_from_locked_readiness()`, and run-state `$unset`).
+7. ☐ Session delete still calls `purge_remote_users_state(session_id)`.
+8. ☐ Datetime fields (if any added) follow [`.agents/skills/datetime_storage/SKILL.md`](../.agents/skills/datetime_storage/SKILL.md).

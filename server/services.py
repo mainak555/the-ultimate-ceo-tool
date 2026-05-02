@@ -772,6 +772,7 @@ def normalize_chat_session(doc):
     if not isinstance(raw_remote_users, list):
         raw_remote_users = []
     remote_users = [str(uid).strip() for uid in raw_remote_users if str(uid).strip()]
+    pending_remote_lock_selection = bool(doc.get("pending_remote_lock_selection"))
     return {
         "session_id": str(doc["_id"]),
         "project_id": doc.get("project_id", ""),
@@ -784,6 +785,7 @@ def normalize_chat_session(doc):
         "agent_state_meta": state_meta,
         "pending_oauth_servers": [str(s) for s in pending_oauth if isinstance(s, str)],
         "pending_remote_users": cleaned_remote,
+        "pending_remote_lock_selection": pending_remote_lock_selection,
         "remote_users": remote_users,
         "remote_users_frozen": remote_users_frozen,
     }
@@ -879,7 +881,11 @@ def try_set_session_running(session_id):
         },
         {
             "$set": {"status": "running"},
-            "$unset": {"pending_oauth_servers": "", "pending_remote_users": ""},
+            "$unset": {
+                "pending_oauth_servers": "",
+                "pending_remote_users": "",
+                "pending_remote_lock_selection": "",
+            },
         },
     )
     return result.modified_count == 1
@@ -947,7 +953,7 @@ def compute_pending_oauth_servers(raw_project, session_id):
 
 
 @traced_function("service.chat.set_awaiting_remote_users")
-def set_session_awaiting_remote_users(session_id, pending_users):
+def set_session_awaiting_remote_users(session_id, pending_users, *, lock_selection=False):
     """Mark a chat session as awaiting remote-user readiness.
 
     ``pending_users`` is a list of ``{user_id, name}`` dicts (the configured
@@ -968,7 +974,37 @@ def set_session_awaiting_remote_users(session_id, pending_users):
     col = get_collection(CHAT_SESSIONS_COLLECTION)
     col.update_one(
         {"_id": oid},
-        {"$set": {"status": "awaiting_remote_users", "pending_remote_users": cleaned}},
+        {
+            "$set": {
+                "status": "awaiting_remote_users",
+                "pending_remote_users": cleaned,
+                "pending_remote_lock_selection": bool(lock_selection),
+            }
+        },
+    )
+
+
+@traced_function("service.chat.resume_from_locked_readiness")
+def resume_from_locked_readiness(session_id):
+    """Flip awaiting_remote_users -> awaiting_input without incrementing round.
+
+    Used when post-run disconnect recovery succeeds and the leader must return
+    to the existing gate round with participant selection still frozen.
+    """
+    try:
+        oid = ObjectId(session_id)
+    except (InvalidId, TypeError):
+        return
+    col = get_collection(CHAT_SESSIONS_COLLECTION)
+    col.update_one(
+        {"_id": oid},
+        {
+            "$set": {"status": "awaiting_input"},
+            "$unset": {
+                "pending_remote_users": "",
+                "pending_remote_lock_selection": "",
+            },
+        },
     )
 
 
@@ -1251,6 +1287,7 @@ def compute_remote_turn_state(project, session, user_id):
       - pending_user_ids: list[str]
       - required_user_ids: list[str]
       - responded_user_ids: list[str]
+            - leader_required: bool
       - quorum: str
       - round: int
       - participants: list[dict] with online/active flags
@@ -1261,6 +1298,7 @@ def compute_remote_turn_state(project, session, user_id):
             "pending_user_ids": [],
             "required_user_ids": [],
             "responded_user_ids": [],
+            "leader_required": False,
             "quorum": "yes",
             "round": 0,
             "participants": [],
@@ -1277,11 +1315,13 @@ def compute_remote_turn_state(project, session, user_id):
     required_user_ids = pending_state["required_user_ids"]
     responded_user_ids = pending_state["responded_user_ids"]
     pending_user_ids = pending_state["pending_user_ids"]
+    leader_required = bool(pending_state["leader_required"])
 
     from agents.session_coordination import list_online_remote_users
 
+    is_awaiting_input = session.get("status") == "awaiting_input"
     can_send = (
-        session.get("status") == "awaiting_input"
+        is_awaiting_input
         and str(user_id or "") in set(pending_user_ids)
     )
 
@@ -1294,14 +1334,23 @@ def compute_remote_turn_state(project, session, user_id):
         if uid and name:
             configured_rows.append({"user_id": uid, "name": name})
     online_set = set(list_online_remote_users(session.get("session_id", ""), [r["user_id"] for r in configured_rows]))
+    required_set = set(required_user_ids)
+    pending_set = set(pending_user_ids)
     participants = []
     for row in configured_rows:
         uid = row["user_id"]
+        is_required = uid in required_set
+        is_online = uid in online_set
+        is_turn_active = is_awaiting_input and uid in pending_set
         participants.append({
             "user_id": uid,
             "name": row["name"],
-            "online": uid in online_set,
-            "active": uid in set(pending_user_ids),
+            "online": is_online,
+            "active": is_turn_active,
+            "is_required_participant": is_required,
+            "is_non_participant": not is_required,
+            "is_disconnected": is_required and not is_online,
+            "role": "remote",
         })
 
     return {
@@ -1309,6 +1358,7 @@ def compute_remote_turn_state(project, session, user_id):
         "pending_user_ids": pending_user_ids,
         "required_user_ids": required_user_ids,
         "responded_user_ids": responded_user_ids,
+        "leader_required": bool(is_awaiting_input and leader_required),
         "quorum": quorum,
         "round": round_no,
         "participants": participants,
@@ -1399,6 +1449,14 @@ def get_remote_users_status(project, session_id, base_url=""):
     )
 
     session = get_chat_session(session_id)
+    pending_state = {
+        "pending_user_ids": [],
+        "leader_required": False,
+    }
+    if isinstance(session, dict) and session.get("status") == "awaiting_input":
+        pending_state = compute_gate_pending_state(project, session, leader_has_response=False)
+    pending_turn_set = set(pending_state.get("pending_user_ids") or [])
+
     frozen = (session or {}).get("remote_users")
     if (session or {}).get("remote_users_frozen") and isinstance(frozen, list):
         checked_set = {str(uid).strip() for uid in frozen if str(uid).strip()}
@@ -1413,9 +1471,16 @@ def get_remote_users_status(project, session_id, base_url=""):
 
     for row in rows:
         uid = row["user_id"]
+        is_checked = uid in checked_set
+        is_online = uid in online_set
         row["checked"] = uid in checked_set
-        row["online"] = uid in online_set
+        row["online"] = is_online
         row["has_token"] = uid in token_set
+        row["is_required_participant"] = is_checked
+        row["is_non_participant"] = not is_checked
+        row["is_turn_active"] = uid in pending_turn_set
+        row["is_disconnected"] = is_checked and not is_online
+        row["role"] = "remote"
         if row["has_token"] and base_url:
             tok = get_remote_user_token_for_user(session_id, uid)
             row["join_url"] = (
@@ -1424,7 +1489,11 @@ def get_remote_users_status(project, session_id, base_url=""):
             )
         else:
             row["join_url"] = ""
-    return {"users": rows}
+    return {
+        "users": rows,
+        "leader_turn_active": bool(pending_state.get("leader_required")),
+        "readiness_locked": bool((session or {}).get("pending_remote_lock_selection")),
+    }
 
 
 @traced_function("service.chat.append_messages")

@@ -111,6 +111,11 @@ Runtime architecture note:
 	`409 {status:"awaiting_remote_users"}`.
 - The readiness lobby now uses push updates through the leader websocket
 	channel; the run auto-starts once every checked remote user is online.
+- If required remotes disconnect after a run already reached Human Gate,
+	the session can return to `awaiting_remote_users` in **locked selection**
+	mode (`lock_selection=true`): checkboxes are disabled, copy-link actions
+	remain available, and `POST /chat/sessions/<id>/readiness/resume/` returns
+	to `awaiting_input` once required users are online again.
 - Home gate-mode history refresh is also websocket-driven through the same
 	leader channel (`WS /ws/chat/<session_id>/leader/`): while status is
 	`awaiting_input`, leader state messages include `history_html` snapshots,

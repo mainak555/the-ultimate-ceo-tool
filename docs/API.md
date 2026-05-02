@@ -23,8 +23,9 @@ All routes are under the `server` app namespace.
 | `POST` | `/chat/sessions/<session_id>/attachments/` | `chat_session_upload_attachments` | Upload chat attachments for a session (multipart) |
 | `GET` | `/chat/sessions/<session_id>/attachments/<attachment_id>/content/` | `chat_session_attachment_content` | Inline/download attachment content (used for thumbnails) |
 | `POST` | `/chat/sessions/<session_id>/stop/` | `chat_session_stop` | Stop an in-progress run |
-| `GET` | `/chat/sessions/<session_id>/readiness/status/` | `chat_session_readiness_status` | Readiness snapshot for configured remote users (online/checked/token status) |
+| `GET` | `/chat/sessions/<session_id>/readiness/status/` | `chat_session_readiness_status` | Readiness snapshot for configured remote users (online/checked/token status) plus `readiness_locked` flag |
 | `POST` | `/chat/sessions/<session_id>/readiness/check/` | `chat_session_readiness_check` | Persist the leader-selected required remote users (`user_ids` repeated form fields) |
+| `POST` | `/chat/sessions/<session_id>/readiness/resume/` | `chat_session_readiness_resume` | Resume from locked readiness gate back to Human Gate (`awaiting_input`) once required remotes are online |
 | `POST` | `/chat/sessions/<session_id>/readiness/<user_id>/token/` | `chat_session_readiness_token` | Mint or reuse invitation token and return a join URL for one remote user |
 | `GET` | `/chat/<session_id>/remote-user/<token>/` | `remote_user_page` | Render remote participant page for invitation token |
 | `POST` | `/chat/sessions/<session_id>/remote/heartbeat/` | `chat_session_remote_heartbeat` | Refresh remote participant online presence TTL |
@@ -221,6 +222,7 @@ Model runtime notes:
   "pending_remote_users": [
     {"user_id": "partner_ops", "name": "Partner Ops"}
   ],
+  "pending_remote_lock_selection": true,
   "current_round": 0,
   "agent_state": {
     "source": "autogen_team_state",
@@ -234,6 +236,7 @@ Model runtime notes:
 `saved_at` is stored in MongoDB as a BSON Date and normalized to an ISO string in API/UI read paths.
 
 `pending_remote_users` is present only while `status` is `awaiting_remote_users`.
+`pending_remote_lock_selection` is present only while `status` is `awaiting_remote_users`.
 
 Restart endpoint contract:
 
@@ -306,9 +309,22 @@ Active run coordination contract:
 Pre-run gate order (when remote users are configured):
 - `POST /chat/sessions/<session_id>/run/` first checks remote-user readiness.
 - If required users are not online, returns `409` with
-  `{ "status": "awaiting_remote_users", "users": [{"user_id", "name"}, ...] }`.
+  `{ "status": "awaiting_remote_users", "users": [{"user_id", "name"}, ...], "lock_selection": false }`.
 - Only after readiness clears does run-start evaluate MCP OAuth requirements
   (`status = "awaiting_oauth"` when OAuth is pending).
+
+Locked readiness contract (post-run disconnect recovery):
+- When required remotes disconnect after a run has already entered Human Gate,
+  the server may park the session in `awaiting_remote_users` with
+  `pending_remote_lock_selection=true` and return `lock_selection=true`.
+- In this mode, `POST /chat/sessions/<session_id>/readiness/check/` returns `409`
+  (checkbox selection is immutable for that chat session).
+- `POST /chat/sessions/<session_id>/readiness/resume/`:
+  - returns `409 {status:"awaiting_remote_users", users:[...], lock_selection:true}`
+    while required remotes are still offline;
+  - returns `200 {status:"ok", gate:{round,max_rounds,human_name,chat_mode}}`
+    once required remotes are online, and transitions session status back to
+    `awaiting_input` without incrementing round.
 
 Run behavior by mode:
 - Multi-assistant gated runs pause after each full round and may auto-complete when `current_round` reaches `team.max_iterations`.

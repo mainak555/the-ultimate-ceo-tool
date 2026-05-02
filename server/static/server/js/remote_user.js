@@ -35,6 +35,25 @@
     var reconnectDelayMs = 1000;
     var wsPendingSubmit = null;
 
+    function presenceChipClass(row) {
+      var cls = "remote-presence-chip";
+      var role = (row && row.role) || "remote";
+      cls += role === "leader" ? " remote-presence-chip--leader" : " remote-presence-chip--remote";
+      if (row && row.is_non_participant) {
+        return cls + " remote-presence-chip--non-participant";
+      }
+      if (row && row.is_disconnected) {
+        return cls + " remote-presence-chip--disconnected";
+      }
+      if (row && (row.is_turn_active || row.active)) {
+        return cls + " remote-presence-chip--turn";
+      }
+      if (row && row.online) {
+        return cls + " remote-presence-chip--online";
+      }
+      return cls + " remote-presence-chip--offline";
+    }
+
     function esc(text) {
       return String(text || "")
         .replace(/&/g, "&amp;")
@@ -164,9 +183,7 @@
       }
       if (presenceStrip && Array.isArray(d.participants)) {
         presenceStrip.innerHTML = d.participants.map(function (p) {
-          var cls = "remote-presence-chip";
-          cls += p.online ? " remote-presence-chip--online" : " remote-presence-chip--offline";
-          if (p.active) cls += " remote-presence-chip--active";
+          var cls = presenceChipClass(p || {});
           return '<span class="' + cls + '">' + esc(p.name || "User") + '</span>';
         }).join("");
       }

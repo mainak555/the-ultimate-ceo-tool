@@ -31,7 +31,7 @@
       <div class="chat-input-panel">
         <div class="remote-presence-strip" id="remote-presence-strip">
           {% for row in participants %}
-            <span class="remote-presence-chip{% if row.online %} remote-presence-chip--online{% else %} remote-presence-chip--offline{% endif %}{% if row.active %} remote-presence-chip--active{% endif %}">
+            <span class="remote-presence-chip {% if row.role == 'leader' %}remote-presence-chip--leader{% else %}remote-presence-chip--remote{% endif %}{% if row.is_non_participant %} remote-presence-chip--non-participant{% elif row.is_disconnected %} remote-presence-chip--disconnected{% elif row.is_turn_active %} remote-presence-chip--turn{% elif row.online %} remote-presence-chip--online{% else %} remote-presence-chip--offline{% endif %}">
               {{ row.name }}
             </span>
           {% endfor %}

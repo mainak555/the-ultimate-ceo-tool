@@ -1061,9 +1061,13 @@ select.input {
   color: $color-text-muted;
   font-size: $font-size-sm;
 
+  &--leader,
+  &--remote {
+    font-weight: 500;
+  }
+
   &--online {
-    color: $color-success;
-    border-color: $color-success;
+    background: $color-surface;
   }
 
   &--offline {
@@ -1072,10 +1076,47 @@ select.input {
     background: lighten($color-error, 40%);
   }
 
-  &--active {
+  &--leader.remote-presence-chip--online {
+    color: $color-success;
+    border-color: $color-success;
+  }
+
+  &--remote.remote-presence-chip--online {
+    color: darken($color-warning-bg-dk, 22%);
+    border-color: $color-warning-bg-dk;
+  }
+
+  &--turn {
+    font-weight: 600;
+  }
+
+  &--leader.remote-presence-chip--turn {
+    color: $color-surface;
+    background: $color-success;
+    border-color: darken($color-success, 6%);
+  }
+
+  &--remote.remote-presence-chip--turn {
+    color: darken($color-warning-bg-dk, 24%);
     background: lighten($color-warning-bg, 7%);
     border-color: $color-warning-bg-dk;
-    color: darken($color-warning-bg-dk, 30%);
+  }
+
+  &--active {
+    @extend .remote-presence-chip--turn;
+  }
+
+  &--non-participant {
+    color: $color-text-muted;
+    border-color: $color-border;
+    background: $color-surface;
+    opacity: 0.75;
+  }
+
+  &--disconnected {
+    color: darken($color-error, 12%);
+    border-color: darken($color-error, 10%);
+    background: lighten($color-error, 34%);
   }
 }
 
@@ -2192,6 +2233,21 @@ select.input {
     &--online {
       border-color: $color-success;
     }
+
+    &--turn {
+      border-color: $color-warning-bg-dk;
+      background: $color-surface;
+    }
+
+    &--non-participant {
+      border-color: $color-border;
+      opacity: 0.75;
+    }
+
+    &--disconnected {
+      border-color: darken($color-error, 10%);
+      background: $color-surface;
+    }
   }
 
   &__name {
@@ -2215,6 +2271,26 @@ select.input {
       color: $color-success;
       background: transparent;
       border-color: $color-success;
+    }
+
+    &--turn {
+      color: darken($color-warning-bg-dk, 24%);
+      background: transparent;
+      border-color: $color-warning-bg-dk;
+      font-weight: 600;
+    }
+
+    &--non-participant {
+      color: $color-text-muted;
+      background: $color-bg;
+      border-color: $color-border;
+    }
+
+    &--disconnected {
+      color: darken($color-error, 12%);
+      background: transparent;
+      border-color: darken($color-error, 10%);
+      font-weight: 600;
     }
   }
 

@@ -158,6 +158,7 @@
 {% if session.status == "awaiting_remote_users" and session.pending_remote_users %}
   <div class="chat-status-badge chat-status-badge--remote-users"
        data-readiness-context="1"
+  data-readiness-locked="{% if session.pending_remote_lock_selection %}1{% else %}0{% endif %}"
        data-session-id="{{ session.session_id }}">
     &#x1F465; Waiting for remote participants &mdash;
     {% for u in session.pending_remote_users %}{{ u.name }}{% if not forloop.last %}, {% endif %}{% endfor %}

@@ -1030,6 +1030,31 @@ async def chat_session_run(request, session_id):
         _runtime_seen.add(_aid_str)
     runtime_task_text = f"{task}{context_task_suffix or ''}"
 
+    # Post-run disconnect recovery gate: while selection is locked, keep the
+    # session in awaiting_remote_users until readiness/resume transitions it
+    # back to awaiting_input gate mode.
+    if session.get("status") == "awaiting_remote_users" and session.get("pending_remote_lock_selection"):
+        pending_locked = await asyncio.to_thread(
+            services.compute_pending_remote_users,
+            project,
+            session_id,
+        )
+        if pending_locked:
+            await asyncio.to_thread(
+                services.set_session_awaiting_remote_users,
+                session_id,
+                pending_locked,
+                lock_selection=True,
+            )
+        return JsonResponse(
+            {
+                "status": "awaiting_remote_users",
+                "users": pending_locked,
+                "lock_selection": True,
+            },
+            status=409,
+        )
+
     # First run must have a task; gate resume may send empty string
     is_first_run = session["status"] == "idle" and not session.get("discussions")
     if is_first_run and not task and not runtime_attachment_ids:
@@ -1053,7 +1078,10 @@ async def chat_session_run(request, session_id):
     )
     if pending_remote:
         await asyncio.to_thread(
-            services.set_session_awaiting_remote_users, session_id, pending_remote
+            services.set_session_awaiting_remote_users,
+            session_id,
+            pending_remote,
+            lock_selection=False,
         )
         logger.info(
             "agents.session.awaiting_remote_users",
@@ -1395,7 +1423,6 @@ async def chat_session_run(request, session_id):
                             is_single_assistant_chat_mode or current_round < max_iter
                         ):
                             await asyncio.to_thread(services.set_session_status, session_id, "awaiting_input")
-                            await _abroadcast_remote_state(session_id)
                             gate_session = await asyncio.to_thread(services.get_chat_session, session_id)
                             if gate_session and (project.get("human_gate") or {}).get("remote_users"):
                                 from agents.session_coordination import initialize_remote_gate_round
@@ -1412,6 +1439,28 @@ async def chat_session_run(request, session_id):
                                     int(gate_session.get("current_round") or 0),
                                     turn_state.get("pending_user_ids") or [],
                                 )
+                                pending_remote_gate = await asyncio.to_thread(
+                                    services.compute_pending_remote_users,
+                                    project,
+                                    session_id,
+                                )
+                                if pending_remote_gate:
+                                    await asyncio.to_thread(
+                                        services.set_session_awaiting_remote_users,
+                                        session_id,
+                                        pending_remote_gate,
+                                        lock_selection=True,
+                                    )
+                                    await _abroadcast_remote_state(session_id)
+                                    yield _sse(
+                                        "awaiting_remote_users",
+                                        {
+                                            "users": pending_remote_gate,
+                                            "lock_selection": True,
+                                        },
+                                    )
+                                    return
+                            await _abroadcast_remote_state(session_id)
                             gate_data = {
                                 "round": current_round + 1,
                                 "max_rounds": None if is_single_assistant_chat_mode else max_iter,
@@ -1787,6 +1836,8 @@ def chat_session_readiness_check(request, session_id):
     project = services.get_project(session["project_id"])
     if project is None:
         return _json_error("Project not found", 404)
+    if session.get("pending_remote_lock_selection"):
+        return _json_error("Participant selection is locked for this readiness gate.", 409)
 
     configured_ids = {
         str(u.get("id") or "").strip()
@@ -1882,11 +1933,18 @@ def remote_user_page(request, session_id, token):
 
     capability = get_or_mint_remote_export_capability(session_id, remote_user["user_id"])
 
+    leader_online = bool(is_leader_online(session_id))
+    leader_name = str((project.get("human_gate") or {}).get("name") or "Leader").strip() or "Leader"
     participants = [
         {
-            "name": "Leader",
-            "online": bool(is_leader_online(session_id)),
-            "active": bool(session.get("status") == "awaiting_input"),
+            "name": leader_name,
+            "role": "leader",
+            "online": leader_online,
+            "active": bool(turn_state.get("leader_required")),
+            "is_turn_active": bool(turn_state.get("leader_required")),
+            "is_required_participant": True,
+            "is_non_participant": False,
+            "is_disconnected": not leader_online,
         }
     ]
     for row in turn_state.get("participants") or []:
@@ -1894,8 +1952,13 @@ def remote_user_page(request, session_id, token):
             continue
         participants.append({
             "name": row.get("name") or row.get("user_id") or "User",
+            "role": row.get("role") or "remote",
             "online": bool(row.get("online")),
             "active": bool(row.get("active")),
+            "is_turn_active": bool(row.get("active")),
+            "is_required_participant": bool(row.get("is_required_participant")),
+            "is_non_participant": bool(row.get("is_non_participant")),
+            "is_disconnected": bool(row.get("is_disconnected")),
         })
 
     history_html = render_to_string(
@@ -1965,6 +2028,55 @@ def chat_session_remote_upload_attachments(request, session_id):
 
     enriched = _enrich_attachments_for_display(session_id, uploaded)
     return HttpResponse(_json_dumps({"status": "ok", "attachments": enriched}), content_type="application/json")
+
+
+@csrf_exempt
+@require_POST
+def chat_session_readiness_resume(request, session_id):
+    """Resume from a locked readiness gate back into awaiting_input gate mode."""
+    if not _has_valid_secret(request):
+        return _json_error("Unauthorized", 403)
+
+    session = services.get_chat_session(session_id)
+    if session is None:
+        return _json_error("Session not found", 404)
+    if session.get("status") != "awaiting_remote_users":
+        return _json_error("Session is not awaiting remote users.", 409)
+
+    project = services.get_project(session.get("project_id", ""))
+    if project is None:
+        return _json_error("Project not found", 404)
+
+    pending_remote = services.compute_pending_remote_users(project, session_id)
+    if pending_remote:
+        services.set_session_awaiting_remote_users(
+            session_id,
+            pending_remote,
+            lock_selection=True,
+        )
+        _broadcast_remote_state(session_id)
+        return HttpResponse(
+            _json_dumps({
+                "status": "awaiting_remote_users",
+                "users": pending_remote,
+                "lock_selection": True,
+            }),
+            status=409,
+            content_type="application/json",
+        )
+
+    # Keep current round unchanged while flipping back to gate mode.
+    services.resume_from_locked_readiness(session_id)
+    _broadcast_remote_state(session_id)
+
+    session = services.get_chat_session(session_id)
+    gate_data = {
+        "round": int(session.get("current_round") or 1),
+        "max_rounds": None if len(project.get("agents") or []) == 1 else project.get("team", {}).get("max_iterations", 5),
+        "human_name": (project.get("human_gate") or {}).get("name") or "You",
+        "chat_mode": "single_assistant" if len(project.get("agents") or []) == 1 else "team",
+    }
+    return HttpResponse(_json_dumps({"status": "ok", "gate": gate_data}), content_type="application/json")
 
 
 # ---------------------------------------------------------------------------
