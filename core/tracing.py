@@ -42,6 +42,9 @@ Env vars
 - ``OTEL_INSTRUMENT_AGENTS`` — AutoGen event-log → span bridge (LLM calls,
   prompts, tool invocations). Default ``on``; set to ``0``/``false`` to
   silence the LLM/agent layer.
+- ``OTEL_INSTRUMENT_WEBSOCKET`` — manual websocket spans (``ws.*`` in
+    Channels consumers). Default ``off``; set to ``1``/``true`` to enable
+    websocket trace noise when debugging realtime flows.
 
 Boundaries
 ----------
@@ -686,6 +689,11 @@ def _agents_tracing_enabled() -> bool:
     return _flag_enabled("OTEL_INSTRUMENT_AGENTS", default=True)
 
 
+def websocket_tracing_enabled() -> bool:
+    """Manual websocket spans in Channels consumers (default off)."""
+    return _flag_enabled("OTEL_INSTRUMENT_WEBSOCKET", default=False)
+
+
 def _wire_auto_instrumentation() -> None:
     """Enable OpenTelemetry auto-instrumentation per category toggles.
 
@@ -761,6 +769,7 @@ def init_tracing() -> bool:
                     "instrument_http": _http_tracing_enabled(),
                     "instrument_pymongo": _pymongo_tracing_enabled(),
                     "instrument_agents": _agents_tracing_enabled(),
+                    "instrument_websocket": websocket_tracing_enabled(),
                 },
             )
         except Exception:

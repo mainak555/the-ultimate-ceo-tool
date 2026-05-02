@@ -515,6 +515,7 @@ Full documentation: [docs/mcp_integration.md](docs/mcp_integration.md).
 | `OTEL_HTTP_LOG_BODY` | Controls request/response payload capture for successful (2xx) outbound HTTP API spans via `core/http_tracing.py`. Non-2xx payloads are always captured. | `on` |
 | `OTEL_INSTRUMENT_MONGO` | Pymongo auto-instrumentation (one span per Mongo command — high cardinality). Enable for query/connection diagnostics. | `off` |
 | `OTEL_INSTRUMENT_AGENTS` | AutoGen event-log → span bridge (LLM calls, prompts, tool spans). | `on` |
+| `OTEL_INSTRUMENT_WEBSOCKET` | Manual websocket spans in Channels consumers (`ws.*`). Enable only when debugging realtime/gate flow behavior. | `off` |
 | `OPENAI_API_KEY` | API key for direct OpenAI models | *(required for `openai` models)* |
 | `OPENAI_API_URL` | Endpoint fallback for `openai` models when `endpoint` is omitted in `agent_models.json` | *(optional)* |
 | `ANTHROPIC_API_KEY` | API key for direct Anthropic models | *(required for `anthropic` models)* |

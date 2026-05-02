@@ -1,4 +1,5 @@
 import logging
+from contextlib import nullcontext
 from urllib.parse import parse_qs
 from datetime import datetime, timezone
 from uuid import uuid4
@@ -7,7 +8,7 @@ from asgiref.sync import sync_to_async
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
 from django.template.loader import render_to_string
 
-from core.tracing import traced_block
+from core.tracing import traced_block, websocket_tracing_enabled
 from . import attachment_service, services, views
 
 logger = logging.getLogger(__name__)
@@ -15,6 +16,12 @@ logger = logging.getLogger(__name__)
 
 def _group_name(session_id: str) -> str:
     return f"remote_session_{session_id}"
+
+
+def _ws_traced_block(name: str, attrs: dict):
+    if websocket_tracing_enabled():
+        return traced_block(name, attrs)
+    return nullcontext()
 
 
 class RemoteUserConsumer(AsyncJsonWebsocketConsumer):
@@ -33,7 +40,7 @@ class RemoteUserConsumer(AsyncJsonWebsocketConsumer):
         kwargs = (self.scope.get("url_route") or {}).get("kwargs") or {}
         self.session_id = str(kwargs.get("session_id") or "").strip()
         self.token = str(kwargs.get("token") or "").strip()
-        with traced_block("ws.remote_user.connect", {"session_id": self.session_id}):
+        with _ws_traced_block("ws.remote_user.connect", {"session_id": self.session_id}):
             if not self.session_id or not self.token:
                 await self.close(code=4401)
                 return
@@ -107,7 +114,7 @@ class RemoteUserConsumer(AsyncJsonWebsocketConsumer):
         await self._send_state()
 
     async def _handle_submit_reply(self, content: dict):
-        with traced_block(
+        with _ws_traced_block(
             "ws.remote_user.submit_reply",
             {"session_id": self.session_id, "user_id": self.user_id},
         ):
@@ -197,7 +204,7 @@ class RemoteUserConsumer(AsyncJsonWebsocketConsumer):
             await self.channel_layer.group_send(_group_name(self.session_id), {"type": "remote.state"})
 
     async def _send_state(self):
-        with traced_block(
+        with _ws_traced_block(
             "ws.remote_user.send_state",
             {"session_id": self.session_id, "user_id": self.user_id},
         ):
