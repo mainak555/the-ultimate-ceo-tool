@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 _client = None
 PROJECT_SETTINGS_COLLECTION = "project_settings"
 CHAT_SESSIONS_COLLECTION = "chat_sessions"
+CHAT_ATTACHMENTS_COLLECTION = "chat_attachments"
 
 
 def _redact_uri(uri: str) -> str:

@@ -41,12 +41,11 @@ from django.core.files.uploadedfile import UploadedFile
 
 from core.tracing import traced_function
 
-from .db import get_collection
+from .db import CHAT_ATTACHMENTS_COLLECTION, get_collection
 from .storage_backends import build_storage_strategy
 
 logger = logging.getLogger(__name__)
 
-ATTACHMENTS_COLLECTION = "chat_attachments"
 _MAX_ATTACHMENTS_PER_MESSAGE = 10
 _MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
 
@@ -296,7 +295,7 @@ def upload_session_attachments(*, session: dict, files: list[UploadedFile]) -> l
     _validate_files(files)
 
     strategy = build_storage_strategy()
-    col = get_collection(ATTACHMENTS_COLLECTION)
+    col = get_collection(CHAT_ATTACHMENTS_COLLECTION)
     session_id = session.get("session_id", "")
     project_id = session.get("project_id", "")
     placeholders = []
@@ -345,7 +344,7 @@ def _get_attachment_docs_for_session(session_id: str, attachment_ids: Iterable[s
     wanted = [str(x).strip() for x in (attachment_ids or []) if str(x).strip()]
     if not wanted:
         return []
-    col = get_collection(ATTACHMENTS_COLLECTION)
+    col = get_collection(CHAT_ATTACHMENTS_COLLECTION)
     cursor = col.find({"session_id": session_id, "attachment_id": {"$in": wanted}})
     docs = list(cursor)
     index = {d.get("attachment_id"): d for d in docs}
@@ -358,7 +357,7 @@ def bind_attachments_to_message(*, session_id: str, message_id: str, attachment_
     if not docs:
         return []
 
-    col = get_collection(ATTACHMENTS_COLLECTION)
+    col = get_collection(CHAT_ATTACHMENTS_COLLECTION)
     attachment_ids_clean = [d["attachment_id"] for d in docs]
     col.update_many(
         {"session_id": session_id, "attachment_id": {"$in": attachment_ids_clean}},
@@ -526,7 +525,7 @@ def load_images_for_agents(
 
 
 def get_attachment_content(*, session_id: str, attachment_id: str) -> tuple[bytes, str, str]:
-    col = get_collection(ATTACHMENTS_COLLECTION)
+    col = get_collection(CHAT_ATTACHMENTS_COLLECTION)
     doc = col.find_one({"session_id": session_id, "attachment_id": attachment_id})
     if not doc:
         raise ValueError("Attachment not found.")
@@ -545,7 +544,7 @@ def delete_session_attachments(session_id: str) -> None:
     except (InvalidId, TypeError):
         return
 
-    col = get_collection(ATTACHMENTS_COLLECTION)
+    col = get_collection(CHAT_ATTACHMENTS_COLLECTION)
 
     # 1. Purge Redis text cache first (uses the index set populated at run time).
     purge_session_attachment_cache(session_id)

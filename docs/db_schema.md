@@ -19,6 +19,28 @@ Cross-references: [docs/API.md](API.md) (form fields + HTTP schema), [AGENTS.md]
 
 ---
 
+## Collection Name Standard
+
+**Collection names are constants-only in runtime code.**
+
+- Keep canonical collection names in `server/db.py` as module constants.
+- Runtime modules (`server/services.py`, `server/views.py`, integration services, and runtime helpers) must import those constants and pass them to `get_collection(...)`.
+- Do not inline collection-name literals in runtime paths, except where constants are declared.
+
+Current canonical constants:
+
+- `PROJECT_SETTINGS_COLLECTION = "project_settings"`
+- `CHAT_SESSIONS_COLLECTION = "chat_sessions"`
+- `CHAT_ATTACHMENTS_COLLECTION = "chat_attachments"`
+
+When introducing a new MongoDB collection:
+
+1. Add `<NAME>_COLLECTION` in `server/db.py`.
+2. Update this document with the new collection section.
+3. Use only the constant in all code paths.
+
+---
+
 ## Collection: `project_settings`
 
 ```jsonc
