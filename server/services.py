@@ -1063,21 +1063,20 @@ def _team_config_selector_targets(session, required_user_ids):
     """Extract selector-targeted remote users from latest assistant message.
 
     Contract: selector prompts may emit a line in assistant content:
-      REMOTE_USERS: user_a, user_b
+      REMOTE_USERS: user_a, user_b, leader
 
-    Parsed identifiers are matched against ``required_user_ids``. Missing or
-    invalid hints fall back to ``required_user_ids`` so existing behavior
-    remains safe.
+    Parsed identifiers are matched against ``required_user_ids``. The tokens
+    ``leader`` and ``gate`` target the session leader. Missing or invalid hints
+    fall back to ``required_user_ids`` (remote targets) and no leader target.
     """
-    if not required_user_ids:
-        return []
     discussions = (session or {}).get("discussions") or []
     if not isinstance(discussions, list):
-        return list(required_user_ids)
+        return list(required_user_ids), False
 
     import re as _re
 
     required_set = set(required_user_ids)
+    leader_aliases = {"leader", "gate"}
     pat = _re.compile(r"REMOTE_USERS\s*:\s*([^\n\r]+)", _re.IGNORECASE)
     for row in reversed(discussions):
         if not isinstance(row, dict):
@@ -1090,13 +1089,90 @@ def _team_config_selector_targets(session, required_user_ids):
             continue
         raw = match.group(1)
         candidates = []
+        include_leader = False
+        has_target = False
         for token in raw.split(","):
             uid = str(token or "").strip()
+            if not uid:
+                continue
+            if uid.lower() in leader_aliases:
+                include_leader = True
+                has_target = True
+                continue
             if uid in required_set and uid not in candidates:
                 candidates.append(uid)
-        if candidates:
-            return candidates
-    return list(required_user_ids)
+                has_target = True
+        if has_target:
+            return candidates, include_leader
+    return list(required_user_ids), False
+
+
+def compute_gate_pending_state(project, session, *, leader_has_response=False):
+    """Return quorum pending state for the current Human Gate round.
+
+    Returns a dict with:
+      - pending_user_ids: list[str] remote users still required
+      - required_user_ids: list[str] remote users in scope for this run
+      - responded_user_ids: list[str] remotes that already responded
+      - leader_required: bool whether leader response is still required
+      - quorum: str
+      - round: int
+    """
+    if not isinstance(project, dict) or not isinstance(session, dict):
+        return {
+            "pending_user_ids": [],
+            "required_user_ids": [],
+            "responded_user_ids": [],
+            "leader_required": not bool(leader_has_response),
+            "quorum": "yes",
+            "round": 0,
+        }
+
+    gate = project.get("human_gate") or {}
+    quorum = str(gate.get("quorum") or "yes")
+    round_no = int(session.get("current_round") or 0)
+    required_user_ids = _get_required_remote_users_for_gate(
+        project,
+        session.get("session_id", ""),
+    )
+
+    from agents.session_coordination import list_remote_gate_responded_users
+
+    responded_user_ids = list_remote_gate_responded_users(
+        session.get("session_id", ""),
+        round_no,
+    )
+    responded_set = set(responded_user_ids)
+
+    if quorum == "first_win":
+        quorum_satisfied = bool(leader_has_response) or bool(responded_set)
+        pending_user_ids = [] if quorum_satisfied else list(required_user_ids)
+        leader_required = not quorum_satisfied
+    elif quorum == "team_config":
+        team_type = str((project.get("team") or {}).get("type") or "round_robin").strip()
+        if team_type == "round_robin":
+            target_user_ids = _team_config_round_robin_targets(required_user_ids, round_no)
+            target_leader = False
+        else:
+            target_user_ids, target_leader = _team_config_selector_targets(
+                session,
+                required_user_ids,
+            )
+        pending_user_ids = [uid for uid in target_user_ids if uid not in responded_set]
+        leader_required = bool(target_leader) and not bool(leader_has_response)
+    else:
+        # "yes" quorum: every required remote participant + leader response.
+        pending_user_ids = [uid for uid in required_user_ids if uid not in responded_set]
+        leader_required = not bool(leader_has_response)
+
+    return {
+        "pending_user_ids": pending_user_ids,
+        "required_user_ids": required_user_ids,
+        "responded_user_ids": responded_user_ids,
+        "leader_required": leader_required,
+        "quorum": quorum,
+        "round": round_no,
+    }
 
 
 def compute_remote_turn_state(project, session, user_id):
@@ -1123,27 +1199,18 @@ def compute_remote_turn_state(project, session, user_id):
         }
 
     gate = project.get("human_gate") or {}
-    quorum = str(gate.get("quorum") or "yes")
-    round_no = int(session.get("current_round") or 0)
-    required_user_ids = _get_required_remote_users_for_gate(project, session.get("session_id", ""))
+    pending_state = compute_gate_pending_state(
+        project,
+        session,
+        leader_has_response=False,
+    )
+    quorum = pending_state["quorum"]
+    round_no = pending_state["round"]
+    required_user_ids = pending_state["required_user_ids"]
+    responded_user_ids = pending_state["responded_user_ids"]
+    pending_user_ids = pending_state["pending_user_ids"]
 
-    from agents.session_coordination import list_online_remote_users, list_remote_gate_responded_users
-
-    responded_user_ids = list_remote_gate_responded_users(session.get("session_id", ""), round_no)
-    responded_set = set(responded_user_ids)
-
-    if quorum == "first_win":
-        pending_user_ids = required_user_ids if not responded_set else []
-    elif quorum == "team_config":
-        team_type = str((project.get("team") or {}).get("type") or "round_robin").strip()
-        if team_type == "round_robin":
-            target_user_ids = _team_config_round_robin_targets(required_user_ids, round_no)
-        else:
-            target_user_ids = _team_config_selector_targets(session, required_user_ids)
-        pending_user_ids = [uid for uid in target_user_ids if uid not in responded_set]
-    else:
-        # "yes" quorum: every required remote participant must respond.
-        pending_user_ids = [uid for uid in required_user_ids if uid not in responded_set]
+    from agents.session_coordination import list_online_remote_users
 
     can_send = (
         session.get("status") == "awaiting_input"

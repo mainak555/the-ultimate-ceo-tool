@@ -65,9 +65,9 @@ Human Gate pause (Phase 3 — Phase 2 only validates presence).
 
 | Value | Meaning |
 |---|---|
-| `yes` *(default)* | Wait for **all** required remote users to reply. |
-| `first_win` | The **first** remote reply unblocks the run. |
-| `team_config` | Team-runtime targeting decides required remote users for the round: `round_robin` picks one deterministic remote user; `selector` parses the latest assistant hint line `REMOTE_USERS: user_a, user_b` and falls back to all required users when absent/invalid. |
+| `yes` *(default)* | Wait for **all** required remote users **and leader response**. |
+| `first_win` | **Any one responder** unblocks the run (leader or any required remote). |
+| `team_config` | Team-runtime targeting decides responders for the round: `round_robin` picks one deterministic remote user; `selector` parses the latest assistant hint line `REMOTE_USERS: user_a, user_b, leader` (`leader`/`gate` alias supported). When absent/invalid, falls back to all required remote users and no leader target. |
 
 ### Reset rules
 
@@ -362,6 +362,10 @@ collected and consumed by the next resume flow:
 3. `POST /chat/sessions/<id>/respond/` with `action=continue` first enforces
   quorum server-side. If responders are still pending, it returns HTTP 409
   `{status:"awaiting_remote_users", users:[...]}` and does not resume.
+  The leader UI may also call `action=continue_auto` during gate polling when
+  the compose box is empty and no compose attachments are queued; this allows
+  automatic resume as soon as remote quorum is satisfied without typed leader
+  text.
 4. When quorum is satisfied, queued remote payloads are popped and merged into
   the next run task as a `Remote participant responses:` context block; queued
   remote attachment IDs are also merged into the resume attachment set.

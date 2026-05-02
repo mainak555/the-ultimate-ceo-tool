@@ -50,13 +50,13 @@ Cross-references: [docs/API.md](API.md) (form fields + HTTP schema), [AGENTS.md]
     "enabled":      true,        // bool
     "name":         "string",    // required when enabled=true (the local "leader" gate name)
     "quorum":       "yes",       // "yes" | "first_win" | "team_config"
-                                 //   yes        — wait for all enabled remote users to reply
-                                 //   first_win  — first remote response continues the run
-                                 //   team_config — agent team (Selector) decides who must reply
+                                 //   yes        — wait for all enabled remote users + leader continue
+                                 //   first_win  — leader continue OR first required remote response continues the run
+                                 //   team_config — agent team (Selector) decides responders; selector may target remote IDs and optional leader/gate alias
                                  // Legacy bool tolerated on read: True→"yes", False→"first_win"
     "remote_users": [            // [] when enabled=false; multi-assistant only
       {
-        "id":          "uuid",   // server-minted, preserved across saves
+        "id":          "slug",   // server-derived from name, preserved across saves
         "name":        "string", // unique within the list, non-empty
         "description": "string"  // shown to the agent team and used by Selector routing
       }

@@ -1595,8 +1595,8 @@ def chat_session_respond(request, session_id):
 
     Human gate decision endpoint.
 
-    Body:
-            action — "continue" | "stop"
+        Body:
+            action — "continue" | "continue_auto" | "stop"
             text   — optional user context to inject before continuing
     """
     if not _has_valid_secret(request):
@@ -1622,12 +1622,19 @@ def chat_session_respond(request, session_id):
         _broadcast_remote_state(session_id)
         return HttpResponse(_json_dumps({"status": "stopped"}), content_type="application/json")
 
-    if action == "continue":
+    if action in {"continue", "continue_auto"}:
         # Enforce remote-user quorum server-side before resuming.
         if project and (project.get("human_gate") or {}).get("remote_users"):
-            leader_turn = services.compute_remote_turn_state(project, session, "")
-            pending_ids = list(leader_turn.get("pending_user_ids") or [])
-            if pending_ids:
+            leader_has_response = action == "continue"
+            pending_state = services.compute_gate_pending_state(
+                project,
+                session,
+                # Manual continue counts as the leader response.
+                leader_has_response=leader_has_response,
+            )
+            pending_ids = list(pending_state.get("pending_user_ids") or [])
+            leader_required = bool(pending_state.get("leader_required"))
+            if pending_ids or leader_required:
                 configured = {
                     str(u.get("id") or "").strip(): str(u.get("name") or "").strip()
                     for u in (project.get("human_gate") or {}).get("remote_users") or []
@@ -1637,6 +1644,11 @@ def chat_session_respond(request, session_id):
                     {"user_id": uid, "name": configured.get(uid) or uid}
                     for uid in pending_ids
                 ]
+                if leader_required:
+                    pending_rows.append({
+                        "user_id": "leader",
+                        "name": (project.get("human_gate") or {}).get("name") or "Leader",
+                    })
                 names = ", ".join(row["name"] for row in pending_rows)
                 return JsonResponse(
                     {
@@ -1669,10 +1681,10 @@ def chat_session_respond(request, session_id):
                     # Leader-authored task only; runtime context is carried
                     # separately to avoid duplicating remote text in
                     # discussions[].
-                    "task": text,
+                    "task": text if action == "continue" else "",
                     "context_task_suffix": _remote_text,
                     # Leader-owned attachment IDs only.
-                    "attachment_ids": attachment_ids,
+                    "attachment_ids": attachment_ids if action == "continue" else [],
                     # Runtime-only context attachment IDs from remote gate
                     # replies. These are fed to the next run task without
                     # rebinding them to the leader message.
@@ -1682,7 +1694,7 @@ def chat_session_respond(request, session_id):
             content_type="application/json",
         )
 
-    return HttpResponse(_json_dumps({"error": "Invalid action"}), status=400,
+    return HttpResponse(_json_dumps({"error": "Invalid action: continue, continue_auto, or stop"}), status=400,
                         content_type="application/json")
 
 

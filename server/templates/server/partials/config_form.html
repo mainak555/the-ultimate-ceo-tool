@@ -239,7 +239,7 @@
                     class="input input--textarea input--prompt"
                     rows="12"
                     placeholder="Paste the selector prompt…">{% if project.team.system_prompt %}{{ project.team.system_prompt }}{% else %}{{ selector_prompt_hint }}{% endif %}</textarea>
-          <small class="form-hint">Use <code>{roles}</code>, <code>{history}</code>, <code>{participants}</code> placeholders. For Human Gate quorum <strong>team_config</strong>, include a final line in selector outputs like <code>REMOTE_USERS: alice,bob</code> (remote user IDs) to target specific remote participants for the next gate turn.</small>
+          <small class="form-hint">Use <code>{roles}</code>, <code>{history}</code>, <code>{participants}</code> placeholders. For Human Gate quorum <strong>team_config</strong>, include a final line in selector outputs like <code>REMOTE_USERS: alice,bob,leader</code> (remote user IDs plus optional <code>leader</code>/<code>gate</code>) to target who must respond before the next gate handoff.</small>
         </div>
 
         <div class="form-group form-group--inline">

@@ -171,13 +171,24 @@ append one `UserProxyAgent` participant per configured remote user.
 
 Quorum runtime semantics:
 
-- `yes`: all required remote users.
-- `first_win`: any single response.
+- `yes`: all required remote users + leader response.
+- `first_win`: any single responder (leader or required remote).
 - `team_config`:
   - `round_robin`: deterministic one-user target per round.
   - `selector`: parse latest assistant hint line
-    `REMOTE_USERS: user_a, user_b`; if absent/invalid, fall back to all
-    required users.
+    `REMOTE_USERS: user_a, user_b, leader`; `leader` (or alias `gate`)
+    targets the session leader. If absent/invalid, fall back to all required
+    remote users and no leader target.
+
+Control-plane authority rule (mandatory): only the leader may call the
+secret-gated hard stop/resume endpoints. Quorum satisfaction gates whether
+continue is allowed; it does not grant endpoint authority to remote users.
+
+Leader auto-resume rule (mandatory): leader UI may call
+`POST /chat/sessions/<id>/respond/` with `action=continue_auto` while gate mode
+is active only when compose text is empty and no compose attachments are
+queued/uploaded. `continue_auto` must evaluate quorum with
+`leader_has_response=False` and return `task=""` on success.
 
 Fallback rule (mandatory): if no remote users are selected for the run (or
 none are configured), behavior must collapse to the existing leader-only Human

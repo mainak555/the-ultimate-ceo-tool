@@ -237,15 +237,20 @@ Human gate response endpoint contract:
 
 - `POST /chat/sessions/<session_id>/respond/`
 - Body fields:
-  - `action`: `continue` or `stop`
+  - `action`: `continue`, `continue_auto`, or `stop`
   - `text`: optional note/context (used when `action=continue`)
   - `attachment_ids`: optional repeated values bound to the next resumed user message
 - Behavior:
+  - Quorum semantics when remote users are configured:
+    - `yes`: requires all required remotes plus leader continue.
+    - `first_win`: leader continue OR first required remote response satisfies quorum.
+    - `team_config`: selector hint `REMOTE_USERS: ...` may target remote IDs and optional `leader`/`gate`.
   - `continue`: sets session status to `idle` and returns:
     - `task`: leader-authored text only (persisted as the next leader user message)
     - `context_task_suffix`: runtime-only context suffix (currently remote-user response block)
     - `attachment_ids`: leader-owned attachment IDs (bound to the next resumed leader message)
     - `context_attachment_ids`: runtime-only attachment IDs (currently remote-user attachments), used for run context only
+  - `continue_auto`: same resume contract as `continue`, but does not count as leader text input (`task=""`, `attachment_ids=[]`) and only succeeds when quorum is already satisfied without leader response
   - `stop`: sets session status to `stopped`, evicts the runtime team, returns `{status:"stopped"}`
 
 Run endpoint attachment contract:

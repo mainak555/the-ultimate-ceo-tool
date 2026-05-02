@@ -90,9 +90,9 @@ users** under *Project Configuration → Human Gate*. Each remote user has a
 controls how many remote responses are required to continue past a Human
 Gate pause:
 
-- `yes` — wait for **all** required remote users to reply.
-- `first_win` — the **first** remote response continues the run.
-- `team_config` — the **agent team** (Selector) decides who must reply.
+- `yes` — wait for **all** required remote users **and leader response**.
+- `first_win` — **any one responder** satisfies quorum (leader or any required remote).
+- `team_config` — the **agent team** (Selector) decides who must reply; selector hints may target remote IDs and optionally `leader`.
 
 Runtime architecture note:
 
@@ -106,6 +106,11 @@ Runtime architecture note:
 - Leader continue is enforced server-side: if required remote responses are
 	still pending, the continue request is rejected with
 	`409 {status:"awaiting_remote_users"}`.
+- When the gate compose box is empty (no text, no queued/uploaded attachments),
+	leader UI polling can auto-resume with `continue_auto` as soon as quorum is
+	satisfied.
+- Leader remains the only control-plane actor for hard stop/resume endpoints;
+  quorum satisfaction determines eligibility to continue, not endpoint authority.
 - Once quorum is satisfied, queued remote replies are merged into the next
 	run task as a "Remote participant responses" context block (and queued
 	remote attachment IDs are merged into the resumed run payload).

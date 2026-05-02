@@ -475,6 +475,7 @@ document.addEventListener("DOMContentLoaded", function () {
       } else {
         clearGateMode();
       }
+      _maybeAutoContinueGate();
       _restoreReadinessFromBadge();
     }).catch(function () {
       // Keep existing gate state when one refresh fails.
@@ -501,6 +502,7 @@ document.addEventListener("DOMContentLoaded", function () {
   // Activate gate mode on the bottom input bar.
   function setGateMode(data) {
     _gateData = data;
+    _gateAutoContinueErrorUntil = 0;
     var isSingle = data && data.chat_mode === "single_assistant";
     if (chatInput) {
       var roundText = isSingle
@@ -516,10 +518,43 @@ document.addEventListener("DOMContentLoaded", function () {
   // Deactivate gate mode and restore the normal input bar state.
   function clearGateMode() {
     _gateData = null;
+    _gateAutoContinueInFlight = false;
+    _gateAutoContinueErrorUntil = 0;
     _stopGateHistoryPolling();
     if (chatInput) chatInput.placeholder = "Send a message";
     if (chatStopBtn) chatStopBtn.hidden = true;
     _evalSendBtn();
+  }
+
+  // Auto-resume when remote quorum is met and leader has no pending input.
+  function _maybeAutoContinueGate() {
+    if (!_gateData) return;
+    if (_gateData.chat_mode === "single_assistant") return;
+    if (_gateAutoContinueInFlight) return;
+    if (Date.now() < _gateAutoContinueErrorUntil) return;
+    if (!getSecretKey()) return;
+
+    var sessionId = activeSessionIdInput ? activeSessionIdInput.value.trim() : "";
+    if (!sessionId) return;
+    var text = chatInput ? chatInput.value.trim() : "";
+    if (text) return;
+    if (composePendingFiles.length > 0 || composeUploaded.length > 0) return;
+
+    _gateAutoContinueInFlight = true;
+    sendRespond(sessionId, "continue_auto", "", []).then(function (d) {
+      _gateAutoContinueInFlight = false;
+      if (!d || d.status !== "ok") return;
+      clearGateMode();
+      startRun(
+        d.task || "",
+        d.attachment_ids || [],
+        d.context_task_suffix || "",
+        d.context_attachment_ids || []
+      );
+    }).catch(function () {
+      _gateAutoContinueInFlight = false;
+      _gateAutoContinueErrorUntil = Date.now() + 5000;
+    });
   }
 
   // Append a non-interactive gate status badge into the chat history.
@@ -625,6 +660,8 @@ document.addEventListener("DOMContentLoaded", function () {
 
   var _activeReader = null;
   var _gateData = null; // non-null while the input bar is in human-gate mode
+  var _gateAutoContinueInFlight = false;
+  var _gateAutoContinueErrorUntil = 0;
   var _gateHistoryPollTimer = null;
   var _gateRefreshInFlight = false;
 
