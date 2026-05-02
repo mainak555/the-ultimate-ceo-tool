@@ -1047,6 +1047,7 @@ async def chat_session_run(request, session_id):
     # Multi-user Human Gate — remote-user readiness pre-run gate.
     # Runs BEFORE the MCP OAuth gate so the leader can resolve human-presence
     # before triggering any external authorization. Does not acquire the lease.
+    await asyncio.to_thread(services.freeze_session_remote_users, project, session_id)
     pending_remote = await asyncio.to_thread(
         services.compute_pending_remote_users, project, session_id
     )
@@ -1409,7 +1410,7 @@ async def chat_session_run(request, session_id):
                                     initialize_remote_gate_round,
                                     session_id,
                                     int(gate_session.get("current_round") or 0),
-                                    turn_state.get("required_user_ids") or [],
+                                    turn_state.get("pending_user_ids") or [],
                                 )
                             gate_data = {
                                 "round": current_round + 1,
@@ -1803,8 +1804,10 @@ def chat_session_readiness_check(request, session_id):
         return _json_error("Active session coordinator is unavailable.", 503)
     try:
         set_checked_remote_users(session_id, submitted)
+        services.freeze_session_remote_users(project, session_id, submitted)
     except SessionCoordinationError:
         return _json_error("Unable to persist checked-set.", 503)
+    _broadcast_remote_state(session_id)
     return HttpResponse(
         _json_dumps({"status": "ok", "checked": submitted}),
         content_type="application/json",
@@ -1851,6 +1854,7 @@ def chat_session_readiness_token(request, session_id, user_id):
     )
     # Join URL for the remote participant page.
     join_url = f"{base_url}/chat/{session_id}/remote-user/{token}/"
+    _broadcast_remote_state(session_id)
     return HttpResponse(
         _json_dumps({"status": "ok", "join_url": join_url}),
         content_type="application/json",
@@ -1932,6 +1936,7 @@ def chat_session_remote_heartbeat(request, session_id):
     from agents.session_coordination import set_remote_user_online
 
     set_remote_user_online(session_id, ctx["user_id"])
+    _broadcast_remote_state(session_id)
     return HttpResponse(_json_dumps({"status": "ok"}), content_type="application/json")
 
 

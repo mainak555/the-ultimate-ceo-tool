@@ -60,7 +60,7 @@ Cross-references: [docs/API.md](API.md) (form fields + HTTP schema), [AGENTS.md]
         "name":        "string", // unique within the list, non-empty
         "description": "string"  // shown to the agent team and used by Selector routing
       }
-      // Per-user enable/disable is a runtime concern (lobby/readiness in Phase 2),
+      // Per-user enable/disable is a runtime concern (lobby/readiness),
       // not a stored config field.
     ]
   },

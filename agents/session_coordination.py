@@ -466,44 +466,54 @@ def get_remote_user_heartbeat_interval_seconds() -> int:
     return max(5, raw)
 
 
+def _remote_user_session_key(session_id: str, bucket: str, *parts: str | int) -> str:
+    base = f"{_namespace()}:remote_user:{session_id}:{bucket}"
+    if not parts:
+        return base
+    suffix = ":".join(str(p) for p in parts if str(p).strip())
+    if not suffix:
+        return base
+    return f"{base}:{suffix}"
+
+
 def _remote_user_token_key(session_id: str, token: str) -> str:
-    return f"{_namespace()}:remote_user_token:{session_id}:{token}"
+    return _remote_user_session_key(session_id, "token", token)
 
 
 def _remote_user_token_by_user_key(session_id: str, user_id: str) -> str:
-    return f"{_namespace()}:remote_user_token_by_user:{session_id}:{user_id}"
+    return _remote_user_session_key(session_id, "token_by_user", user_id)
 
 
 def _remote_user_online_key(session_id: str, user_id: str) -> str:
-    return f"{_namespace()}:remote_user_online:{session_id}:{user_id}"
+    return _remote_user_session_key(session_id, "online", user_id)
 
 
 def _leader_online_key(session_id: str) -> str:
-    return f"{_namespace()}:leader_online:{session_id}"
+    return _remote_user_online_key(session_id, "host")
 
 
 def _remote_user_checked_key(session_id: str) -> str:
-    return f"{_namespace()}:remote_user_checked:{session_id}"
+    return _remote_user_session_key(session_id, "checked")
 
 
 def _remote_export_capability_key(session_id: str, capability: str) -> str:
-    return f"{_namespace()}:remote_export_capability:{session_id}:{capability}"
+    return _remote_user_session_key(session_id, "export_capability", capability)
 
 
 def _remote_export_capability_by_user_key(session_id: str, user_id: str) -> str:
-    return f"{_namespace()}:remote_export_capability_by_user:{session_id}:{user_id}"
+    return _remote_user_session_key(session_id, "export_capability_by_user", user_id)
 
 
 def _remote_gate_response_key(session_id: str, round_no: int, user_id: str) -> str:
-    return f"{_namespace()}:remote_gate_response:{session_id}:{round_no}:{user_id}"
+    return _remote_user_session_key(session_id, "gate_response", round_no, user_id)
 
 
 def _remote_gate_response_index_key(session_id: str, round_no: int) -> str:
-    return f"{_namespace()}:remote_gate_response_index:{session_id}:{round_no}"
+    return _remote_user_session_key(session_id, "gate_response_index", round_no)
 
 
 def _remote_gate_required_key(session_id: str, round_no: int) -> str:
-    return f"{_namespace()}:remote_gate_required:{session_id}:{round_no}"
+    return _remote_user_session_key(session_id, "gate_required", round_no)
 
 
 @traced_function("agents.remote_user.token_mint")
@@ -855,6 +865,17 @@ def purge_remote_users_state(session_id: str) -> None:
     if not session_id:
         return
     patterns = [
+        _remote_user_session_key(session_id, "token", "*"),
+        _remote_user_session_key(session_id, "token_by_user", "*"),
+        _remote_user_session_key(session_id, "online", "*"),
+        _remote_user_session_key(session_id, "checked"),
+        _remote_user_session_key(session_id, "export_capability", "*"),
+        _remote_user_session_key(session_id, "export_capability_by_user", "*"),
+        _remote_user_session_key(session_id, "gate_response", "*"),
+        _remote_user_session_key(session_id, "gate_response_index", "*"),
+        _remote_user_session_key(session_id, "gate_required", "*"),
+        # Legacy key shapes (pre-unification) for cleanup during migration.
+        _remote_user_session_key(session_id, "leader_online"),
         f"{_namespace()}:remote_user_token:{session_id}:*",
         f"{_namespace()}:remote_user_token_by_user:{session_id}:*",
         f"{_namespace()}:remote_user_online:{session_id}:*",

@@ -246,10 +246,10 @@ document.addEventListener("DOMContentLoaded", function () {
 
     if (!hasSecret) {
       closeExportDropdowns();
-      _stopPresencePolling();
+      _closeLeaderReadinessWs();
       _renderPresenceStrip([]);
     } else {
-      _syncPresenceStripPolling();
+      _ensureLeaderReadinessWs();
     }
     _evalSendBtn();
   }
@@ -815,12 +815,13 @@ document.addEventListener("DOMContentLoaded", function () {
 
   // ------------------------------------------------------------------
   // Multi-user Human Gate — remote-user readiness lobby (Phase 2)
-  // Mirrors _showOAuthGatePanel: in-history card, leader-only, polling
-  // status. When all checked users come online, replays /run/ automatically.
+  // Push-only state sync via leader websocket (no readiness polling).
   // ------------------------------------------------------------------
 
-  var _readinessPollTimer = null;
-  var _presencePollTimer = null;
+  var _leaderReadinessWs = null;
+  var _leaderReadinessWsSessionId = "";
+  var _leaderReadinessReconnectTimer = null;
+  var _leaderReadinessHeartbeatTimer = null;
 
   function _renderPresenceStrip(rows) {
     if (!chatPresenceStrip) return;
@@ -845,60 +846,107 @@ document.addEventListener("DOMContentLoaded", function () {
     chatPresenceStrip.innerHTML = html;
   }
 
-  function _stopPresencePolling() {
-    if (_presencePollTimer) {
-      clearInterval(_presencePollTimer);
-      _presencePollTimer = null;
+  function _closeLeaderReadinessWs() {
+    if (_leaderReadinessReconnectTimer) {
+      clearTimeout(_leaderReadinessReconnectTimer);
+      _leaderReadinessReconnectTimer = null;
+    }
+    if (_leaderReadinessHeartbeatTimer) {
+      clearInterval(_leaderReadinessHeartbeatTimer);
+      _leaderReadinessHeartbeatTimer = null;
+    }
+    if (_leaderReadinessWs) {
+      try { _leaderReadinessWs.close(); } catch (_) { /* ignore */ }
+      _leaderReadinessWs = null;
+    }
+    _leaderReadinessWsSessionId = "";
+  }
+
+  function _leaderWsUrl(sessionId, secretKey) {
+    var proto = window.location.protocol === "https:" ? "wss://" : "ws://";
+    return proto + window.location.host
+      + "/ws/chat/" + encodeURIComponent(sessionId) + "/leader/?skey=" + encodeURIComponent(secretKey);
+  }
+
+  function _applyLeaderReadinessState(users) {
+    var rows = users || [];
+    _renderPresenceStrip(rows);
+    var panel = chatMessages ? chatMessages.querySelector(".chat-readiness-panel") : null;
+    if (!panel) return;
+    _renderReadinessRows(panel, rows);
+    var checked = rows.filter(function (u) { return u.checked; });
+    var allOnline = checked.length > 0 && checked.every(function (u) { return u.online; });
+    if ((allOnline || checked.length === 0) && typeof panel._onAllRemoteUsersReady === "function") {
+      panel._onAllRemoteUsersReady();
     }
   }
 
-  function _syncPresenceStripOnce() {
-    var sessionId = activeSessionIdInput ? activeSessionIdInput.value.trim() : "";
-    var secretKey = getSecretKey();
-
-    if (!sessionId || !secretKey) {
-      _renderPresenceStrip([]);
-      return Promise.resolve();
+  function _requestLeaderReadinessSync() {
+    if (_leaderReadinessWs && _leaderReadinessWs.readyState === WebSocket.OPEN) {
+      _leaderReadinessWs.send(JSON.stringify({ type: "sync_state" }));
     }
-
-    // When readiness panel is active, that flow drives presence updates.
-    if (chatMessages && chatMessages.querySelector(".chat-readiness-panel")) {
-      return Promise.resolve();
-    }
-
-    return fetch("/chat/sessions/" + sessionId + "/readiness/status/", {
-      method: "GET",
-      headers: { "X-App-Secret-Key": secretKey },
-    }).then(function (r) {
-      if (!r.ok) throw new Error("presence status failed");
-      return r.json();
-    }).then(function (data) {
-      _renderPresenceStrip((data && data.users) || []);
-    }).catch(function () {
-      // Keep UI quiet on transient failures.
-    });
   }
 
-  function _syncPresenceStripPolling() {
+  function _ensureLeaderReadinessWs() {
     var sessionId = activeSessionIdInput ? activeSessionIdInput.value.trim() : "";
     var secretKey = getSecretKey();
-
     if (!sessionId || !secretKey) {
-      _stopPresencePolling();
+      _closeLeaderReadinessWs();
       _renderPresenceStrip([]);
       return;
     }
 
-    _syncPresenceStripOnce();
-    if (_presencePollTimer) return;
-    _presencePollTimer = setInterval(function () {
-      _syncPresenceStripOnce();
-    }, 3000);
+    if (
+      _leaderReadinessWs
+      && _leaderReadinessWs.readyState !== WebSocket.CLOSED
+      && _leaderReadinessWsSessionId === sessionId
+    ) {
+      _requestLeaderReadinessSync();
+      return;
+    }
+
+    _closeLeaderReadinessWs();
+    _leaderReadinessWsSessionId = sessionId;
+    try {
+      _leaderReadinessWs = new WebSocket(_leaderWsUrl(sessionId, secretKey));
+    } catch (_) {
+      _leaderReadinessWs = null;
+      return;
+    }
+
+    _leaderReadinessWs.addEventListener("open", function () {
+      _requestLeaderReadinessSync();
+      _leaderReadinessHeartbeatTimer = setInterval(function () {
+        if (_leaderReadinessWs && _leaderReadinessWs.readyState === WebSocket.OPEN) {
+          _leaderReadinessWs.send(JSON.stringify({ type: "heartbeat" }));
+        }
+      }, 25000);
+    });
+
+    _leaderReadinessWs.addEventListener("message", function (evt) {
+      var data;
+      try { data = JSON.parse(evt.data || "{}"); } catch (_) { return; }
+      if (!data || data.type !== "state" || data.status !== "ok") return;
+      _applyLeaderReadinessState(data.users || []);
+    });
+
+    _leaderReadinessWs.addEventListener("close", function () {
+      if (_leaderReadinessHeartbeatTimer) {
+        clearInterval(_leaderReadinessHeartbeatTimer);
+        _leaderReadinessHeartbeatTimer = null;
+      }
+      _leaderReadinessWs = null;
+      if (!_leaderReadinessReconnectTimer) {
+        _leaderReadinessReconnectTimer = setTimeout(function () {
+          _leaderReadinessReconnectTimer = null;
+          _ensureLeaderReadinessWs();
+        }, 1500);
+      }
+    });
   }
 
   function _teardownReadinessPanel() {
-    if (_readinessPollTimer) { clearInterval(_readinessPollTimer); _readinessPollTimer = null; }
-    _syncPresenceStripPolling();
+    _ensureLeaderReadinessWs();
   }
 
   function _showReadinessPanel(sessionId, secretKey, replayTask, replayAttachmentIds, replayContextTaskSuffix, replayContextAttachmentIds) {
@@ -998,28 +1046,6 @@ document.addEventListener("DOMContentLoaded", function () {
   function _attachReadinessBehavior(panel, sessionId, secretKey) {
     var checkInFlight = null;
 
-    function _refreshStatus() {
-      return fetch("/chat/sessions/" + sessionId + "/readiness/status/", {
-        method: "GET",
-        headers: { "X-App-Secret-Key": secretKey },
-      }).then(function (r) {
-        if (!r.ok) throw new Error("status failed");
-        return r.json();
-      }).then(function (data) {
-        var users = (data && data.users) || [];
-        _renderReadinessRows(panel, users);
-        _renderPresenceStrip(users);
-        // All checked are online? -> auto-replay.
-        var checked = users.filter(function (u) { return u.checked; });
-        var allOnline = checked.length > 0 && checked.every(function (u) { return u.online; });
-        // Edge case: nothing checked at all -> the gate would clear server-side;
-        // also auto-replay so /run/ proceeds.
-        if (allOnline || checked.length === 0) {
-          _onAllRemoteUsersReady();
-        }
-      }).catch(function () { /* keep polling */ });
-    }
-
     function _onAllRemoteUsersReady() {
       _teardownReadinessPanel();
       var task = panel._replayTask || "";
@@ -1030,6 +1056,8 @@ document.addEventListener("DOMContentLoaded", function () {
       _doStartRun(sessionId, secretKey, task, ids, contextTaskSuffix, contextIds);
       setRunningState(true);
     }
+
+    panel._onAllRemoteUsersReady = _onAllRemoteUsersReady;
 
     // Checkbox change -> POST /readiness/check/ with the full current set.
     panel.addEventListener("change", function (e) {
@@ -1109,15 +1137,7 @@ document.addEventListener("DOMContentLoaded", function () {
       }
     });
 
-    // Initial render + 3 s polling cadence (mirrors OAuth gate).
-    _refreshStatus();
-    _readinessPollTimer = setInterval(function () {
-      if (!document.body.contains(panel)) {
-        _teardownReadinessPanel();
-        return;
-      }
-      _refreshStatus();
-    }, 3000);
+    _requestLeaderReadinessSync();
   }
 
   // Reload-recovery: when chat history shows the awaiting_remote_users badge,
@@ -1629,7 +1649,7 @@ document.addEventListener("DOMContentLoaded", function () {
             chatMessages.innerHTML = '<div class="chat-history" id="chat-history-msgs"></div>';
           }
           var sid = activeSessionIdInput ? activeSessionIdInput.value.trim() : "";
-          _syncPresenceStripPolling();
+          _ensureLeaderReadinessWs();
           return runWithSession(sid);
         }).catch(function (err) {
           appendBubble('<div class="chat-bubble chat-bubble--error">Error: ' + err.message + '</div>');
@@ -1744,7 +1764,7 @@ document.addEventListener("DOMContentLoaded", function () {
 
     if (activeProjectIdInput) activeProjectIdInput.value = projectId || "";
     if (activeSessionIdInput) activeSessionIdInput.value = "";
-    _syncPresenceStripPolling();
+    _ensureLeaderReadinessWs();
   });
 
   document.body.addEventListener("htmx:beforeRequest", function (e) {
@@ -1773,7 +1793,7 @@ document.addEventListener("DOMContentLoaded", function () {
     }
     // Multi-user readiness lobby restoration (Phase 2).
     _restoreReadinessFromBadge();
-    _syncPresenceStripPolling();
+    _ensureLeaderReadinessWs();
   });
 
   document.body.addEventListener("input", function (e) {
@@ -1839,5 +1859,9 @@ document.addEventListener("DOMContentLoaded", function () {
   }
   // Multi-user readiness lobby restoration on first render (Phase 2).
   _restoreReadinessFromBadge();
-  _syncPresenceStripPolling();
+  _ensureLeaderReadinessWs();
+
+  window.addEventListener("beforeunload", function () {
+    _closeLeaderReadinessWs();
+  });
 });

@@ -10,10 +10,10 @@ machine-enforced contract for code changes lives in
 [`.agents/skills/human_gate_remote_users/SKILL.md`](../.agents/skills/human_gate_remote_users/SKILL.md);
 this document is the human-readable counterpart.
 
-> **Status**: Phase 1 (configuration) and Phase 2 (readiness lobby) are
-> shipped. Phase 3 now includes a dedicated remote-user page for turn-gated
-> replies, attachment upload, delegated export access, and AutoGen
-> `UserProxyAgent` participant wiring for configured remote users.
+> **Status**: Remote collaboration supports configuration, readiness lobby,
+> a dedicated remote-user page for turn-gated replies, attachment upload,
+> delegated export access, and AutoGen `UserProxyAgent` participant wiring
+> for configured remote users.
 
 ---
 
@@ -30,7 +30,7 @@ short-lived URL token issued by the leader.
 
 ---
 
-## 2. Configuration (Phase 1)
+## 2. Configuration
 
 ### Where
 
@@ -46,7 +46,7 @@ visible when:
 
 | Field | Required | Notes |
 |---|---|---|
-| `name` | Yes | Displayed verbatim in the readiness lobby and (Phase 3) in chat. Must be unique within the list (case-insensitive). |
+| `name` | Yes | Displayed verbatim in the readiness lobby and in chat. Must be unique within the list (case-insensitive). |
 | `description` | Recommended | Plain-language role used by the Selector prompt to decide when to address a remote user. |
 
 There is **no** per-user enable toggle and **no** stored `id` field.
@@ -61,13 +61,13 @@ There is **no** per-user enable toggle and **no** stored `id` field.
 ### Quorum
 
 `quorum` controls how many remote replies are needed to continue past a
-Human Gate pause (Phase 3 — Phase 2 only validates presence).
+Human Gate pause.
 
 | Value | Meaning |
 |---|---|
 | `yes` *(default)* | Wait for **all** required remote users **and leader response**. |
 | `first_win` | **Any one responder** unblocks the run (leader or any required remote). |
-| `team_config` | Team-runtime targeting decides responders for the round: `round_robin` picks one deterministic remote user; `selector` parses the latest assistant hint line `REMOTE_USERS: user_a, user_b, leader` (`leader`/`gate` alias supported). When absent/invalid, falls back to all required remote users and no leader target. |
+| `team_config` | Team-runtime targeting decides responders for the round: persisted per-round target users are preferred; fallback behavior targets remotes only (`round_robin` deterministic rotation or selector-derived remote targets). Leader response is not required in this mode. |
 
 ### Reset rules
 
@@ -84,7 +84,7 @@ silently migrate `True → "yes"`, `False → "first_win"`. Older UUID-based
 
 ---
 
-## 3. Readiness lobby (Phase 2)
+## 3. Readiness lobby
 
 ### What the leader sees
 
@@ -209,7 +209,7 @@ the run-coordination layer (lease, cancel signal, presence) already works.
 |---|---|---|
 | `REMOTE_USER_TOKEN_TTL_SECONDS` | `43200` (12 h) | Lifetime of a minted invitation token (and its reverse-lookup key). |
 | `REMOTE_USER_PRESENCE_TTL_SECONDS` | `60` | How long the remote user is considered online without a fresh heartbeat. |
-| `REMOTE_USER_HEARTBEAT_INTERVAL_SECONDS` | `30` | How often the remote user's browser refreshes its presence key (Phase 3 cadence). Must satisfy `presence_ttl ≥ 2 × heartbeat_interval`. |
+| `REMOTE_USER_HEARTBEAT_INTERVAL_SECONDS` | `30` | How often the remote user's browser refreshes its presence key. Must satisfy `presence_ttl ≥ 2 × heartbeat_interval`. |
 | `REMOTE_USER_CHECKED_TTL_SECONDS` | `43200` (12 h) | Lifetime of the leader's "required for this run" checkbox set. |
 
 12 h covers a normal working day. If your operational pattern is different
@@ -241,7 +241,7 @@ recovery and second-tab views show the same gate state.
 | Method + path | Purpose |
 |---|---|
 | `POST /chat/sessions/<id>/run/` | Returns HTTP 409 `{status: "awaiting_remote_users", users: [...]}` when the readiness gate is unsatisfied. |
-| `GET  /chat/sessions/<id>/readiness/status/` | Snapshot used by the lobby panel (3 s polling). Returns per-row `{user_id, name, description, online, checked, has_token, join_url}`. `join_url` is populated when a token is already alive. |
+| `GET  /chat/sessions/<id>/readiness/status/` | Snapshot endpoint used by the lobby panel and websocket sync. Returns per-row `{user_id, name, description, online, checked, has_token, join_url}`. `join_url` is populated when a token is already alive. |
 | `POST /chat/sessions/<id>/readiness/check/` | Form field `user_ids` repeated; persists the leader's checkbox set. |
 | `POST /chat/sessions/<id>/readiness/<user_id>/token/` | **Idempotent** — returns existing or freshly-minted invitation URL. |
 | `POST /chat/sessions/<id>/stop/` | Resets `awaiting_remote_users` → `idle` and tears down the lobby. |
@@ -249,7 +249,7 @@ recovery and second-tab views show the same gate state.
 All readiness endpoints above require `X-App-Secret-Key`. There is **no**
 unauthenticated or cookie-based variant for the leader-side readiness lobby.
 
-### Phase 3 remote-user endpoints
+### Remote-user endpoints
 
 | Method + path | Auth | Purpose |
 |---|---|---|
@@ -284,7 +284,8 @@ These are mandatory; violations are caught by `.agents/skills/observability_logg
   and descriptions are forwarded as span attributes the same way agent
   names already are.
 - Session delete must call `purge_remote_users_state(session_id)` to wipe
-  all four Redis prefixes (token, token-by-user, presence, checked-set)
+  all readiness Redis prefixes (token, token-by-user, presence including host,
+  checked-set)
   before deleting MongoDB rows.
 
 ---
@@ -295,9 +296,10 @@ These are mandatory; violations are caught by `.agents/skills/observability_logg
 |---|---|---|
 | MongoDB `project_settings.human_gate.remote_users` | Configured roster (`name`, `description`, derived `id`) | Permanent (until the project is edited). |
 | MongoDB `chat_sessions.status` + `pending_remote_users` | Current gate state for resume | Until session is deleted or run completes. |
-| Redis `{ns}:remote_user_token:*` and `*_token_by_user:*` | Active invitation tokens (forward + reverse) | `REMOTE_USER_TOKEN_TTL_SECONDS` (12 h). |
-| Redis `{ns}:remote_user_online:*` | Per-user presence flag | `REMOTE_USER_PRESENCE_TTL_SECONDS` (60 s). |
-| Redis `{ns}:remote_user_checked:*` | Leader's checkbox set for this session | `REMOTE_USER_CHECKED_TTL_SECONDS` (12 h). |
+| MongoDB `chat_sessions.remote_users` | Frozen selected remote users for this session run (used by readiness and quorum paths) | Until session is deleted. |
+| Redis `{ns}:remote_user:{session_id}:token:*` and `{ns}:remote_user:{session_id}:token_by_user:*` | Active invitation tokens (forward + reverse) | `REMOTE_USER_TOKEN_TTL_SECONDS` (12 h). |
+| Redis `{ns}:remote_user:{session_id}:online:*` | Per-user presence flag | `REMOTE_USER_PRESENCE_TTL_SECONDS` (60 s). |
+| Redis `{ns}:remote_user:{session_id}:checked` | Leader's checkbox set for this session | `REMOTE_USER_CHECKED_TTL_SECONDS` (12 h). |
 
 No token, URL, or presence flag is ever written to MongoDB or to disk.
 
@@ -350,7 +352,7 @@ Token strings, join URLs, and Redis values are never set as span attributes.
 
 ---
 
-## 11. Phase-3 runtime (shipped)
+## 11. Runtime behavior
 
 When a run pauses at Human Gate (`awaiting_input`), remote-user replies are
 collected and consumed by the next resume flow:
@@ -362,10 +364,6 @@ collected and consumed by the next resume flow:
 3. `POST /chat/sessions/<id>/respond/` with `action=continue` first enforces
   quorum server-side. If responders are still pending, it returns HTTP 409
   `{status:"awaiting_remote_users", users:[...]}` and does not resume.
-  The leader UI may also call `action=continue_auto` during gate polling when
-  the compose box is empty and no compose attachments are queued; this allows
-  automatic resume as soon as remote quorum is satisfied without typed leader
-  text.
 4. When quorum is satisfied, queued remote payloads are popped and merged into
   the next run task as a `Remote participant responses:` context block; queued
   remote attachment IDs are also merged into the resume attachment set.

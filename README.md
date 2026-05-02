@@ -92,23 +92,25 @@ Gate pause:
 
 - `yes` — wait for **all** required remote users **and leader response**.
 - `first_win` — **any one responder** satisfies quorum (leader or any required remote).
-- `team_config` — the **agent team** (Selector) decides who must reply; selector hints may target remote IDs and optionally `leader`.
+- `team_config` — the **agent team** decides which remote users must reply for the active gate round; leader response is not required for this mode.
 
 Runtime architecture note:
 
 - When Human Gate is enabled and remote users are configured, team build adds
 	one non-blocking `UserProxyAgent` participant per remote user (leader
-	excluded) for roster/context awareness.
+	excluded) for roster/context awareness. These proxies intentionally return
+	a sentinel "collected through Human Gate panel" message instead of blocking
+	for inline input.
 - Human input collection remains in the existing gate flow (WebSocket + Redis),
 	not inline blocking prompts inside AutoGen turns.
+
 - If no remote users are selected/online for the run, quorum handling falls
 	back to the current leader-only Human Gate behavior for all quorum modes.
 - Leader continue is enforced server-side: if required remote responses are
 	still pending, the continue request is rejected with
 	`409 {status:"awaiting_remote_users"}`.
-- When the gate compose box is empty (no text, no queued/uploaded attachments),
-	leader UI polling can auto-resume with `continue_auto` as soon as quorum is
-	satisfied.
+- The readiness lobby now uses push updates through the leader websocket
+	channel; the run auto-starts once every checked remote user is online.
 - Leader remains the only control-plane actor for hard stop/resume endpoints;
   quorum satisfaction determines eligibility to continue, not endpoint authority.
 - Once quorum is satisfied, queued remote replies are merged into the next
@@ -127,10 +129,10 @@ automatically once every checked user is online. Invitation URLs are
 idempotent and stable for `REMOTE_USER_TOKEN_TTL_SECONDS` (default 12 h) —
 repeated Copy clicks return the same URL during that window.
 
-> Phase 1 (configuration) and Phase 2 (readiness lobby) are shipped.
-> Phase 3 now includes a remote-user chat page with turn-gated reply
-> submission, attachment upload, copy-to-clipboard parity, and export modal
-> access via delegated capability tokens.
+> Remote collaboration includes configuration, readiness lobby, and a
+> dedicated remote-user chat page with turn-gated reply submission,
+> attachment upload, copy-to-clipboard parity, and export modal access via
+> delegated capability tokens.
 
 Full reference (config, lifecycle, endpoints, Redis keys, security rules):
 [docs/human_gate_remote_users.md](docs/human_gate_remote_users.md).
@@ -496,7 +498,7 @@ Full documentation: [docs/mcp_integration.md](docs/mcp_integration.md).
 | `REDIS_CANCEL_SIGNAL_TTL_SECONDS` | Cancel signal TTL (seconds) | `120` |
 | `REMOTE_USER_TOKEN_TTL_SECONDS` | Lifetime of a remote-user join-URL token (seconds). Redis is short-lived run state — the leader's next Copy click after expiry mints a fresh token. | `43200` (12 h) |
 | `REMOTE_USER_PRESENCE_TTL_SECONDS` | How long a remote user is considered online without a heartbeat refresh | `60` |
-| `REMOTE_USER_HEARTBEAT_INTERVAL_SECONDS` | Presence heartbeat cadence used by remote-user pages (Phase 3) | `30` |
+| `REMOTE_USER_HEARTBEAT_INTERVAL_SECONDS` | Presence heartbeat cadence used by remote-user pages | `30` |
 | `REMOTE_USER_CHECKED_TTL_SECONDS` | Lifetime of the leader's checked-set in Redis. This remains semantically separate from token TTL even if both values are configured equal. | `43200` (12 h) |
 | `REDIS_ATTACHMENT_TTL_SECONDS` | How long extracted attachment text is kept in Redis (seconds). Raise this if sessions span multiple days. | `86400` (24 h) |
 | `MAX_AGENT_STATE_BYTES` | Maximum byte size of serialised AutoGen agent state stored in MongoDB. Raise for long sessions with many attachments or embedded images. MongoDB's document limit is 16 MB (shared with `discussions[]`). | `1000000` (1 MB) |

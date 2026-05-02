@@ -308,8 +308,8 @@ Mode-specific pause behavior:
 - `yes`: all required remote users plus leader continue must be present before handoff.
 - `first_win`: any one responder unblocks handoff (leader continue or first required remote response).
 - `team_config`:
-  - `round_robin` uses deterministic rotation (one remote user per round).
-  - `selector` reads the latest assistant hint line `REMOTE_USERS: user_a, user_b, leader`; `leader`/`gate` targets leader response for that gate round, and no valid hint falls back to all required remotes.
+  - runtime resolves a per-round remote target set and persists it in Redis (`gate_required`) for deterministic quorum checks.
+  - leader response is not required in this mode; only targeted remote responders gate handoff.
 - If no remote users are selected for the run (or none configured), runtime
   falls back to the existing leader-only Human Gate behavior.
 

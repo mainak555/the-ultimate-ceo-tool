@@ -767,6 +767,11 @@ def normalize_chat_session(doc):
         name = str(entry.get("name") or "").strip()
         if uid and name:
             cleaned_remote.append({"user_id": uid, "name": name})
+    raw_remote_users = doc.get("remote_users")
+    remote_users_frozen = isinstance(raw_remote_users, list)
+    if not isinstance(raw_remote_users, list):
+        raw_remote_users = []
+    remote_users = [str(uid).strip() for uid in raw_remote_users if str(uid).strip()]
     return {
         "session_id": str(doc["_id"]),
         "project_id": doc.get("project_id", ""),
@@ -779,6 +784,8 @@ def normalize_chat_session(doc):
         "agent_state_meta": state_meta,
         "pending_oauth_servers": [str(s) for s in pending_oauth if isinstance(s, str)],
         "pending_remote_users": cleaned_remote,
+        "remote_users": remote_users,
+        "remote_users_frozen": remote_users_frozen,
     }
 
 
@@ -965,6 +972,48 @@ def set_session_awaiting_remote_users(session_id, pending_users):
     )
 
 
+@traced_function("service.chat.freeze_remote_users")
+def freeze_session_remote_users(project, session_id, selected_user_ids=None):
+    """Freeze selected remote users on a session document.
+
+    The frozen list is stored in ``chat_sessions.remote_users`` and reused by
+    readiness + gate quorum paths.
+    """
+    if not isinstance(project, dict) or not session_id:
+        return []
+    try:
+        oid = ObjectId(session_id)
+    except (InvalidId, TypeError):
+        return []
+
+    configured = []
+    gate = project.get("human_gate") or {}
+    for entry in (gate.get("remote_users") or []):
+        if not isinstance(entry, dict):
+            continue
+        uid = str(entry.get("id") or "").strip()
+        name = str(entry.get("name") or "").strip()
+        if uid and name:
+            configured.append(uid)
+
+    if selected_user_ids is None:
+        from agents.session_coordination import get_checked_remote_users
+
+        checked = get_checked_remote_users(session_id)
+        if checked is None:
+            selected = list(configured)
+        else:
+            checked_set = {str(uid).strip() for uid in checked if str(uid).strip()}
+            selected = [uid for uid in configured if uid in checked_set]
+    else:
+        submitted_set = {str(uid).strip() for uid in selected_user_ids if str(uid).strip()}
+        selected = [uid for uid in configured if uid in submitted_set]
+
+    col = get_collection(CHAT_SESSIONS_COLLECTION)
+    col.update_one({"_id": oid}, {"$set": {"remote_users": selected}})
+    return selected
+
+
 def compute_pending_remote_users(project, session_id):
     """Return the list of configured remote users still required for this run.
 
@@ -998,12 +1047,17 @@ def compute_pending_remote_users(project, session_id):
         list_online_remote_users,
     )
 
-    checked = get_checked_remote_users(session_id)
-    if checked is None:
-        # Leader has not selected — default to all configured users.
-        checked_set = {u["user_id"] for u in cleaned}
+    session = get_chat_session(session_id)
+    frozen = (session or {}).get("remote_users")
+    if (session or {}).get("remote_users_frozen") and isinstance(frozen, list):
+        checked_set = {str(uid).strip() for uid in frozen if str(uid).strip()}
     else:
-        checked_set = {str(c) for c in checked if isinstance(c, str)}
+        checked = get_checked_remote_users(session_id)
+        if checked is None:
+            # Leader has not selected — default to all configured users.
+            checked_set = {u["user_id"] for u in cleaned}
+        else:
+            checked_set = {str(c) for c in checked if isinstance(c, str)}
     if not checked_set:
         return []
     online = set(list_online_remote_users(session_id, list(checked_set)))
@@ -1041,6 +1095,12 @@ def _get_required_remote_users_for_gate(project, session_id):
             configured.append(uid)
     if not configured:
         return []
+
+    session = get_chat_session(session_id)
+    frozen = (session or {}).get("remote_users")
+    if (session or {}).get("remote_users_frozen") and isinstance(frozen, list):
+        frozen_set = {str(uid).strip() for uid in frozen if str(uid).strip()}
+        return [uid for uid in configured if uid in frozen_set]
 
     from agents.session_coordination import get_checked_remote_users
 
@@ -1136,7 +1196,10 @@ def compute_gate_pending_state(project, session, *, leader_has_response=False):
         session.get("session_id", ""),
     )
 
-    from agents.session_coordination import list_remote_gate_responded_users
+    from agents.session_coordination import (
+        get_remote_gate_required_users,
+        list_remote_gate_responded_users,
+    )
 
     responded_user_ids = list_remote_gate_responded_users(
         session.get("session_id", ""),
@@ -1149,17 +1212,22 @@ def compute_gate_pending_state(project, session, *, leader_has_response=False):
         pending_user_ids = [] if quorum_satisfied else list(required_user_ids)
         leader_required = not quorum_satisfied
     elif quorum == "team_config":
-        team_type = str((project.get("team") or {}).get("type") or "round_robin").strip()
-        if team_type == "round_robin":
-            target_user_ids = _team_config_round_robin_targets(required_user_ids, round_no)
-            target_leader = False
+        stored_targets = get_remote_gate_required_users(session.get("session_id", ""), round_no)
+        if isinstance(stored_targets, list):
+            required_set = set(required_user_ids)
+            target_user_ids = [uid for uid in stored_targets if uid in required_set]
         else:
-            target_user_ids, target_leader = _team_config_selector_targets(
-                session,
-                required_user_ids,
-            )
+            team_type = str((project.get("team") or {}).get("type") or "round_robin").strip()
+            if team_type == "round_robin":
+                target_user_ids = _team_config_round_robin_targets(required_user_ids, round_no)
+            else:
+                target_user_ids, _ = _team_config_selector_targets(
+                    session,
+                    required_user_ids,
+                )
         pending_user_ids = [uid for uid in target_user_ids if uid not in responded_set]
-        leader_required = bool(target_leader) and not bool(leader_has_response)
+        # team_config requires only targeted remote responders.
+        leader_required = False
     else:
         # "yes" quorum: every required remote participant + leader response.
         pending_user_ids = [uid for uid in required_user_ids if uid not in responded_set]
@@ -1330,11 +1398,16 @@ def get_remote_users_status(project, session_id, base_url=""):
         list_remote_users_with_token,
     )
 
-    checked = get_checked_remote_users(session_id)
-    if checked is None:
-        checked_set = set(cleaned_ids)  # default: all checked
+    session = get_chat_session(session_id)
+    frozen = (session or {}).get("remote_users")
+    if (session or {}).get("remote_users_frozen") and isinstance(frozen, list):
+        checked_set = {str(uid).strip() for uid in frozen if str(uid).strip()}
     else:
-        checked_set = {str(c) for c in checked if isinstance(c, str)}
+        checked = get_checked_remote_users(session_id)
+        if checked is None:
+            checked_set = set(cleaned_ids)  # default: all checked
+        else:
+            checked_set = {str(c) for c in checked if isinstance(c, str)}
     online_set = set(list_online_remote_users(session_id, cleaned_ids))
     token_set = set(list_remote_users_with_token(session_id, cleaned_ids))
 

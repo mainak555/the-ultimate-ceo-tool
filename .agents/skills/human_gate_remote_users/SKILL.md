@@ -11,10 +11,10 @@ leader**: they own MCP authorizations and start every run. **Remote users**
 only join an active chat session via a per-session join URL and may respond at
 the Human Gate.
 
-Phase 1 and Phase 2 are shipped. Phase 3 now includes remote-page runtime
-collection of per-user gate responses (Redis-backed queue consumed on leader
-continue) before the next `team.run_stream`, plus AutoGen remote-user
-participants represented as non-blocking `UserProxyAgent` entries.
+Remote-page runtime includes collection of per-user gate responses
+(Redis-backed queue consumed on leader continue) before the next
+`team.run_stream`, plus AutoGen remote-user participants represented as
+non-blocking `UserProxyAgent` entries.
 
 ---
 
@@ -35,8 +35,8 @@ human_gate = {
             "name": str,        # required, non-empty, unique within list, displayed verbatim
             "description": str, # plain-language role; used by Selector routing
         }
-        # Per-user enable/disable is a *runtime* concern (lobby/readiness in
-        # Phase 2) and is NOT a stored config field.
+        # Per-user enable/disable is a *runtime* concern (lobby/readiness)
+        # and is NOT a stored config field.
     ],
 }
 ```
@@ -126,7 +126,7 @@ Pass the parsed list through under `human_gate.remote_users` and read
 Because `id` is derived from `name`, editing the `name` of an existing row
 changes its `id`. Any per-session Redis state (tokens, presence, checked-set)
 keyed by the **old** `id` becomes unreachable for the renamed user. This is
-intentional — treat a rename as creating a new participant. The Phase 2
+intentional — treat a rename as creating a new participant. The readiness
 readiness lobby will simply present the new slug; the leader re-issues a
 join URL.
 
@@ -144,19 +144,19 @@ runtime concern (lobby/readiness), not config state.
 
 ---
 
-## Out of scope (Phase 1)
+## Out of scope
 
-- Per-session join URL minting and `chat_sessions` membership (Phase 2).
-- WebSocket / Channels delivery to the remote chat surface (Phase 3).
-- Redis-backed remote response collection feeding `discussions[]` (Phase 3).
-- Selector prompt enrichment with the remote-user roster (Phase 3).
+- Per-session join URL minting and `chat_sessions` membership.
+- WebSocket / Channels delivery to the remote chat surface.
+- Redis-backed remote response collection feeding `discussions[]`.
+- Selector prompt enrichment with the remote-user roster.
 
 When implementing those phases, this skill must be updated alongside the new
 contract changes.
 
 ---
 
-## Team runtime contract (Phase 3)
+## Team runtime contract
 
 When `human_gate.enabled=true` and `remote_users` is non-empty, team build must
 append one `UserProxyAgent` participant per configured remote user.
@@ -174,21 +174,19 @@ Quorum runtime semantics:
 - `yes`: all required remote users + leader response.
 - `first_win`: any single responder (leader or required remote).
 - `team_config`:
-  - `round_robin`: deterministic one-user target per round.
-  - `selector`: parse latest assistant hint line
-    `REMOTE_USERS: user_a, user_b, leader`; `leader` (or alias `gate`)
-    targets the session leader. If absent/invalid, fall back to all required
-    remote users and no leader target.
+  - resolve and persist per-round remote targets; preferred source is stored
+    Redis round targets (`gate_required`).
+  - fallback target selection is remote-only (round-robin deterministic target
+    or selector-derived remote targets). Leader response is not required.
 
 Control-plane authority rule (mandatory): only the leader may call the
 secret-gated hard stop/resume endpoints. Quorum satisfaction gates whether
 continue is allowed; it does not grant endpoint authority to remote users.
 
-Leader auto-resume rule (mandatory): leader UI may call
-`POST /chat/sessions/<id>/respond/` with `action=continue_auto` while gate mode
-is active only when compose text is empty and no compose attachments are
-queued/uploaded. `continue_auto` must evaluate quorum with
-`leader_has_response=False` and return `task=""` on success.
+Readiness auto-resume rule (mandatory): the leader readiness lobby is push-driven
+via websocket state updates. The frontend must automatically replay run start
+once all checked remote users are online (or none are checked) without a
+polling loop.
 
 Fallback rule (mandatory): if no remote users are selected for the run (or
 none are configured), behavior must collapse to the existing leader-only Human
@@ -196,7 +194,7 @@ Gate flow across all quorum modes.
 
 ---
 
-# Phase 2 — Readiness Lobby (pre-run gate)
+# Readiness Lobby (pre-run gate)
 
 Before any agent run starts, the leader sees an in-history "readiness lobby"
 panel listing the configured remote users with a per-row checkbox, **Copy
@@ -230,10 +228,11 @@ human presence before triggering external authorizations.
 
 | Key pattern | Value | TTL |
 |---|---|---|
-| `{ns}:remote_user_token:{session_id}:{token}` | `user_id` | `REMOTE_USER_TOKEN_TTL_SECONDS` (12 h / 43200 default) |
-| `{ns}:remote_user_token_by_user:{session_id}:{user_id}` | `token` (active token for rotation) | matches token TTL |
-| `{ns}:remote_user_online:{session_id}:{user_id}` | `"1"` | `REMOTE_USER_PRESENCE_TTL_SECONDS` (60 s default) |
-| `{ns}:remote_user_checked:{session_id}` | JSON list of `user_id`s | `REMOTE_USER_CHECKED_TTL_SECONDS` (12 h / 43200 default) |
+| `{ns}:remote_user:{session_id}:token:{token}` | `user_id` | `REMOTE_USER_TOKEN_TTL_SECONDS` (12 h / 43200 default) |
+| `{ns}:remote_user:{session_id}:token_by_user:{user_id}` | `token` (active token for rotation) | matches token TTL |
+| `{ns}:remote_user:{session_id}:online:{user_id}` | `"1"` | `REMOTE_USER_PRESENCE_TTL_SECONDS` (60 s default) |
+| `{ns}:remote_user:{session_id}:online:host` | `"1"` | `REMOTE_USER_PRESENCE_TTL_SECONDS` (60 s default) |
+| `{ns}:remote_user:{session_id}:checked` | JSON list of `user_id`s | `REMOTE_USER_CHECKED_TTL_SECONDS` (12 h / 43200 default) |
 
 All four prefixes are purged on session delete via
 `agents.session_coordination.purge_remote_users_state(session_id)`. **Never log
@@ -284,7 +283,7 @@ the gate then defaults to "all configured users are required".
 
 | Method + path | Purpose |
 |---|---|
-| `GET  /chat/sessions/<id>/readiness/status/` | Snapshot consumed by the lobby panel (3 s polling). |
+| `GET  /chat/sessions/<id>/readiness/status/` | Snapshot consumed by the lobby panel and websocket sync. |
 | `POST /chat/sessions/<id>/readiness/check/` | Form field `user_ids` (repeated). Persists checked-set in Redis. Validates IDs against project config. |
 | `POST /chat/sessions/<id>/readiness/<user_id>/token/` | Mints (or rotates) a token. Returns `{join_url}`. |
 
@@ -314,8 +313,9 @@ the Cancel button on the lobby panel resets cleanly without an SSE stream.
   chat session.") with a right-aligned Cancel button.
 - 409 branch in `_doStartRun`: `awaiting_remote_users` is checked **before**
   `awaiting_oauth`.
-- 3 s polling via `GET /readiness/status/`. Auto-replays `_doStartRun` once
-  every checked user is online (or none are checked).
+- Leader readiness websocket (`/ws/chat/<session_id>/leader/`) pushes `state`
+  updates; auto-replays `_doStartRun` once every checked user is online (or
+  none are checked).
 - Reload restoration: server renders
   `.chat-status-badge--remote-users[data-readiness-context]` in
   `chat_session_history.html`; both `DOMContentLoaded` and `htmx:afterSwap`
@@ -337,13 +337,9 @@ the Cancel button on the lobby panel resets cleanly without an SSE stream.
 OTel span: `agents.remote_user.token_mint`. **Never** log `token`, `join_url`,
 or any value derived from them.
 
-## Out of scope (Phase 2)
+## Notes
 
-- Actual remote-user page (`GET /chat/<id>/remote-user/<token>/`) and WS
-  consumer (Phase 3).
-- Real-time presence updates: in Phase 2 a remote user only flips to Online
-  when a Phase 3 WS heartbeat (or a manual `redis-cli SET …:remote_user_online:…`
-  for testing) populates the presence key.
+- Real-time presence updates rely on websocket heartbeat + Redis TTL updates
+  through `set_remote_user_online` and `set_leader_online` helpers.
 - Multi-participant gate response collection, quorum evaluation, and active
-  responder selection (now shipped in Phase 3; keep this section only as
-  historical Phase-2 scope boundary).
+  responder selection must stay aligned with this skill's contracts.

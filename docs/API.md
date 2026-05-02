@@ -70,12 +70,12 @@ See [docs/trello_integration.md](trello_integration.md) for full Trello integrat
 | `GET` | `/jira/<sid>/reference/<did>/` | `jira_reference` | Raw markdown from `discussion.content` (shared across types) |
 | `POST` | `/jira/<sid>/push/<type>/` | `jira_push` | Push issues to Jira → `{status, result: [{issue_key, summary, url, warnings, temp_id}]}`. For `type=software` the push is BFS over the parent/child tree (`temp_id` / `parent_temp_id`) and may also assign the issue to a sprint via `/rest/agile/1.0/sprint/{id}/issue` when `sprint` is non-empty. See [`docs/jira_integration.md`](jira_integration.md#jira-software-hierarchical-export). |
 
-Session-scoped Trello/Jira auth (Phase 3):
+Session-scoped Trello/Jira auth:
 
 - Leader/admin requests use `X-App-Secret-Key`.
 - Remote export requests from invitation pages may use `X-Remote-Export-Capability` instead (delegated session-scoped token).
 
-Remote user WebSocket transport (Phase 3):
+Remote user WebSocket transport:
 
 - `WS /ws/chat/<session_id>/remote-user/<token>/`
 - Client messages: `heartbeat`, `sync_state`, `submit_reply`
@@ -244,7 +244,7 @@ Human gate response endpoint contract:
   - Quorum semantics when remote users are configured:
     - `yes`: requires all required remotes plus leader continue.
     - `first_win`: leader continue OR first required remote response satisfies quorum.
-    - `team_config`: selector hint `REMOTE_USERS: ...` may target remote IDs and optional `leader`/`gate`.
+    - `team_config`: requires only targeted remote responders for the active gate round (leader response is not required).
   - `continue`: sets session status to `idle` and returns:
     - `task`: leader-authored text only (persisted as the next leader user message)
     - `context_task_suffix`: runtime-only context suffix (currently remote-user response block)
