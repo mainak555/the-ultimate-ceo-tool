@@ -111,6 +111,10 @@ Runtime architecture note:
 	`409 {status:"awaiting_remote_users"}`.
 - The readiness lobby now uses push updates through the leader websocket
 	channel; the run auto-starts once every checked remote user is online.
+- Home gate-mode history refresh is also websocket-driven through the same
+	leader channel (`WS /ws/chat/<session_id>/leader/`): while status is
+	`awaiting_input`, leader state messages include `history_html` snapshots,
+	so the Home page does not poll `GET /chat/sessions/<id>/` during gate mode.
 - Leader remains the only control-plane actor for hard stop/resume endpoints;
   quorum satisfaction determines eligibility to continue, not endpoint authority.
 - Once quorum is satisfied, queued remote replies are merged into the next

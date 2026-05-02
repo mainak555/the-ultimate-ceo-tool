@@ -258,6 +258,12 @@ unauthenticated or cookie-based variant for the leader-side readiness lobby.
 | `POST /chat/sessions/<id>/remote/attachments/` | `X-Remote-User-Token` | Upload remote participant attachments during gate turn. |
 | `WS /ws/chat/<session_id>/remote-user/<token>/` | join URL token | Live remote channel: receives pushed `state` updates and accepts `submit_reply`, `heartbeat`, and `sync_state` client messages. |
 
+### Leader websocket endpoint
+
+| Method + path | Auth | Purpose |
+|---|---|---|
+| `WS /ws/chat/<session_id>/leader/?skey=<APP_SECRET_KEY>` | admin secret in query (`skey`) | Leader readiness + gate-history channel. Receives `state` messages with `users`, `session_status`, and `history_html` snapshots during `awaiting_input`. Accepts `heartbeat` and `sync_state` client messages. |
+
 ### Remote export authorization
 
 Remote pages never receive `APP_SECRET_KEY`. Export popup calls use delegated
@@ -321,9 +327,15 @@ No token, URL, or presence flag is ever written to MongoDB or to disk.
 
 | File | Responsibility |
 |---|---|
-| [server/static/server/js/home.js](../server/static/server/js/home.js) | `_doStartRun` 409 branch, `_showReadinessPanel`, `_renderReadinessRows`, `_attachReadinessBehavior`, `_copyInvitationToClipboard`, `_restoreReadinessFromBadge`. |
+| [server/static/server/js/home.js](../server/static/server/js/home.js) | `_doStartRun` 409 branch, `_showReadinessPanel`, `_renderReadinessRows`, `_attachReadinessBehavior`, `_copyInvitationToClipboard`, `_restoreReadinessFromBadge`, leader websocket lifecycle (`_ensureLeaderReadinessWs`), and websocket-driven gate history apply (`_applyGateHistoryFromWs`). |
 | [server/templates/server/partials/chat_session_history.html](../server/templates/server/partials/chat_session_history.html) | `.chat-status-badge--remote-users[data-readiness-context]` for reload recovery. |
 | [server/static/server/scss/main.scss](../server/static/server/scss/main.scss) | `.chat-readiness-panel` (token-only theming). Mirrors `.chat-oauth-panel`. |
+
+Home gate-mode note:
+
+- While the session is in `awaiting_input`, Home no longer polls
+  `GET /chat/sessions/<id>/` for gate history refresh. The leader websocket
+  `state.history_html` payload drives badge/context updates.
 
 ### Shared with other features
 

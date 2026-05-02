@@ -300,26 +300,27 @@ class LeaderReadinessConsumer(AsyncJsonWebsocketConsumer):
     async def connect(self):
         kwargs = (self.scope.get("url_route") or {}).get("kwargs") or {}
         self.session_id = str(kwargs.get("session_id") or "").strip()
-        if not self.session_id:
-            await self.close(code=4401)
-            return
+        with _ws_traced_block("ws.leader.connect", {"session_id": self.session_id}):
+            if not self.session_id:
+                await self.close(code=4401)
+                return
 
-        query = parse_qs((self.scope.get("query_string") or b"").decode("utf-8"))
-        secret = (query.get("skey") or [""])[0].strip()
-        if not services.verify_secret_key(secret):
-            await self.close(code=4403)
-            return
+            query = parse_qs((self.scope.get("query_string") or b"").decode("utf-8"))
+            secret = (query.get("skey") or [""])[0].strip()
+            if not services.verify_secret_key(secret):
+                await self.close(code=4403)
+                return
 
-        session = await sync_to_async(services.get_chat_session, thread_sensitive=True)(self.session_id)
-        if session is None:
-            await self.close(code=4404)
-            return
+            session = await sync_to_async(services.get_chat_session, thread_sensitive=True)(self.session_id)
+            if session is None:
+                await self.close(code=4404)
+                return
 
-        await self.channel_layer.group_add(_group_name(self.session_id), self.channel_name)
-        await self.accept()
-        await sync_to_async(self._mark_leader_online, thread_sensitive=True)()
-        await self.channel_layer.group_send(_group_name(self.session_id), {"type": "remote.state"})
-        await self._send_state()
+            await self.channel_layer.group_add(_group_name(self.session_id), self.channel_name)
+            await self.accept()
+            await sync_to_async(self._mark_leader_online, thread_sensitive=True)()
+            await self.channel_layer.group_send(_group_name(self.session_id), {"type": "remote.state"})
+            await self._send_state()
 
     async def disconnect(self, code):
         if getattr(self, "session_id", ""):
@@ -327,39 +328,62 @@ class LeaderReadinessConsumer(AsyncJsonWebsocketConsumer):
 
     async def receive_json(self, content, **kwargs):
         msg_type = str((content or {}).get("type") or "").strip().lower()
-        if msg_type in ("heartbeat", "sync_state"):
-            await sync_to_async(self._mark_leader_online, thread_sensitive=True)()
-            await self.channel_layer.group_send(_group_name(self.session_id), {"type": "remote.state"})
-            await self._send_state()
-            return
-        await self.send_json({"type": "error", "error": "Unsupported message type."})
+        with _ws_traced_block(
+            "ws.leader.receive",
+            {"session_id": self.session_id, "message_type": msg_type},
+        ):
+            if msg_type in ("heartbeat", "sync_state"):
+                await sync_to_async(self._mark_leader_online, thread_sensitive=True)()
+                await self.channel_layer.group_send(_group_name(self.session_id), {"type": "remote.state"})
+                await self._send_state()
+                return
+            await self.send_json({"type": "error", "error": "Unsupported message type."})
 
     async def remote_state(self, event):
         await self._send_state()
 
     async def _send_state(self):
-        session = await sync_to_async(services.get_chat_session, thread_sensitive=True)(self.session_id)
-        if session is None:
-            await self.send_json({"type": "state", "status": "error", "error": "Session not found"})
-            return
-        project = await sync_to_async(services.get_project, thread_sensitive=True)(session.get("project_id", ""))
-        if project is None:
-            await self.send_json({"type": "state", "status": "error", "error": "Project not found"})
-            return
+        with _ws_traced_block("ws.leader.send_state", {"session_id": self.session_id}):
+            session = await sync_to_async(services.get_chat_session, thread_sensitive=True)(self.session_id)
+            if session is None:
+                await self.send_json({"type": "state", "status": "error", "error": "Session not found"})
+                return
+            project = await sync_to_async(services.get_project, thread_sensitive=True)(session.get("project_id", ""))
+            if project is None:
+                await self.send_json({"type": "state", "status": "error", "error": "Project not found"})
+                return
 
-        users = await sync_to_async(services.get_remote_users_status, thread_sensitive=True)(
-            project,
-            self.session_id,
-            "",
-        )
-        await self.send_json(
-            {
+            users = await sync_to_async(services.get_remote_users_status, thread_sensitive=True)(
+                project,
+                self.session_id,
+                "",
+            )
+            payload = {
                 "type": "state",
                 "status": "ok",
                 "users": (users or {}).get("users") or [],
                 "session_status": session.get("status", "idle"),
             }
-        )
+
+            # Home gate mode no longer polls /chat/sessions/<id>/; send history
+            # snapshots through the leader websocket while awaiting input.
+            if session.get("status") == "awaiting_input":
+                export_meta = await sync_to_async(views._build_export_meta, thread_sensitive=True)(project)
+                history_messages = await sync_to_async(views._build_history_messages, thread_sensitive=True)(
+                    session,
+                    export_meta,
+                )
+                payload["history_html"] = await sync_to_async(render_to_string, thread_sensitive=True)(
+                    "server/partials/chat_session_history.html",
+                    {
+                        "session": session,
+                        "project": project,
+                        "history_export_meta": export_meta,
+                        "history_messages": history_messages,
+                    },
+                )
+
+            await self.send_json(payload)
 
     def _mark_leader_online(self) -> None:
         from agents.session_coordination import set_leader_online

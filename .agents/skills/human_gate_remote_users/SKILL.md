@@ -316,6 +316,10 @@ the Cancel button on the lobby panel resets cleanly without an SSE stream.
 - Leader readiness websocket (`/ws/chat/<session_id>/leader/`) pushes `state`
   updates; auto-replays `_doStartRun` once every checked user is online (or
   none are checked).
+- Home gate mode refresh is websocket-driven: while status is
+  `awaiting_input`, leader `state` payloads include `history_html`; apply via
+  `home.js::_applyGateHistoryFromWs()` and do not run a `/chat/sessions/<id>/`
+  polling loop for gate history.
 - Reload restoration: server renders
   `.chat-status-badge--remote-users[data-readiness-context]` in
   `chat_session_history.html`; both `DOMContentLoaded` and `htmx:afterSwap`

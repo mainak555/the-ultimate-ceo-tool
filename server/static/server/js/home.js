@@ -447,60 +447,29 @@ document.addEventListener("DOMContentLoaded", function () {
     chatSendBtn.disabled = false;
   }
 
-  function _refreshGateSessionHistory() {
-    var sessionId = activeSessionIdInput ? activeSessionIdInput.value.trim() : "";
-    if (!sessionId || !chatMessages || _gateRefreshInFlight) return;
-    _gateRefreshInFlight = true;
-    fetch("/chat/sessions/" + sessionId + "/", {
-      method: "GET",
-      headers: {
-        "X-CSRFToken": csrfToken,
-      },
-    }).then(function (r) {
-      return r.text().then(function (html) {
-        if (!r.ok) throw new Error("Failed to refresh session history");
-        return html;
-      });
-    }).then(function (html) {
-      chatMessages.innerHTML = html;
-      if (window.renderLocalTimes) window.renderLocalTimes();
-      var gateBadge = chatMessages.querySelector(".chat-status-badge--gate[data-gate-context]");
-      if (gateBadge) {
-        try {
-          var ctx = JSON.parse(gateBadge.dataset.gateContext);
-          setGateMode(ctx);
-        } catch (e) {
-          clearGateMode();
-        }
-      } else {
+  function _applyGateHistoryFromWs(historyHtml) {
+    if (!chatMessages || typeof historyHtml !== "string") return;
+    if (chatMessages.querySelector(".chat-readiness-panel")) return;
+    chatMessages.innerHTML = historyHtml;
+    if (window.renderLocalTimes) window.renderLocalTimes();
+    var gateBadge = chatMessages.querySelector(".chat-status-badge--gate[data-gate-context]");
+    if (gateBadge) {
+      try {
+        var ctx = JSON.parse(gateBadge.dataset.gateContext);
+        setGateMode(ctx);
+      } catch (e) {
         clearGateMode();
       }
-      _maybeAutoContinueGate();
-      _restoreReadinessFromBadge();
-    }).catch(function () {
-      // Keep existing gate state when one refresh fails.
-    }).finally(function () {
-      _gateRefreshInFlight = false;
-    });
-  }
-
-  function _startGateHistoryPolling() {
-    if (_gateHistoryPollTimer) return;
-    _refreshGateSessionHistory();
-    _gateHistoryPollTimer = setInterval(function () {
-      _refreshGateSessionHistory();
-    }, 3000);
-  }
-
-  function _stopGateHistoryPolling() {
-    if (_gateHistoryPollTimer) {
-      clearInterval(_gateHistoryPollTimer);
-      _gateHistoryPollTimer = null;
+    } else {
+      clearGateMode();
     }
+    _maybeAutoContinueGate();
+    _restoreReadinessFromBadge();
   }
 
   // Activate gate mode on the bottom input bar.
   function setGateMode(data) {
+    var enteringGateMode = !_gateData;
     _gateData = data;
     _gateAutoContinueErrorUntil = 0;
     var isSingle = data && data.chat_mode === "single_assistant";
@@ -511,7 +480,9 @@ document.addEventListener("DOMContentLoaded", function () {
       chatInput.placeholder = roundText + " \u2014 enter your response\u2026";
     }
     if (chatStopBtn) chatStopBtn.hidden = false;
-    _startGateHistoryPolling();
+    if (enteringGateMode) {
+      _requestLeaderReadinessSync();
+    }
     _evalSendBtn();
   }
 
@@ -520,7 +491,6 @@ document.addEventListener("DOMContentLoaded", function () {
     _gateData = null;
     _gateAutoContinueInFlight = false;
     _gateAutoContinueErrorUntil = 0;
-    _stopGateHistoryPolling();
     if (chatInput) chatInput.placeholder = "Send a message";
     if (chatStopBtn) chatStopBtn.hidden = true;
     _evalSendBtn();
@@ -662,9 +632,6 @@ document.addEventListener("DOMContentLoaded", function () {
   var _gateData = null; // non-null while the input bar is in human-gate mode
   var _gateAutoContinueInFlight = false;
   var _gateAutoContinueErrorUntil = 0;
-  var _gateHistoryPollTimer = null;
-  var _gateRefreshInFlight = false;
-
   function _toggleWorkingBadge(show) {
     if (!chatMessages) return;
     var selector = ".chat-status-badge--running[data-working-badge='1']";
@@ -868,8 +835,11 @@ document.addEventListener("DOMContentLoaded", function () {
       + "/ws/chat/" + encodeURIComponent(sessionId) + "/leader/?skey=" + encodeURIComponent(secretKey);
   }
 
-  function _applyLeaderReadinessState(users) {
-    var rows = users || [];
+  function _applyLeaderReadinessState(data) {
+    var rows = (data && data.users) || [];
+    if (data && typeof data.history_html === "string") {
+      _applyGateHistoryFromWs(data.history_html);
+    }
     _renderPresenceStrip(rows);
     var panel = chatMessages ? chatMessages.querySelector(".chat-readiness-panel") : null;
     if (!panel) return;
@@ -927,7 +897,7 @@ document.addEventListener("DOMContentLoaded", function () {
       var data;
       try { data = JSON.parse(evt.data || "{}"); } catch (_) { return; }
       if (!data || data.type !== "state" || data.status !== "ok") return;
-      _applyLeaderReadinessState(data.users || []);
+      _applyLeaderReadinessState(data);
     });
 
     _leaderReadinessWs.addEventListener("close", function () {

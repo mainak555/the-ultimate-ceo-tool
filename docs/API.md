@@ -29,7 +29,7 @@ All routes are under the `server` app namespace.
 | `GET` | `/chat/<session_id>/remote-user/<token>/` | `remote_user_page` | Render remote participant page for invitation token |
 | `POST` | `/chat/sessions/<session_id>/remote/heartbeat/` | `chat_session_remote_heartbeat` | Refresh remote participant online presence TTL |
 | `POST` | `/chat/sessions/<session_id>/remote/attachments/` | `chat_session_remote_upload_attachments` | Upload attachments from remote participant page |
-| `GET` | `/chat/sessions/<session_id>/` | `chat_session_detail` | Load chat history panel for one session |
+| `GET` | `/chat/sessions/<session_id>/` | `chat_session_detail` | Load chat history panel for one session (HTMX/detail load; Home gate mode uses websocket `history_html` push instead of polling this endpoint) |
 | `POST` | `/chat/sessions/<session_id>/delete/` | `chat_session_delete` | Delete a chat session |
 | `POST` | `/chat/sessions/<session_id>/update/` | `chat_session_update` | Update chat session description |
 | `GET` | `/trello/<session_id>/token-status/` | `trello_token_status` | Check token validity |
@@ -80,6 +80,16 @@ Remote user WebSocket transport:
 - `WS /ws/chat/<session_id>/remote-user/<token>/`
 - Client messages: `heartbeat`, `sync_state`, `submit_reply`
 - Server messages: `state`, `ack`, `error`
+
+Leader readiness WebSocket transport:
+
+- `WS /ws/chat/<session_id>/leader/?skey=<APP_SECRET_KEY>`
+- Client messages: `heartbeat`, `sync_state`
+- Server messages: `state`
+- `state` payload includes `users` and `session_status`; while
+  `session_status == "awaiting_input"`, it also includes `history_html`
+  so Home gate-mode history refresh is push-driven (no polling loop to
+  `GET /chat/sessions/<session_id>/`).
 
 ### Project-scoped (config page — `/jira/project/<pid>/`)
 
