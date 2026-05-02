@@ -1051,6 +1051,54 @@ def _get_required_remote_users_for_gate(project, session_id):
     return [uid for uid in configured if uid in checked_set]
 
 
+def _team_config_round_robin_targets(required_user_ids, round_no):
+    """Return deterministic remote targets for round_robin team_config mode."""
+    if not required_user_ids:
+        return []
+    idx = max(0, int(round_no or 0) - 1) % len(required_user_ids)
+    return [required_user_ids[idx]]
+
+
+def _team_config_selector_targets(session, required_user_ids):
+    """Extract selector-targeted remote users from latest assistant message.
+
+    Contract: selector prompts may emit a line in assistant content:
+      REMOTE_USERS: user_a, user_b
+
+    Parsed identifiers are matched against ``required_user_ids``. Missing or
+    invalid hints fall back to ``required_user_ids`` so existing behavior
+    remains safe.
+    """
+    if not required_user_ids:
+        return []
+    discussions = (session or {}).get("discussions") or []
+    if not isinstance(discussions, list):
+        return list(required_user_ids)
+
+    import re as _re
+
+    required_set = set(required_user_ids)
+    pat = _re.compile(r"REMOTE_USERS\s*:\s*([^\n\r]+)", _re.IGNORECASE)
+    for row in reversed(discussions):
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("role") or "").strip().lower() != "assistant":
+            continue
+        content = str(row.get("content") or "")
+        match = pat.search(content)
+        if not match:
+            continue
+        raw = match.group(1)
+        candidates = []
+        for token in raw.split(","):
+            uid = str(token or "").strip()
+            if uid in required_set and uid not in candidates:
+                candidates.append(uid)
+        if candidates:
+            return candidates
+    return list(required_user_ids)
+
+
 def compute_remote_turn_state(project, session, user_id):
     """Compute per-user turn eligibility and participant strips for remote page.
 
@@ -1086,9 +1134,15 @@ def compute_remote_turn_state(project, session, user_id):
 
     if quorum == "first_win":
         pending_user_ids = required_user_ids if not responded_set else []
+    elif quorum == "team_config":
+        team_type = str((project.get("team") or {}).get("type") or "round_robin").strip()
+        if team_type == "round_robin":
+            target_user_ids = _team_config_round_robin_targets(required_user_ids, round_no)
+        else:
+            target_user_ids = _team_config_selector_targets(session, required_user_ids)
+        pending_user_ids = [uid for uid in target_user_ids if uid not in responded_set]
     else:
-        # team_config currently follows all-required semantics until selector
-        # routing ownership is added for remote turn collection.
+        # "yes" quorum: every required remote participant must respond.
         pending_user_ids = [uid for uid in required_user_ids if uid not in responded_set]
 
     can_send = (
@@ -1130,10 +1184,6 @@ def pop_remote_gate_resume_payload(project, session_id, round_no):
     """Build resume task additions from queued remote gate responses.
 
     Returns tuple: (remote_text_block, remote_attachment_ids)
-
-    The text block is intentionally empty because remote user responses are
-    already persisted as chat bubbles in discussion history. Returning the
-    same text here would duplicate content in the leader view.
     """
     if not isinstance(project, dict) or not session_id or int(round_no or 0) <= 0:
         return "", []
@@ -1145,6 +1195,7 @@ def pop_remote_gate_resume_payload(project, session_id, round_no):
         return "", []
 
     attachment_ids = []
+    response_lines = []
     for raw in payload_rows:
         try:
             row = json.loads(raw)
@@ -1152,15 +1203,26 @@ def pop_remote_gate_resume_payload(project, session_id, round_no):
             continue
         if not isinstance(row, dict):
             continue
+        rtext = str(row.get("text") or "").strip()
+        if rtext:
+            who = str(row.get("name") or row.get("user_id") or "Remote User").strip()
+            response_lines.append(f"- {who}: {rtext}")
         for aid in row.get("attachment_ids") or []:
             aid_str = str(aid or "").strip()
             if aid_str:
                 attachment_ids.append(aid_str)
 
-    if not attachment_ids:
-        return "", []
+    # Deduplicate while preserving order.
+    deduped_attachment_ids = list(dict.fromkeys(attachment_ids))
 
-    return "", attachment_ids
+    remote_text_block = ""
+    if response_lines:
+        remote_text_block = (
+            "\n\n---\nRemote participant responses:\n"
+            + "\n".join(response_lines)
+        )
+
+    return remote_text_block, deduped_attachment_ids
 
 
 def get_remote_users_status(project, session_id, base_url=""):

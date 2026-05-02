@@ -13,7 +13,8 @@ the Human Gate.
 
 Phase 1 and Phase 2 are shipped. Phase 3 now includes remote-page runtime
 collection of per-user gate responses (Redis-backed queue consumed on leader
-continue) before the next `team.run_stream`.
+continue) before the next `team.run_stream`, plus AutoGen remote-user
+participants represented as non-blocking `UserProxyAgent` entries.
 
 ---
 
@@ -152,6 +153,35 @@ runtime concern (lobby/readiness), not config state.
 
 When implementing those phases, this skill must be updated alongside the new
 contract changes.
+
+---
+
+## Team runtime contract (Phase 3)
+
+When `human_gate.enabled=true` and `remote_users` is non-empty, team build must
+append one `UserProxyAgent` participant per configured remote user.
+
+- Leader is not a `UserProxyAgent` participant.
+- Proxy input functions must be non-blocking (remote input is collected via
+  gate endpoints/WS and replayed on continue).
+- Human-gated termination count remains assistant-driven
+  (`AgentMessageTermination(assistant_count)`), preserving existing HITL cadence.
+- Selector prompts must include a guardrail telling the router not to choose
+  remote proxy participants for live turns.
+
+Quorum runtime semantics:
+
+- `yes`: all required remote users.
+- `first_win`: any single response.
+- `team_config`:
+  - `round_robin`: deterministic one-user target per round.
+  - `selector`: parse latest assistant hint line
+    `REMOTE_USERS: user_a, user_b`; if absent/invalid, fall back to all
+    required users.
+
+Fallback rule (mandatory): if no remote users are selected for the run (or
+none are configured), behavior must collapse to the existing leader-only Human
+Gate flow across all quorum modes.
 
 ---
 
@@ -304,4 +334,5 @@ or any value derived from them.
   when a Phase 3 WS heartbeat (or a manual `redis-cli SET …:remote_user_online:…`
   for testing) populates the presence key.
 - Multi-participant gate response collection, quorum evaluation, and active
-  responder selection (Phase 3).
+  responder selection (now shipped in Phase 3; keep this section only as
+  historical Phase-2 scope boundary).

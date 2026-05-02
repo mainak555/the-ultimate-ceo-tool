@@ -94,6 +94,22 @@ Gate pause:
 - `first_win` — the **first** remote response continues the run.
 - `team_config` — the **agent team** (Selector) decides who must reply.
 
+Runtime architecture note:
+
+- When Human Gate is enabled and remote users are configured, team build adds
+	one non-blocking `UserProxyAgent` participant per remote user (leader
+	excluded) for roster/context awareness.
+- Human input collection remains in the existing gate flow (WebSocket + Redis),
+	not inline blocking prompts inside AutoGen turns.
+- If no remote users are selected/online for the run, quorum handling falls
+	back to the current leader-only Human Gate behavior for all quorum modes.
+- Leader continue is enforced server-side: if required remote responses are
+	still pending, the continue request is rejected with
+	`409 {status:"awaiting_remote_users"}`.
+- Once quorum is satisfied, queued remote replies are merged into the next
+	run task as a "Remote participant responses" context block (and queued
+	remote attachment IDs are merged into the resumed run payload).
+
 The local user (the person running this app) is the **session leader**: they
 own MCP authorizations and start every run. Remote users only join an active
 chat session via a per-session **invitation URL** that the leader copies and

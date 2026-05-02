@@ -8,7 +8,7 @@ See [docs/agent_factory.md](agent_factory.md) for model client construction and 
 | Module | Responsibility |
 |--------|---------------|
 | `agents/prompt_builder.py` | Resolves agent system messages, injects project objective |
-| `agents/team_builder.py` | Builds `AssistantAgent` instances and the team from config |
+| `agents/team_builder.py` | Builds `AssistantAgent` instances, optional remote `UserProxyAgent` participants, and the team from config |
 | `agents/runtime.py` | Process-local team cache, cancellation tokens, session lifecycle |
 
 ---
@@ -49,6 +49,18 @@ Converts a single saved agent dict into a runtime spec:
 
 `description` is consumed by `SelectorGroupChat`'s `{roles}` placeholder (see Selector Prompt below). For `RoundRobinGroupChat` it has no runtime effect but is always populated for future-proofing.
 
+### Remote users as `UserProxyAgent` participants
+
+When Human Gate is enabled and `human_gate.remote_users` is non-empty,
+`build_team()` appends one `UserProxyAgent` per configured remote user.
+
+- The session leader remains outside the AutoGen participant list.
+- Proxy input is intentionally non-blocking; remote responses continue to be
+  captured via the existing Human Gate channels (WebSocket + Redis queue).
+- Selector prompts include an explicit guardrail not to route live turns to
+  remote proxies. This keeps current run behavior stable while exposing remote
+  users in team roster/context.
+
 ### `build_team(project)`
 
 Reads `project["team"]["type"]` and builds the appropriate AutoGen team.
@@ -63,7 +75,7 @@ consume one agent turn on every `run_stream()` call.
 | `human_gate.enabled` | Termination |
 |----------------------|-------------|
 | `false` | `AgentMessageTermination(n_agents × max_iterations)` — runs all rounds automatically |
-| `true` | `AgentMessageTermination(n_agents) \| ExternalTermination()` — stops after one full agent round or when Stop is pressed (graceful); see Stop Mechanism below |
+| `true` | `AgentMessageTermination(assistant_count) \| ExternalTermination()` — stops after one full assistant round or when Stop is pressed (graceful); see Stop Mechanism below |
 
 `ExternalTermination` is stored in `project["_runtime"]["external_termination"]` after `build_team()` so
 `runtime.cancel_team()` can call `.set()` for a graceful stop.
@@ -290,6 +302,16 @@ Mode-specific pause behavior:
 
 - **Multi-assistant (`n_agents >= 2`)**: gate pauses after each full round and completion can occur when `current_round` reaches `max_iterations`.
 - **Single-assistant (`n_agents == 1`) chat mode**: gate pauses after every assistant turn and does not auto-complete via `max_iterations`; the human `Stop` action controls termination.
+
+### Remote-user quorum behavior
+
+- `yes`: all required remote users must respond before handoff.
+- `first_win`: first remote response unblocks handoff.
+- `team_config`:
+  - `round_robin` uses deterministic rotation (one remote user per round).
+  - `selector` reads the latest assistant hint line `REMOTE_USERS: user_a, user_b`; when no valid hint exists, falls back to all required users.
+- If no remote users are selected for the run (or none configured), runtime
+  falls back to the existing leader-only Human Gate behavior.
 
 ---
 

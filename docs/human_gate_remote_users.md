@@ -12,7 +12,8 @@ this document is the human-readable counterpart.
 
 > **Status**: Phase 1 (configuration) and Phase 2 (readiness lobby) are
 > shipped. Phase 3 now includes a dedicated remote-user page for turn-gated
-> replies, attachment upload, and delegated export access.
+> replies, attachment upload, delegated export access, and AutoGen
+> `UserProxyAgent` participant wiring for configured remote users.
 
 ---
 
@@ -66,7 +67,7 @@ Human Gate pause (Phase 3 — Phase 2 only validates presence).
 |---|---|
 | `yes` *(default)* | Wait for **all** required remote users to reply. |
 | `first_win` | The **first** remote reply unblocks the run. |
-| `team_config` | The agent team (Selector) decides which user(s) must reply. |
+| `team_config` | Team-runtime targeting decides required remote users for the round: `round_robin` picks one deterministic remote user; `selector` parses the latest assistant hint line `REMOTE_USERS: user_a, user_b` and falls back to all required users when absent/invalid. |
 
 ### Reset rules
 
@@ -130,6 +131,28 @@ If the leader refreshes the browser while the lobby is active,
 `chat_session_history.html` re-renders the panel from the persisted
 `chat_sessions.status = "awaiting_remote_users"` field plus a fresh Redis
 snapshot. No state is lost.
+
+### Fallback to current Human Gate behavior
+
+If `remote_users` is empty, or if the leader's checked set for this run is
+empty, the run falls back to the existing leader-only Human Gate behavior.
+This fallback applies uniformly to `yes`, `first_win`, and `team_config`.
+
+---
+
+## 3.1 AutoGen participant model
+
+When Human Gate is enabled and `remote_users` is non-empty, team construction
+adds one non-blocking `UserProxyAgent` participant per configured remote user.
+
+- The session leader is intentionally **not** represented as a `UserProxyAgent`.
+- Remote proxy participants are added for team roster/context awareness.
+- Human input collection remains in the existing gate flow (WebSocket + Redis),
+  not inside AutoGen inline input prompts.
+
+The selector prompt includes a guardrail instructing the router not to pick
+remote proxy participants during live runs; remote responses are collected via
+the Human Gate panel and replayed on resume.
 
 ### Order vs. MCP OAuth
 
@@ -327,24 +350,27 @@ Token strings, join URLs, and Redis values are never set as span attributes.
 
 ---
 
-## 11. Phase-3 preview (not yet shipped)
+## 11. Phase-3 runtime (shipped)
 
-When the run resumes after a Human Gate pause, remote user replies will be
-collected via:
+When a run pauses at Human Gate (`awaiting_input`), remote-user replies are
+collected and consumed by the next resume flow:
 
-1. WebSocket / Channels delivery to a remote-user chat surface served at
+1. WebSocket / Channels delivery powers the remote-user page at
   `/chat/<id>/remote-user/<token>/`.
-2. A Redis hash keyed by `(session_id, gate_round)` accumulates incoming
-   replies until the configured `quorum` is satisfied.
-3. The `ExternalTermination` for the active gate is then released; collected
-   replies are appended as `discussions[].role="user"` entries (one per
-   remote responder, with `name` and `id` carried through) **before** the
-   next `team.run_stream` invocation.
+2. Redis round-state stores one reply payload per remote user (`text` +
+  `attachment_ids`) for `(session_id, gate_round)`.
+3. `POST /chat/sessions/<id>/respond/` with `action=continue` first enforces
+  quorum server-side. If responders are still pending, it returns HTTP 409
+  `{status:"awaiting_remote_users", users:[...]}` and does not resume.
+4. When quorum is satisfied, queued remote payloads are popped and merged into
+  the next run task as a `Remote participant responses:` context block; queued
+  remote attachment IDs are also merged into the resume attachment set.
 
-Remote users are **not** introduced to AutoGen as `UserProxyAgent`
-participants. The TeamState is participant-locked on resume, so adding a new
-agent mid-conversation would invalidate every persisted checkpoint. Remote
-users remain a runtime overlay on top of the existing message stream.
+Remote users are represented as non-blocking `UserProxyAgent` participants in
+team build when Human Gate is enabled and `remote_users` is non-empty. The
+session leader remains outside that participant list. Human input collection
+continues through the gate flow (WebSocket + Redis), not inline blocking model
+input prompts.
 
 ---
 

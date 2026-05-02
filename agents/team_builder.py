@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import TYPE_CHECKING, Sequence
 
 if TYPE_CHECKING:
@@ -16,6 +17,75 @@ from .mcp_tools import build_mcp_workbenches, resolve_mcp_servers_for_agent
 from .prompt_builder import resolve_system_prompt
 
 logger = logging.getLogger(__name__)
+
+
+def _sanitize_identifier(raw: str, fallback: str) -> str:
+    """Return a Python-identifier-safe token."""
+    safe = re.sub(r"[\s\-]+", "_", raw or "")
+    safe = re.sub(r"[^\w]", "", safe)
+    if safe and safe[0].isdigit():
+        safe = "_" + safe
+    return safe or fallback
+
+
+def _build_remote_user_proxies(project: dict) -> list:
+    """Build non-blocking UserProxyAgent participants for configured remote users.
+
+    Remote users are represented as team participants so selector/roles context
+    can include them, but live human input still follows the existing gate flow
+    over WebSocket + Redis. The proxy input function is intentionally
+    non-blocking to avoid stalling an active run when no inline human input is
+    expected.
+    """
+    gate = project.get("human_gate") or {}
+    if not gate.get("enabled"):
+        return []
+
+    proxies = []
+    used_names: set[str] = set()
+    for idx, entry in enumerate(gate.get("remote_users") or []):
+        if not isinstance(entry, dict):
+            continue
+        uid = str(entry.get("id") or "").strip()
+        name = str(entry.get("name") or "").strip()
+        remote_description = str(entry.get("description") or "").strip()
+        if not uid or not name:
+            continue
+
+        base_name = _sanitize_identifier(uid, f"remote_user_{idx}")
+        safe_name = base_name
+        suffix = 2
+        while safe_name in used_names:
+            safe_name = f"{base_name}_{suffix}"
+            suffix += 1
+        used_names.add(safe_name)
+
+        async def _proxy_input(_prompt: str, _token=None, _uid=uid) -> str:
+            # Non-blocking adapter: remote replies are collected via the
+            # existing Human Gate flow and replayed on leader continue.
+            return (
+                f"Remote participant {_uid} response is collected through "
+                "the Human Gate panel."
+            )
+
+        from autogen_agentchat.agents import UserProxyAgent
+
+        proxies.append(
+            UserProxyAgent(
+                name=safe_name,
+                description=(
+                    f"Remote participant '{name}'. This proxy exists for team "
+                    "awareness; do not block on inline input during a run."
+                    + (
+                        f" Context: {remote_description}"
+                        if remote_description
+                        else ""
+                    )
+                ),
+                input_func=_proxy_input,
+            )
+        )
+    return proxies
 
 
 class AgentMessageTermination(TerminationCondition):
@@ -133,15 +203,13 @@ def build_team(project: dict, session_id: str | None = None):
         ExternalTermination instance is stashed in project["_runtime"]["external_termination"]
         so runtime.py can call .set() on it when stop is requested.
     """
-    import re
-
     from autogen_agentchat.agents import AssistantAgent
 
     objective = project.get("objective", "")
     team_cfg = project.get("team", {})
     team_type = (team_cfg.get("type") or "round_robin").strip()
 
-    agents = []
+    assistants = []
     all_workbenches: list = []
     mcp_agent_count = 0
     for agent_cfg in project["agents"]:
@@ -149,12 +217,7 @@ def build_team(project: dict, session_id: str | None = None):
             agent_cfg, project=project, objective=objective, session_id=session_id
         )
         # Ensure name is a valid Python identifier (safety net for legacy docs)
-        safe_name = re.sub(r"[\s\-]+", "_", spec["name"])
-        safe_name = re.sub(r"[^\w]", "", safe_name)
-        if safe_name and safe_name[0].isdigit():
-            safe_name = "_" + safe_name
-        if not safe_name:
-            safe_name = f"agent_{len(agents)}"
+        safe_name = _sanitize_identifier(spec["name"], f"agent_{len(assistants)}")
         agent_kwargs = {
             "name": safe_name,
             "model_client": spec["model_client"],
@@ -172,13 +235,16 @@ def build_team(project: dict, session_id: str | None = None):
             agent_kwargs["reflect_on_tool_use"] = True
             all_workbenches.extend(wbs)
             mcp_agent_count += 1
-        agents.append(AssistantAgent(**agent_kwargs))
+        assistants.append(AssistantAgent(**agent_kwargs))
+
+    remote_proxies = _build_remote_user_proxies(project)
+    participants = list(assistants) + list(remote_proxies)
 
     # Stash workbenches on the team so runtime can register them after build.
     project.setdefault("_runtime", {})["mcp_workbenches"] = all_workbenches
 
     has_gate = project.get("human_gate", {}).get("enabled", False)
-    n_agents = len(agents)
+    assistant_count = len(assistants)
     max_iter = team_cfg.get("max_iterations", 5)
 
     if has_gate:
@@ -186,14 +252,17 @@ def build_team(project: dict, session_id: str | None = None):
         external_stop = ExternalTermination()
         # Stash so runtime.cancel_team() can call .set() for a graceful stop
         project.setdefault("_runtime", {})["external_termination"] = external_stop
-        termination = AgentMessageTermination(n_agents) | external_stop
+        # Keep existing HITL cadence: one assistant round per run. Remote
+        # proxies are represented in the team, but turn-taking remains
+        # assistant-driven unless the application explicitly routes otherwise.
+        termination = AgentMessageTermination(assistant_count) | external_stop
     else:
-        termination = AgentMessageTermination(n_agents * max_iter)
+        termination = AgentMessageTermination(assistant_count * max_iter)
 
     if team_type == "selector":
         from autogen_agentchat.teams import SelectorGroupChat
 
-        if n_agents < 2:
+        if assistant_count < 2:
             raise ValueError(
                 "Selector team type requires at least 2 assistant agents."
             )
@@ -214,19 +283,28 @@ def build_team(project: dict, session_id: str | None = None):
 
         allow_repeated = team_cfg.get("allow_repeated_speaker", True)
 
+        if remote_proxies:
+            selector_prompt += (
+                "\n\nRemote participants are represented as UserProxyAgent "
+                "entries for roster/context awareness. During live runs, do "
+                "not route speaker selection to remote proxy participants; "
+                "remote responses are collected by the Human Gate flow."
+            )
+
         logger.info(
             "agents.team.built",
             extra={
                 "team_type": "selector",
-                "agent_count": n_agents,
+                "agent_count": assistant_count,
                 "max_iterations": max_iter,
                 "human_gate": has_gate,
                 "selector_model": selector_model_name,
                 "mcp_agent_count": mcp_agent_count,
+                "remote_user_proxy_count": len(remote_proxies),
             },
         )
         return SelectorGroupChat(
-            agents,
+            participants,
             model_client=selector_model_client,
             termination_condition=termination,
             selector_prompt=selector_prompt,
@@ -240,11 +318,12 @@ def build_team(project: dict, session_id: str | None = None):
         "agents.team.built",
         extra={
             "team_type": "round_robin",
-            "agent_count": n_agents,
+            "agent_count": assistant_count,
             "max_iterations": max_iter,
             "human_gate": has_gate,
             "mcp_agent_count": mcp_agent_count,
+            "remote_user_proxy_count": len(remote_proxies),
         },
     )
-    return RoundRobinGroupChat(agents, termination_condition=termination)
+    return RoundRobinGroupChat(participants, termination_condition=termination)
 

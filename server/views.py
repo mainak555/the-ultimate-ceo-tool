@@ -268,11 +268,11 @@ def _normalize_export_agents(raw_agents):
     return [name.strip() for name in raw_agents if isinstance(name, str) and name.strip()]
 
 
-def _parse_attachment_ids(post_data):
+def _parse_attachment_ids(post_data, field_name="attachment_ids"):
     """Return de-duplicated attachment IDs from form POST data."""
     values = []
-    values.extend(post_data.getlist("attachment_ids"))
-    values.extend(post_data.getlist("attachment_ids[]"))
+    values.extend(post_data.getlist(field_name))
+    values.extend(post_data.getlist(f"{field_name}[]"))
     clean = []
     seen = set()
     for raw in values:
@@ -1012,10 +1012,27 @@ async def chat_session_run(request, session_id):
 
     task = request.POST.get("task", "").strip()
     attachment_ids = _parse_attachment_ids(request.POST)
+    context_task_suffix = request.POST.get("context_task_suffix", "")
+    context_attachment_ids = _parse_attachment_ids(
+        request.POST,
+        field_name="context_attachment_ids",
+    )
+
+    # Runtime-only context (e.g. remote-user gate payloads) is fed to the
+    # agent task but must not be rebound/persisted as the leader's message.
+    runtime_attachment_ids = []
+    _runtime_seen = set()
+    for _aid in list(attachment_ids or []) + list(context_attachment_ids or []):
+        _aid_str = str(_aid or "").strip()
+        if not _aid_str or _aid_str in _runtime_seen:
+            continue
+        runtime_attachment_ids.append(_aid_str)
+        _runtime_seen.add(_aid_str)
+    runtime_task_text = f"{task}{context_task_suffix or ''}"
 
     # First run must have a task; gate resume may send empty string
     is_first_run = session["status"] == "idle" and not session.get("discussions")
-    if is_first_run and not task and not attachment_ids:
+    if is_first_run and not task and not runtime_attachment_ids:
         return _json_error("'task' is required to start a conversation.", 400)
 
     # Single-assistant chat mode: empty Continue is invalid (no new context for agent).
@@ -1268,7 +1285,9 @@ async def chat_session_run(request, session_id):
                         extra={"session_id": session_id, "error": str(_exc)},
                     )
 
-            # Persist the human's message (initial task or gate notes) to discussions.
+            # Persist the leader's message (initial task or gate notes) to
+            # discussions. Runtime-only context (remote gate text/attachments)
+            # is intentionally excluded from persisted human content.
             if task or attachment_ids:
                 human_name = project.get("human_gate", {}).get("name") or "You"
                 human_message_id = str(uuid4())
@@ -1278,10 +1297,10 @@ async def chat_session_run(request, session_id):
                     message_id=human_message_id,
                     attachment_ids=attachment_ids,
                 )
-                text_with_context = task + await asyncio.to_thread(
+                text_with_context = runtime_task_text + await asyncio.to_thread(
                     attachment_service.build_attachment_context_block,
                     session_id=session_id,
-                    attachment_ids=attachment_ids,
+                    attachment_ids=runtime_attachment_ids,
                 )
                 # Build the actual task for the agent: plain str or MultiModalMessage
                 # when vision images are attached.
@@ -1289,7 +1308,7 @@ async def chat_session_run(request, session_id):
                     _build_agent_task_for_run,
                     text_with_context,
                     session_id,
-                    attachment_ids,
+                    runtime_attachment_ids,
                 )
                 attachments_for_display = _enrich_attachments_for_display(session_id, attachments)
                 pending_messages.append({
@@ -1308,6 +1327,19 @@ async def chat_session_run(request, session_id):
                 await asyncio.to_thread(services.append_messages, session_id, pending_messages)
                 await _abroadcast_remote_state(session_id)
                 pending_messages = []
+                task = task_for_agent
+            elif runtime_task_text or runtime_attachment_ids:
+                text_with_context = runtime_task_text + await asyncio.to_thread(
+                    attachment_service.build_attachment_context_block,
+                    session_id=session_id,
+                    attachment_ids=runtime_attachment_ids,
+                )
+                task_for_agent = await asyncio.to_thread(
+                    _build_agent_task_for_run,
+                    text_with_context,
+                    session_id,
+                    runtime_attachment_ids,
+                )
                 task = task_for_agent
             else:
                 task_for_agent = task
@@ -1591,26 +1623,62 @@ def chat_session_respond(request, session_id):
         return HttpResponse(_json_dumps({"status": "stopped"}), content_type="application/json")
 
     if action == "continue":
+        # Enforce remote-user quorum server-side before resuming.
+        if project and (project.get("human_gate") or {}).get("remote_users"):
+            leader_turn = services.compute_remote_turn_state(project, session, "")
+            pending_ids = list(leader_turn.get("pending_user_ids") or [])
+            if pending_ids:
+                configured = {
+                    str(u.get("id") or "").strip(): str(u.get("name") or "").strip()
+                    for u in (project.get("human_gate") or {}).get("remote_users") or []
+                    if isinstance(u, dict)
+                }
+                pending_rows = [
+                    {"user_id": uid, "name": configured.get(uid) or uid}
+                    for uid in pending_ids
+                ]
+                names = ", ".join(row["name"] for row in pending_rows)
+                return JsonResponse(
+                    {
+                        "status": "awaiting_remote_users",
+                        "users": pending_rows,
+                        "error": f"Waiting for remote responses from: {names}",
+                    },
+                    status=409,
+                )
+
         _remote_text, remote_attachment_ids = services.pop_remote_gate_resume_payload(
             project,
             session_id,
             int(session.get("current_round") or 0),
         )
-        # Remote user responses are already persisted as chat bubbles.
-        # Do not concatenate them into the resume task to avoid duplicate text.
-        merged_task = text
-        merged_attachment_ids = []
+        context_attachment_ids = []
         seen = set()
-        for aid in list(attachment_ids or []) + list(remote_attachment_ids or []):
+        for aid in remote_attachment_ids or []:
             aid_str = str(aid or "").strip()
             if not aid_str or aid_str in seen:
                 continue
-            merged_attachment_ids.append(aid_str)
+            context_attachment_ids.append(aid_str)
             seen.add(aid_str)
         services.set_session_status(session_id, "idle")
         _broadcast_remote_state(session_id)
         return HttpResponse(
-            _json_dumps({"status": "ok", "task": merged_task, "attachment_ids": merged_attachment_ids}),
+            _json_dumps(
+                {
+                    "status": "ok",
+                    # Leader-authored task only; runtime context is carried
+                    # separately to avoid duplicating remote text in
+                    # discussions[].
+                    "task": text,
+                    "context_task_suffix": _remote_text,
+                    # Leader-owned attachment IDs only.
+                    "attachment_ids": attachment_ids,
+                    # Runtime-only context attachment IDs from remote gate
+                    # replies. These are fed to the next run task without
+                    # rebinding them to the leader message.
+                    "context_attachment_ids": context_attachment_ids,
+                }
+            ),
             content_type="application/json",
         )
 

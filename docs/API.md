@@ -241,7 +241,11 @@ Human gate response endpoint contract:
   - `text`: optional note/context (used when `action=continue`)
   - `attachment_ids`: optional repeated values bound to the next resumed user message
 - Behavior:
-  - `continue`: sets session status to `idle` and returns `{status:"ok", task:"<text>", attachment_ids:[...]}`
+  - `continue`: sets session status to `idle` and returns:
+    - `task`: leader-authored text only (persisted as the next leader user message)
+    - `context_task_suffix`: runtime-only context suffix (currently remote-user response block)
+    - `attachment_ids`: leader-owned attachment IDs (bound to the next resumed leader message)
+    - `context_attachment_ids`: runtime-only attachment IDs (currently remote-user attachments), used for run context only
   - `stop`: sets session status to `stopped`, evicts the runtime team, returns `{status:"stopped"}`
 
 Run endpoint attachment contract:
@@ -249,10 +253,13 @@ Run endpoint attachment contract:
 - `POST /chat/sessions/<session_id>/run/`
 - Body fields:
   - `task`: optional text (required on first run unless attachments are provided)
-  - `attachment_ids`: optional repeated values
+  - `attachment_ids`: optional repeated values (leader-owned; bound to persisted leader message)
+  - `context_task_suffix`: optional runtime-only suffix appended to `task` for the agent run (not persisted in `discussions[].content`)
+  - `context_attachment_ids`: optional runtime-only repeated values fed into attachment context + multimodal image load (not rebound to leader message)
 - Behavior:
   - Non-image attachments: text is extracted lazily (Redis-cached, first call downloads from Azure Blob). Full extracted text is appended to the agent task as an `--- Attachments:` block — no truncation.
   - Image attachments: bytes are downloaded from Azure Blob and passed as `autogen_core.Image` objects inside a `MultiModalMessage` to vision-capable models. Requires `"vision": true` in the model's `agent_models.json` entry.
+  - Runtime-only context fields preserve message ownership: remote-user attachments remain bound to remote-user messages while still being supplied to the resumed run context.
 
 Attachment upload/content contract:
 

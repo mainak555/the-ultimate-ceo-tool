@@ -563,25 +563,29 @@ document.addEventListener("DOMContentLoaded", function () {
     }
 
     if (chatSendBtn) chatSendBtn.disabled = true;
-    // committed = true once upload succeeded and we've already appended the
-    // human bubble + cleared gate mode. After that point we do NOT re-enable
-    // Send on error (session reload is the recovery path).
-    var committed = false;
-
     ensureComposeAttachmentsUploaded(sessionId).then(function (attachmentIds) {
-      committed = true;
-      var attachmentsForBubble = composeUploaded.slice();
-      if (text || attachmentsForBubble.length > 0) {
-        appendHumanBubble(text || "Attached files", attachmentsForBubble);
-      }
-      if (chatInput) { chatInput.value = ""; chatInput.style.height = "auto"; chatInput.focus(); }
-      clearComposeAttachments();
-      clearGateMode();
-      return sendRespond(sessionId, "continue", text, attachmentIds);
+      return sendRespond(sessionId, "continue", text, attachmentIds).then(function (d) {
+        var attachmentsForBubble = composeUploaded.slice();
+        if (text || attachmentsForBubble.length > 0) {
+          appendHumanBubble(text || "Attached files", attachmentsForBubble);
+        }
+        if (chatInput) { chatInput.value = ""; chatInput.style.height = "auto"; chatInput.focus(); }
+        clearComposeAttachments();
+        clearGateMode();
+        return d;
+      });
     }).then(function (d) {
-      if (d && d.status === "ok") startRun(d.task || "", d.attachment_ids || []);
+      if (d && d.status === "ok") {
+        startRun(
+          d.task || "",
+          d.attachment_ids || [],
+          d.context_task_suffix || "",
+          d.context_attachment_ids || []
+        );
+      }
     }).catch(function (err) {
-      if (!committed && chatSendBtn) chatSendBtn.disabled = false;
+      if (chatSendBtn) chatSendBtn.disabled = false;
+      _evalSendBtn();
       appendBubble('<div class="chat-bubble chat-bubble--error">Error: ' + err.message + '</div>');
     });
   }
@@ -860,7 +864,7 @@ document.addEventListener("DOMContentLoaded", function () {
     _syncPresenceStripPolling();
   }
 
-  function _showReadinessPanel(sessionId, secretKey, replayTask, replayAttachmentIds) {
+  function _showReadinessPanel(sessionId, secretKey, replayTask, replayAttachmentIds, replayContextTaskSuffix, replayContextAttachmentIds) {
     setRunningState(false);
     _teardownReadinessPanel();
 
@@ -894,6 +898,8 @@ document.addEventListener("DOMContentLoaded", function () {
     if (!panel) return;
     panel._replayTask = replayTask || "";
     panel._replayAttachmentIds = (replayAttachmentIds || []).slice();
+    panel._replayContextTaskSuffix = replayContextTaskSuffix || "";
+    panel._replayContextAttachmentIds = (replayContextAttachmentIds || []).slice();
     chatMessages.scrollTop = chatMessages.scrollHeight;
 
     _attachReadinessBehavior(panel, sessionId, secretKey);
@@ -981,8 +987,10 @@ document.addEventListener("DOMContentLoaded", function () {
       _teardownReadinessPanel();
       var task = panel._replayTask || "";
       var ids = panel._replayAttachmentIds || [];
+      var contextTaskSuffix = panel._replayContextTaskSuffix || "";
+      var contextIds = panel._replayContextAttachmentIds || [];
       panel.remove();
-      _doStartRun(sessionId, secretKey, task, ids);
+      _doStartRun(sessionId, secretKey, task, ids, contextTaskSuffix, contextIds);
       setRunningState(true);
     }
 
@@ -1087,7 +1095,7 @@ document.addEventListener("DOMContentLoaded", function () {
     var secretKey = getSecretKey();
     if (!sessionId || !secretKey) return;
     badge.remove();
-    _showReadinessPanel(sessionId, secretKey, "", []);
+    _showReadinessPanel(sessionId, secretKey, "", [], "", []);
   }
 
   // ------------------------------------------------------------------
@@ -1113,7 +1121,7 @@ document.addEventListener("DOMContentLoaded", function () {
     return pid;
   }
 
-  function _showOAuthGatePanel(sessionId, secretKey, servers, replayTask, replayAttachmentIds) {
+  function _showOAuthGatePanel(sessionId, secretKey, servers, replayTask, replayAttachmentIds, replayContextTaskSuffix, replayContextAttachmentIds) {
     setRunningState(false);
     _teardownOAuthGate();
 
@@ -1146,6 +1154,8 @@ document.addEventListener("DOMContentLoaded", function () {
     if (!panel) return;
     panel._replayTask = replayTask || "";
     panel._replayAttachmentIds = (replayAttachmentIds || []).slice();
+    panel._replayContextTaskSuffix = replayContextTaskSuffix || "";
+    panel._replayContextAttachmentIds = (replayContextAttachmentIds || []).slice();
     chatMessages.scrollTop = chatMessages.scrollHeight;
 
     _attachOAuthGateBehavior(panel, sessionId, secretKey);
@@ -1179,9 +1189,11 @@ document.addEventListener("DOMContentLoaded", function () {
       _teardownOAuthGate();
       var task = panel._replayTask || "";
       var ids = panel._replayAttachmentIds || [];
+      var contextTaskSuffix = panel._replayContextTaskSuffix || "";
+      var contextIds = panel._replayContextAttachmentIds || [];
       panel.remove();
       // Re-issue the run; server will gate again if anything is still missing.
-      _doStartRun(sessionId, secretKey, task, ids);
+      _doStartRun(sessionId, secretKey, task, ids, contextTaskSuffix, contextIds);
       setRunningState(true);
     }
 
@@ -1267,7 +1279,7 @@ document.addEventListener("DOMContentLoaded", function () {
     });
   }
 
-  function startRun(task, attachmentIds) {
+  function startRun(task, attachmentIds, contextTaskSuffix, contextAttachmentIds) {
     var sessionId = activeSessionIdInput ? activeSessionIdInput.value.trim() : "";
     if (!sessionId) { return; }
 
@@ -1284,14 +1296,25 @@ document.addEventListener("DOMContentLoaded", function () {
     // users:[...]} (Phase 2) or {status:"awaiting_oauth", servers:[...]}.
     // The SSE stream may also emit `awaiting_oauth` mid-run. Both paths
     // are handled inside _doStartRun.
-    _doStartRun(sessionId, secretKey, task, attachmentIds);
+    _doStartRun(
+      sessionId,
+      secretKey,
+      task,
+      attachmentIds,
+      contextTaskSuffix,
+      contextAttachmentIds
+    );
   }
 
-  function _doStartRun(sessionId, secretKey, task, attachmentIds) {
+  function _doStartRun(sessionId, secretKey, task, attachmentIds, contextTaskSuffix, contextAttachmentIds) {
     var body = new URLSearchParams();
     body.append("task", task || "");
+    body.append("context_task_suffix", contextTaskSuffix || "");
     (attachmentIds || []).forEach(function (id) {
       if (id) body.append("attachment_ids", id);
+    });
+    (contextAttachmentIds || []).forEach(function (id) {
+      if (id) body.append("context_attachment_ids", id);
     });
 
     return fetch("/chat/sessions/" + sessionId + "/run/", {
@@ -1309,11 +1332,26 @@ document.addEventListener("DOMContentLoaded", function () {
         // gate runs first server-side, so it is checked before OAuth.
         return response.json().then(function (d) {
           if (d && d.status === "awaiting_remote_users") {
-            _showReadinessPanel(sessionId, secretKey, task, attachmentIds);
+            _showReadinessPanel(
+              sessionId,
+              secretKey,
+              task,
+              attachmentIds,
+              contextTaskSuffix,
+              contextAttachmentIds
+            );
             return;
           }
           if (d && d.status === "awaiting_oauth") {
-            _showOAuthGatePanel(sessionId, secretKey, d.servers || [], task, attachmentIds);
+            _showOAuthGatePanel(
+              sessionId,
+              secretKey,
+              d.servers || [],
+              task,
+              attachmentIds,
+              contextTaskSuffix,
+              contextAttachmentIds
+            );
             return;
           }
           throw new Error(d.error || "Run failed");
