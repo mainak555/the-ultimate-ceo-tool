@@ -131,7 +131,7 @@ See [docs/agent_factory.md](agent_factory.md) for the full `agent_models.json` s
 
 - **Env vars**: Always `os.getenv("VAR", "default")`. No third-party env library.
 - **Provider secrets**: API keys are read from env only — `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, `AZURE_OPENAI_API_KEY`, `AZURE_ANTHROPIC_API_KEY`.
-- **Provider endpoints**: Azure endpoint URLs are stored per-model in `agent_models.json` under the `endpoint` field. No endpoint env var is used; each Azure resource has its own URL.
+- **Provider endpoints**: Endpoint resolution order is per-model `endpoint` in `agent_models.json`, then provider env fallback `{PROVIDER_UPPER}_API_URL`. Azure providers still require a resolved endpoint after fallback.
 - **No Django ORM**: `DATABASES = {}`. Sessions use signed cookies.
 - **Runtime state split**: Redis serves two roles — (1) active run coordination (lease per `session_id`, heartbeat, cross-instance cancel signal via `agents/session_coordination.py`); (2) attachment text cache (`{REDIS_NAMESPACE}:attachment:{session_id}:{attachment_id}:text`, TTL `REDIS_ATTACHMENT_TTL_SECONDS`, default 24 h). MongoDB persists durable discussion history and `agent_state` resume data (no file content). Azure Blob holds raw attachment bytes.
 - **Secret key auth**: GET/POST HTMX requests can carry `X-App-Secret-Key`; invalid or missing keys get read-only views or rejected saves.

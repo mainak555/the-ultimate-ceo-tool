@@ -172,8 +172,9 @@ Responses:
 Model runtime notes:
 - Model provider metadata is sourced from `agent_models.json` in the root.
 - Runtime client creation expects provider keys in environment variables: `<PROVIDER>_API_KEY`.
-- Azure models additionally require `AZURE_API_URL`.
-- For Azure entries, model keys are deployment names.
+- Endpoint resolution order is: JSON `endpoint` first, then provider fallback env var `{PROVIDER_UPPER}_API_URL`.
+- Azure providers (`azure_openai`, `azure_anthropic`) still require a resolved endpoint after fallback.
+- Azure deployment routing uses optional `deployment_name` (defaults to the model key); model keys are UI/runtime keys, not required to equal deployment names.
 
 ## MongoDB Collection
 
@@ -224,11 +225,13 @@ Model runtime notes:
   "agent_state": {
     "source": "autogen_team_state",
     "version": "1.0.0",
-    "saved_at": "2026-04-20T11:22:33.000000+00:00",
+    "saved_at": {"$date": "2026-04-20T11:22:33.000000+00:00"},
     "state": { "type": "TeamState", "...": "AutoGen payload" }
   }
 }
 ```
+
+`saved_at` is stored in MongoDB as a BSON Date and normalized to an ISO string in API/UI read paths.
 
 `pending_remote_users` is present only while `status` is `awaiting_remote_users`.
 
