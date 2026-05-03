@@ -1,13 +1,7 @@
 """
 MCP OAuth 2.0 Authorization Code + PKCE views.
 
-Three views, generic-page design:
-
-  mcp_oauth_check   GET  /mcp/oauth/check/<session_id>/
-      Returns {servers: [{server_name, label, authorized}], all_authorized: bool}.
-      Used by the in-history authorization panel (home.js polling fallback)
-      to flip rows to authorized state when postMessage from the popup is
-      blocked or missed.
+Two views, generic-page design:
 
   mcp_oauth_start   GET  /mcp/oauth/start/
       One entry point for both phases. Discriminated by `flow` query param:
@@ -18,13 +12,20 @@ Three views, generic-page design:
 
   mcp_oauth_callback GET /mcp/oauth/callback/
       Single fixed registered redirect URI. Recovers state from Redis,
-      exchanges code at token_url, branches on `flow` from state, renders
+      exchanges code at token_url, increments the Redis readiness counter via
+      publish_oauth_server_authorized(), branches on `flow` from state, renders
       the shared `oauth_flow.html` template for both success and error.
+
+OAuth readiness (pre-run and mid-run gate) is delivered via WebSocket:
+  ws/mcp/oauth/<session_id>/?skey=...  →  server/consumers.py::OAuthReadinessConsumer
+
+No polling endpoint exists. The deprecated /mcp/oauth/check/<session_id>/
+view has been removed.
 
 Secret handling:
   client_secret is stored masked (SECRET_MASK) in the normalized project doc.
-  We always load the raw project via get_project_raw() before substituting
-  OAuth credentials. The token endpoint POST uses the raw client_secret; it is
+  It is restored from the DB on save and never returned to the browser.
+  The raw client_secret is used only for the token endpoint POST and is
   never logged or set as a span attribute.
 """
 
@@ -46,7 +47,6 @@ from django.views.decorators.http import require_GET
 
 from agents.session_coordination import (
     get_and_delete_mcp_oauth_state,
-    get_mcp_oauth_token,
     set_mcp_oauth_state,
     set_mcp_oauth_test_status,
     set_mcp_oauth_token,
@@ -186,57 +186,7 @@ def _render_error(
 
 
 # ---------------------------------------------------------------------------
-# View 1 — Pre-run OAuth check
-# ---------------------------------------------------------------------------
-
-@require_GET
-def mcp_oauth_check(request, session_id):
-    """
-    GET /mcp/oauth/check/<session_id>/
-
-    Returns the authorization status for every MCP server that has an OAuth
-    config on the project associated with this session.
-    """
-    if not _has_valid_secret(request):
-        return JsonResponse({"error": "Unauthorized"}, status=403)
-
-    from .services import get_chat_session
-
-    session_doc = get_chat_session(session_id)
-    if not session_doc:
-        return JsonResponse({"error": "Session not found"}, status=404)
-
-    project_id = session_doc.get("project_id", "")
-    if not project_id:
-        return JsonResponse({"servers": [], "all_authorized": True, "project_id": ""})
-
-    project_raw = get_project_raw(project_id)
-    if not project_raw:
-        return JsonResponse({"servers": [], "all_authorized": True, "project_id": project_id})
-
-    oauth_configs = project_raw.get("mcp_oauth_configs") or {}
-    if not oauth_configs:
-        return JsonResponse({"servers": [], "all_authorized": True, "project_id": project_id})
-
-    servers = []
-    for server_name in oauth_configs:
-        token = get_mcp_oauth_token(session_id, server_name)
-        servers.append({
-            "server_name": server_name,
-            "label": server_name,
-            "authorized": bool(token),
-        })
-
-    all_authorized = all(s["authorized"] for s in servers)
-    return JsonResponse({
-        "servers": servers,
-        "all_authorized": all_authorized,
-        "project_id": project_id,
-    })
-
-
-# ---------------------------------------------------------------------------
-# View 2 — OAuth flow start (single endpoint for both flows)
+# View 1 — OAuth flow start (single endpoint for both flows)
 # ---------------------------------------------------------------------------
 
 @require_GET
@@ -599,6 +549,12 @@ def mcp_oauth_callback(request):
             "agents.mcp.oauth_authorized",
             extra={"server_name": server_name, "session_id": session_id, "ttl_seconds": ttl},
         )
+
+        # Publish readiness event so the WebSocket consumer can push the update
+        # to the browser immediately without polling.
+        from agents.session_coordination import publish_oauth_server_authorized
+        total_count = len(project_raw.get("mcp_oauth_configs") or {})
+        publish_oauth_server_authorized(session_id, server_name, total_count)
         return _render_outcome(
             request,
             outcome="success",

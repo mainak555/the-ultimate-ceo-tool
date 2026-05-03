@@ -433,21 +433,130 @@ def get_mcp_oauth_test_status(project_id: str, server_name: str) -> bool:
         return False
 
 
+# ---------------------------------------------------------------------------
+# MCP OAuth 2.0 — readiness counter + pub/sub (WebSocket push)
+# ---------------------------------------------------------------------------
+
+_MCP_OAUTH_READINESS_TTL: Final[int] = 86400  # 24 hours (matches attachment cache)
+
+
+def _mcp_oauth_server_count_key(session_id: str) -> str:
+    """Redis key holding the count of already-authorized OAuth servers for a session."""
+    return f"{_namespace()}:mcp_oauth:run:{session_id}:servers"
+
+
+def _mcp_oauth_pubsub_channel(session_id: str) -> str:
+    """Redis pub/sub channel name for OAuth readiness events for a session."""
+    return f"{_namespace()}:mcp_oauth:readiness:{session_id}"
+
+
+def init_mcp_oauth_readiness(session_id: str, authorized_count: int) -> None:
+    """Initialise (or reset) the authorisation counter for an OAuth gate.
+
+    Sets the counter to ``authorized_count`` with a 24-hour TTL.  Call this
+    once just before returning the 409 response or the SSE ``awaiting_mcp_oauth``
+    event so the WebSocket consumer can compute the initial per-server state
+    without an extra DB round-trip.
+    """
+    key = _mcp_oauth_server_count_key(session_id)
+    try:
+        _get_client().set(key, authorized_count, ex=_MCP_OAUTH_READINESS_TTL)
+    except Exception:  # noqa: BLE001
+        logger.warning(
+            "agents.mcp.oauth_readiness_init_failed",
+            extra={"session_id": session_id},
+        )
+
+
+def get_mcp_oauth_authorized_count(session_id: str) -> int:
+    """Return the number of OAuth servers already authorized for this session (0 if unknown)."""
+    key = _mcp_oauth_server_count_key(session_id)
+    try:
+        raw = _get_client().get(key)
+        return int(raw) if raw is not None else 0
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+def publish_oauth_server_authorized(
+    session_id: str,
+    server_name: str,
+    total_count: int,
+) -> int:
+    """Atomically increment the authorized-server counter and publish a readiness event.
+
+    Returns the new authorized count after incrementing.  Publishes to
+    ``_mcp_oauth_pubsub_channel(session_id)`` so the WebSocket consumer can push
+    the update to the browser without polling.
+
+    The publish JSON payload is::
+
+        {"server_name": <str>, "authorized_count": <int>, "total_count": <int>}
+    """
+    import json as _json
+
+    key = _mcp_oauth_server_count_key(session_id)
+    channel = _mcp_oauth_pubsub_channel(session_id)
+    try:
+        client = _get_client()
+        new_count = client.incr(key)
+        # Refresh TTL after increment so it doesn't silently expire mid-session.
+        client.expire(key, _MCP_OAUTH_READINESS_TTL)
+        payload = _json.dumps({
+            "server_name": server_name,
+            "authorized_count": new_count,
+            "total_count": total_count,
+        })
+        client.publish(channel, payload)
+        logger.info(
+            "agents.mcp.oauth_readiness_published",
+            extra={
+                "session_id": session_id,
+                "server_name": server_name,
+                "authorized_count": new_count,
+                "total_count": total_count,
+            },
+        )
+        return new_count
+    except Exception:  # noqa: BLE001
+        logger.warning(
+            "agents.mcp.oauth_readiness_publish_failed",
+            extra={"session_id": session_id, "server_name": server_name},
+        )
+        return 0
+
+
+def delete_mcp_oauth_readiness(session_id: str) -> None:
+    """Delete the readiness counter key when a run successfully starts.
+
+    Silent on failure — a stale key will expire naturally after 24 hours.
+    """
+    key = _mcp_oauth_server_count_key(session_id)
+    try:
+        _get_client().delete(key)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 __all__ = [
     "SessionCoordinationError",
     "acquire_run_lease",
     "clear_cancel_signal",
     "clear_run_traceparent",
+    "delete_mcp_oauth_readiness",
     "ensure_redis_available",
     "get_heartbeat_interval_seconds",
     "get_instance_id",
+    "get_mcp_oauth_authorized_count",
     "get_mcp_oauth_test_status",
     "get_mcp_oauth_token",
     "get_and_delete_mcp_oauth_state",
     "get_redis_client",
     "get_run_traceparent",
+    "init_mcp_oauth_readiness",
     "is_cancel_signaled",
     "list_authorized_oauth_servers",
+    "publish_oauth_server_authorized",
     "purge_mcp_oauth_tokens",
     "release_run_lease",
     "renew_run_lease",

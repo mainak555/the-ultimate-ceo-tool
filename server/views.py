@@ -876,7 +876,7 @@ async def chat_session_run(request, session_id):
     if session is None:
         return _json_error("Session not found", 404)
 
-    valid_states = ("idle", "awaiting_input", "awaiting_oauth")
+    valid_states = ("idle", "awaiting_input", "awaiting_mcp_oauth")
     if session["status"] not in valid_states:
         return _json_error(f"Session is currently '{session['status']}'", 409)
 
@@ -909,12 +909,18 @@ async def chat_session_run(request, session_id):
 
     # MCP OAuth pre-run gate: any reachable MCP server that requires OAuth and
     # has no session-scoped Bearer token in Redis blocks the run start. The
-    # session is parked in ``awaiting_oauth`` and the frontend renders the
+    # session is parked in ``awaiting_mcp_oauth`` and the frontend renders the
     # in-history authorization card. The lease is NOT acquired here.
     pending_oauth = await asyncio.to_thread(
         services.compute_pending_oauth_servers, raw_project, session_id
     )
     if pending_oauth:
+        all_oauth = await asyncio.to_thread(
+            services.list_all_reachable_oauth_servers, raw_project
+        )
+        authorized_count = max(0, len(all_oauth) - len(pending_oauth))
+        from agents.session_coordination import init_mcp_oauth_readiness
+        await asyncio.to_thread(init_mcp_oauth_readiness, session_id, authorized_count)
         await asyncio.to_thread(
             services.set_session_awaiting_oauth, session_id, pending_oauth
         )
@@ -927,7 +933,7 @@ async def chat_session_run(request, session_id):
             },
         )
         return JsonResponse(
-            {"status": "awaiting_oauth", "servers": pending_oauth},
+            {"status": "awaiting_mcp_oauth", "servers": pending_oauth},
             status=409,
         )
 
@@ -973,6 +979,9 @@ async def chat_session_run(request, session_id):
                     extra={"session_id": session_id, "phase": "release_conflict"},
                 )
             return _json_error("Session status changed before run start.", 409)
+        # Clean up the OAuth readiness counter — it is no longer needed once running.
+        from agents.session_coordination import delete_mcp_oauth_readiness
+        await asyncio.to_thread(delete_mcp_oauth_readiness, session_id)
     except SessionCoordinationError:
         await asyncio.to_thread(release_run_lease, session_id, owner_id)
         logger.exception(
@@ -1079,6 +1088,14 @@ async def chat_session_run(request, session_id):
                     services.compute_pending_oauth_servers, raw_project, session_id
                 )
                 if pending_oauth_mid:
+                    all_oauth_mid = await asyncio.to_thread(
+                        services.list_all_reachable_oauth_servers, raw_project
+                    )
+                    authorized_count_mid = max(0, len(all_oauth_mid) - len(pending_oauth_mid))
+                    from agents.session_coordination import init_mcp_oauth_readiness
+                    await asyncio.to_thread(
+                        init_mcp_oauth_readiness, session_id, authorized_count_mid
+                    )
                     await asyncio.to_thread(
                         services.set_session_awaiting_oauth, session_id, pending_oauth_mid
                     )
@@ -1090,7 +1107,7 @@ async def chat_session_run(request, session_id):
                             "server_names": pending_oauth_mid,
                         },
                     )
-                    yield _sse("awaiting_oauth", {"servers": pending_oauth_mid})
+                    yield _sse("awaiting_mcp_oauth", {"servers": pending_oauth_mid})
                     return
                 await asyncio.to_thread(services.set_session_status, session_id, "idle")
                 yield _sse("error", {"message": str(exc)})

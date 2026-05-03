@@ -792,10 +792,7 @@ def set_session_status(session_id, status):
 
 @traced_function("service.chat.try_set_running")
 def try_set_session_running(session_id):
-    """Atomically set status to running only from idle/awaiting_input/awaiting_oauth.
-
-    Also clears any ``pending_oauth_servers`` left over from an awaiting_oauth gate.
-    """
+    """Atomically set status to running only from idle/awaiting_input/awaiting_mcp_oauth."""
     try:
         oid = ObjectId(session_id)
     except (InvalidId, TypeError):
@@ -803,28 +800,28 @@ def try_set_session_running(session_id):
 
     col = get_collection(CHAT_SESSIONS_COLLECTION)
     result = col.update_one(
-        {"_id": oid, "status": {"$in": ["idle", "awaiting_input", "awaiting_oauth"]}},
-        {"$set": {"status": "running"}, "$unset": {"pending_oauth_servers": ""}},
+        {"_id": oid, "status": {"$in": ["idle", "awaiting_input", "awaiting_mcp_oauth"]}},
+        {"$set": {"status": "running"}},
     )
     return result.modified_count == 1
 
 
-@traced_function("service.chat.set_awaiting_oauth")
-def set_session_awaiting_oauth(session_id, server_names):
+@traced_function("service.chat.set_awaiting_mcp_oauth")
+def set_session_awaiting_oauth(session_id, server_names=None):
     """Mark a chat session as awaiting MCP OAuth authorization.
 
-    Stores the pending server-name list and flips ``status`` to ``awaiting_oauth``.
-    Idempotent. Caller is responsible for ordering the server names.
+    Flips ``status`` to ``awaiting_mcp_oauth``.  Idempotent.
+    ``server_names`` is accepted for backward compatibility but not stored —
+    the pending list is tracked entirely via Redis (readiness counter + pub/sub).
     """
     try:
         oid = ObjectId(session_id)
     except (InvalidId, TypeError):
         return
-    names = [str(s) for s in (server_names or []) if isinstance(s, str)]
     col = get_collection(CHAT_SESSIONS_COLLECTION)
     col.update_one(
         {"_id": oid},
-        {"$set": {"status": "awaiting_oauth", "pending_oauth_servers": names}},
+        {"$set": {"status": "awaiting_mcp_oauth"}},
     )
 
 
@@ -868,6 +865,42 @@ def compute_pending_oauth_servers(raw_project, session_id):
     from agents.session_coordination import list_authorized_oauth_servers
     authorized = set(list_authorized_oauth_servers(session_id, needs_auth))
     return [name for name in needs_auth if name not in authorized]
+
+
+def list_all_reachable_oauth_servers(raw_project):
+    """Return all MCP server names that are reachable by this project AND require OAuth.
+
+    Unlike ``compute_pending_oauth_servers`` this does NOT check Redis for
+    existing tokens — it returns the full set regardless of authorization state.
+    Used to compute ``total_count`` for the readiness counter.
+    """
+    if not isinstance(raw_project, dict):
+        return []
+    oauth_configs = raw_project.get("mcp_oauth_configs") or {}
+    if not isinstance(oauth_configs, dict) or not oauth_configs:
+        return []
+
+    reachable: set[str] = set()
+    agents = raw_project.get("agents") or []
+    has_shared = False
+    for agent in agents:
+        if not isinstance(agent, dict):
+            continue
+        scope = (agent.get("mcp_tools") or "none").strip().lower()
+        if scope == "shared":
+            has_shared = True
+        elif scope == "dedicated":
+            cfg = agent.get("mcp_configuration") or {}
+            servers = (cfg or {}).get("mcpServers") or {}
+            if isinstance(servers, dict):
+                reachable.update(servers.keys())
+    if has_shared:
+        shared_cfg = raw_project.get("shared_mcp_tools") or {}
+        shared_servers = (shared_cfg or {}).get("mcpServers") or {}
+        if isinstance(shared_servers, dict):
+            reachable.update(shared_servers.keys())
+
+    return sorted(reachable.intersection(oauth_configs.keys()))
 
 
 @traced_function("service.chat.append_messages")

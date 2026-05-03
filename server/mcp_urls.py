@@ -4,9 +4,6 @@ from django.urls import path
 from . import mcp_views
 
 urlpatterns = [
-    # Pre-run check: which servers have valid OAuth tokens for this session?
-    path("oauth/check/<str:session_id>/", mcp_views.mcp_oauth_check, name="mcp_oauth_check"),
-
     # Single entry point for both phases: ?flow=test|run&server_name=...&...
     path("oauth/start/", mcp_views.mcp_oauth_start, name="mcp_oauth_start"),
 

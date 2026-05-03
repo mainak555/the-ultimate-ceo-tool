@@ -152,24 +152,36 @@ location for credential material referenced by MCP servers. Rules:
 `client_secret` follows the SECRET_MASK round-trip and must never be sent
 back to the browser after the first save.
 
-### Endpoints (single generic start handler)
+### Endpoints
 
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/mcp/oauth/start/?flow=test\|run&server_name=...&project_id=...&[session_id=...]&skey=...` | Single entry point for both flows. Generates PKCE (S256, `secrets.token_urlsafe(64)` verifier), persists state metadata to Redis (300 s TTL), 302-redirects to `auth_url`. |
-| GET | `/mcp/oauth/callback/` | Provider redirect-back. Atomic `getdel` on `state`, exchanges code at `token_url`, branches on stored `flow`, renders shared `server/templates/server/oauth_flow.html`. |
-| GET | `/mcp/oauth/check/<session_id>/` | JSON status of all OAuth servers required for the session. Header secret only. |
+| GET | `/mcp/oauth/callback/` | Provider redirect-back. Atomic `getdel` on `state`, exchanges code at `token_url`, increments Redis readiness counter via `publish_oauth_server_authorized()`, renders shared `server/templates/server/oauth_flow.html`. |
+| WS | `ws/mcp/oauth/<session_id>/` | Readiness stream. Authenticates via `?skey=` before `accept()` (close code 4003 on failure). Sends initial `state` frame from Redis, then pushes `update`/`complete` frames via Redis pub/sub. **No polling.** |
 
 Do NOT add per-flow endpoints (`/oauth/test/`, `/oauth/authorize/`, etc.).
-The single handler discriminated by `?flow=` is the blessed pattern.
+Do NOT add a `/mcp/oauth/check/` polling endpoint. The single HTTP start
+handler discriminated by `?flow=` plus the WebSocket readiness stream is the
+blessed pattern.
+
+### WebSocket message contract
+
+| Frame | Payload | Trigger |
+|-------|---------|--------|
+| `state` | `{type:"state", servers:[{name, authorized}], total:N}` | Once on connect — current Redis counter vs. project total |
+| `update` | `{type:"update", server_name, authorized_count, total_count}` | Each `publish_oauth_server_authorized()` call in callback |
+| `complete` | `{type:"complete"}` | When `authorized_count >= total_count` |
+| `error` | `{type:"error", message}` | Session / project not found after accept |
 
 ### Popup secret-key rule
 
 `/mcp/oauth/start/` is reachable from `window.open()`, which cannot set
 request headers. `_has_valid_oauth_secret(request)` accepts the secret as
-either `X-App-Secret-Key` header or `?skey=` query param. **Every other
-MCP endpoint (including `/check/`) remains header-only.** Do not extend the
-query-param fallback to non-popup endpoints.
+either `X-App-Secret-Key` header or `?skey=` query param. The WebSocket
+handshake also accepts `?skey=` (JS `WebSocket()` cannot set headers).
+**All other MCP HTTP endpoints remain `X-App-Secret-Key` header-only.** Do
+not extend the query-param fallback to non-popup, non-WS endpoints.
 
 ### Outcome rendering
 
@@ -180,16 +192,44 @@ Auto-close defaults: 2 s on `flow=run` success, 5 s on `flow=test` success,
 **30 s on error** (so users can read provider error messages). Never
 inline popup HTML inside views — always go through the helpers.
 
+### Pre-run gate — server flow
+
+1. `POST /chat/sessions/<id>/run/` calls `compute_pending_oauth_servers()`. If any server lacks a Redis token:
+   - Call `list_all_reachable_oauth_servers(raw_project)` to get `total_count`.
+   - Seed counter: `init_mcp_oauth_readiness(session_id, total_count - len(pending))` → Redis key `{ns}:mcp_oauth:run:{session_id}:servers` (24 h TTL).
+   - Set `session.status = "awaiting_mcp_oauth"` (no `pending_oauth_servers` field — no DB list storage).
+   - Return **HTTP 409** `{status:"awaiting_mcp_oauth", servers:[...pending names...]}`.
+2. Frontend opens WS `ws/mcp/oauth/<session_id>/?skey=...`; consumer sends `state` frame.
+3. Each OAuth callback calls `publish_oauth_server_authorized(session_id, server_name, total_count)`: increments counter, publishes to `{ns}:mcp_oauth:readiness:{session_id}`.
+4. Consumer pushes `update` frames; on `complete`, frontend calls `_onAllAuthorized()` → re-submits run POST.
+5. Run POST acquires lease, calls `delete_mcp_oauth_readiness(session_id)` to clean up the counter, then proceeds.
+
+**`try_set_session_running`** must include `"awaiting_mcp_oauth"` in the valid-state `$in` list alongside `"idle"` and `"awaiting_input"`.
+
 ### Run-time injection
 
 - Session-scoped token Redis key: `{ns}:mcp_oauth:run:{session_id}:{server_name}:token`.
-- Test status (config-form-only) Redis key: `{ns}:mcp_oauth:test:{project_id}:{server_name}:status` (600 s TTL). The test flow MUST NOT write to the session token key.
+- Readiness counter key: `{ns}:mcp_oauth:run:{session_id}:servers` (int, 24 h TTL).
+- Pub/sub channel: `{ns}:mcp_oauth:readiness:{session_id}` (no TTL; publish-only).
+- Test status (config-form-only) Redis key: `{ns}:mcp_oauth:test:{project_id}:{server_name}:status` (600 s TTL). The test flow MUST NOT write to the session token key or the readiness counter.
 - TTL derivation: decode the JWT `access_token` payload (no signature verify), read `exp` (UTC epoch), compute `TTL = exp − now()`. If `exp` is absent or the JWT cannot be decoded, use the hardcoded default `_MCP_OAUTH_DEFAULT_TTL = 3 h`. No `expires_in` fallback. No env-var cap. The Redis key expires exactly when the token does, so cache hits during an active session are always valid.
 - `agents/mcp_tools.py::_build_server_params(name, entry, session_id, has_oauth)` injects `Authorization: Bearer <token>` into the streamable-HTTP `headers` dict. Missing token → `ValueError` (surfaced as a run error).
 - No mid-session refresh (v1 limitation); a 401 mid-run requires re-authorize on the next run.
 - `purge_mcp_oauth_tokens(session_id)` runs on chat-session delete, SCAN pattern `{ns}:mcp_oauth:run:{session_id}:*:token`.
 
-### Logging contract (server/mcp_views.py)
+### Page-reload restore
+
+Both `DOMContentLoaded` and `htmx:afterSwap` in `home.js` scan for a
+`.chat-oauth-panel` card. When found, `_attachOAuthGateBehavior()` re-opens
+the WebSocket to restore live readiness tracking without user interaction.
+
+### Frontend module contract
+
+`window.McpOAuth` exposes **only** `openAuthPopup(serverName, sessionId, projectId, secretKey)`.
+There is no `fetchStatus`, no `checkAndAuthorize`, no polling timer, and no
+`/mcp/oauth/check/` HTTP endpoint.
+
+### Logging contract (server/mcp_views.py and server/consumers.py)
 
 Logger: `logging.getLogger(__name__)`. Required event names — every branch
 MUST be observable from server logs alone:
@@ -205,6 +245,13 @@ MUST be observable from server logs alone:
 - `agents.mcp.oauth_token_exchange_ok`
 - `agents.mcp.oauth_token_missing`
 - `agents.mcp.oauth_test_authorized` / `agents.mcp.oauth_authorized`
+- `agents.mcp.oauth_gate_blocked` — INFO; pre-run 409 fired; counter seeded; `session.status = "awaiting_mcp_oauth"`
+- `agents.mcp.oauth_gate_blocked_midrun` — INFO; SSE `awaiting_mcp_oauth` emitted
+- `agents.mcp.oauth_ws_auth_failed` — WARN; bad `?skey=`, WS closed with code 4003
+- `agents.mcp.oauth_ws_subscribed` — INFO; WS accepted, pub/sub active
+- `agents.mcp.oauth_ws_complete` — INFO; all servers authorized, `complete` frame sent
+- `agents.mcp.oauth_ws_error` — ERROR; session/project not found
+- `agents.mcp.oauth_ws_listen_error` — ERROR; pub/sub receive loop exception
 
 **Forbidden in logs and span attributes**: `code`, `code_verifier`,
 `client_secret`, `access_token`, raw `?skey=` value, full `Authorization`
@@ -231,10 +278,14 @@ sibling span in the same trace.
 ### OAuth anti-patterns (block in review)
 
 - Adding `/mcp/oauth/test/`, `/mcp/oauth/authorize/`, or any per-flow start route.
+- Adding a `/mcp/oauth/check/<session_id>/` polling endpoint.
 - Inline popup HTML in `mcp_views.py` (e.g. `_popup_html`, `_error_popup_html`) — must use `oauth_flow.html`.
-- Reading the secret from `?skey=` on any endpoint other than `/mcp/oauth/start/`.
+- Reading the secret from `?skey=` on any HTTP endpoint other than `/mcp/oauth/start/`.
 - Logging or span-attaching `code`, `code_verifier`, `client_secret`, `access_token`, or raw `Authorization` header.
-- Writing the test flow's success to the session token Redis key.
+- Writing the test flow's success to the session token Redis key or the readiness counter.
+- Storing `pending_oauth_servers` in MongoDB — the Redis counter is the authoritative source.
+- Using `setInterval`/`setTimeout` polling on the frontend to check authorization status.
+- Exporting `fetchStatus` from `mcp_oauth.js` — polling is permanently retired.
 - Auto-close timer < 30 s on the error branch of `oauth_flow.html`.
 - Computing the OTel `fingerprint` after secret substitution (must hash the placeholder dict).
 

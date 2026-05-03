@@ -385,12 +385,14 @@ Configure this per-server under **MCP OAuth App Registrations** in the project c
 
 - **`server_name`** must match a key inside your `mcpServers` JSON (shared or dedicated).
 - Register the callback URL `{BASE_URL}/mcp/oauth/callback/` with your OAuth provider.
-- Before each agent run, the server checks Redis for session-scoped Bearer tokens (`POST /run/` returns **HTTP 409** when any are missing) and the UI shows an **Authorize** panel in the chat history. Clicking the Authorize button opens a popup; after the user grants access the run resumes automatically.
+- Before each agent run, the server checks Redis for session-scoped Bearer tokens. When any are missing, `POST /run/` returns **HTTP 409** and the UI renders an **Authorize** panel in the chat history. Clicking **Authorize** opens a consent popup; readiness updates arrive via a WebSocket connection (`ws/mcp/oauth/<session_id>/`) driven by Redis pub/sub — there is no polling.
+- Once all servers are authorized the WebSocket sends a `complete` signal and the run resumes automatically.
+- If a mid-run token expires, the SSE stream emits an `awaiting_mcp_oauth` event and the same Authorize panel reappears.
 - **Test Authorization** (config form) validates credentials without starting a run.
-- Tokens are session-scoped and expire from their JWT `exp` claim (TTL = `exp − now(UTC)`). Falls back to a hardcoded 3 h default if `exp` is absent. There is no mid-session refresh (v1) — re-authorize on the next run if a token expires.
+- Tokens are session-scoped and expire from their JWT `exp` claim (TTL = `exp − now(UTC)`). Falls back to a hardcoded 3 h default if `exp` is absent. There is no mid-session refresh (v1) — re-authorize on the next run if a token expires during a run.
 - `client_secret` is stored masked and never sent to the browser after the first save.
 - The OAuth start endpoint (`/mcp/oauth/start/`) is opened from a popup window, which cannot set request headers — it accepts the admin secret as `X-App-Secret-Key` **or** `?skey=<APP_SECRET_KEY>`. Always serve the app over TLS and scrub query strings from access logs (or accept the leak as in-scope for an admin-only deployment).
-- Every branch of the OAuth start + callback handlers emits structured `agents.mcp.oauth_*` log events plus three nested OpenTelemetry spans (`mcp.oauth.start`, `mcp.oauth.callback`, `mcp.oauth.token_exchange`) so popup-window failures are diagnosable from the server console alone.
+- Every branch of the OAuth start, callback, and WebSocket consumer emits structured `agents.mcp.oauth_*` log events plus three nested OpenTelemetry spans (`mcp.oauth.start`, `mcp.oauth.callback`, `mcp.oauth.token_exchange`) so popup-window failures are diagnosable from the server console alone.
 
 Full documentation: [docs/mcp_integration.md](docs/mcp_integration.md).
 
