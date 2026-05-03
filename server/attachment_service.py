@@ -40,13 +40,12 @@ from django.core.files.uploadedfile import UploadedFile
 
 from core.tracing import traced_function
 
-from .db import get_collection
+from .db import get_collection, ATTACHMENTS_COLLECTION
 from .storage_backends import build_storage_strategy
 from . import util
 
 logger = logging.getLogger(__name__)
 
-ATTACHMENTS_COLLECTION = "chat_attachments"
 _MAX_ATTACHMENTS_PER_MESSAGE = 10
 _MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
 

@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from bson import ObjectId
 from bson.errors import InvalidId
 
-from .db import get_collection, CHAT_SESSIONS_COLLECTION
+from .db import get_collection, CHAT_SESSIONS_COLLECTION, PROJECT_SETTINGS_COLLECTION
 from . import services
 from . import jira_client
 from . import jira_software_service
@@ -51,7 +51,7 @@ def _get_project_for_session(session_id):
     if not project_id:
         raise ValueError("Session is not linked to a project.")
 
-    project_col = get_collection("project_settings")
+    project_col = get_collection(PROJECT_SETTINGS_COLLECTION)
     try:
         project_oid = ObjectId(project_id)
     except (InvalidId, TypeError):
@@ -69,7 +69,7 @@ def _get_project_raw(project_id):
         oid = ObjectId(project_id)
     except (InvalidId, TypeError):
         raise ValueError(f"Invalid project ID '{project_id}'.")
-    col = get_collection("project_settings")
+    col = get_collection(PROJECT_SETTINGS_COLLECTION)
     project = col.find_one({"_id": oid})
     if not project:
         raise ValueError("Project not found.")
@@ -277,7 +277,7 @@ def run_export_extract(session_id, discussion_id, type_name):
     if not project_id:
         raise ValueError("Session is not linked to a project.")
 
-    project_col = get_collection("project_settings")
+    project_col = get_collection(PROJECT_SETTINGS_COLLECTION)
     try:
         project_oid = ObjectId(project_id)
     except (InvalidId, TypeError):
