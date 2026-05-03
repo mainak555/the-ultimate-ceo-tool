@@ -407,6 +407,8 @@ Full documentation: [docs/mcp_integration.md](docs/mcp_integration.md).
 | `MONGODB_NAME` | MongoDB database name | `product_discovery` |
 | `REDIS_URI` | Redis connection string used for active run coordination | `redis://localhost:6379/0` |
 | `REDIS_NAMESPACE` | Redis key namespace prefix | `product_discovery` |
+| `REDIS_SOCKET_TIMEOUT` | Redis socket read/write timeout (seconds) used by the shared Redis client | `2.0` |
+| `REDIS_SOCKET_CONNECT_TIMEOUT` | Redis socket connect timeout (seconds) used by the shared Redis client | `2.0` |
 | `REDIS_RUN_LEASE_TTL_SECONDS` | Active run lease TTL (seconds) | `300` |
 | `REDIS_RUN_HEARTBEAT_SECONDS` | Lease heartbeat interval (seconds) | `20` |
 | `REDIS_CANCEL_SIGNAL_TTL_SECONDS` | Cancel signal TTL (seconds) | `120` |

@@ -248,7 +248,7 @@ MUST be observable from server logs alone:
 - `agents.mcp.oauth_gate_blocked` — INFO; pre-run 409 fired; counter seeded; `session.status = "awaiting_mcp_oauth"`
 - `agents.mcp.oauth_gate_blocked_midrun` — INFO; SSE `awaiting_mcp_oauth` emitted
 - `agents.mcp.oauth_ws_auth_failed` — WARN; bad `?skey=`, WS closed with code 4003
-- `agents.mcp.oauth_ws_subscribed` — INFO; WS accepted, pub/sub active
+- `agents.mcp.oauth_ws_subscribed` — INFO; WS accepted, pub/sub active (`session_id`, `server_count`, `channel`)
 - `agents.mcp.oauth_ws_complete` — INFO; all servers authorized, `complete` frame sent
 - `agents.mcp.oauth_ws_error` — ERROR; session/project not found
 - `agents.mcp.oauth_ws_listen_error` — ERROR; pub/sub receive loop exception

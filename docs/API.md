@@ -73,6 +73,14 @@ See [docs/trello_integration.md](trello_integration.md) for full Trello integrat
 
 See [docs/jira_integration.md](jira_integration.md) for full Jira integration details.
 
+## MCP OAuth Endpoints
+
+| Method | Path | View/Handler | Description |
+|--------|------|--------------|-------------|
+| `GET` | `/mcp/oauth/start/` | `mcp_oauth_start` | Single OAuth start endpoint (`?flow=test|run`) that generates PKCE state and redirects to provider `auth_url` |
+| `GET` | `/mcp/oauth/callback/` | `mcp_oauth_callback` | OAuth callback that exchanges code for token and renders shared `oauth_flow.html` |
+| `WS` | `/ws/mcp/oauth/<session_id>/?skey=<APP_SECRET_KEY>` | `OAuthReadinessConsumer` | WebSocket readiness stream (`state` / `update` / `complete`) backed by Redis pub/sub; no polling endpoint |
+
 ## Generic Export Popup Endpoint Pattern
 
 For each provider `<provider>`, follow this endpoint contract under provider namespace:
