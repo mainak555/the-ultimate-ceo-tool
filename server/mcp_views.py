@@ -57,7 +57,7 @@ from agents.session_coordination import (
 # always preferred so the key expires exactly when the token does.
 _MCP_OAUTH_DEFAULT_TTL: int = 3 * 3600
 from core.tracing import set_payload_attribute, traced_block
-from .services import get_project_raw, verify_secret_key
+from .services import get_project_raw, list_all_reachable_oauth_servers, verify_secret_key
 from .views import _has_valid_secret  # noqa: F401  (kept for tests/external imports)
 
 logger = logging.getLogger(__name__)
@@ -553,7 +553,7 @@ def mcp_oauth_callback(request):
         # Publish readiness event so the WebSocket consumer can push the update
         # to the browser immediately without polling.
         from agents.session_coordination import publish_oauth_server_authorized
-        total_count = len(project_raw.get("mcp_oauth_configs") or {})
+        total_count = len(list_all_reachable_oauth_servers(project_raw))
         publish_oauth_server_authorized(session_id, server_name, total_count)
         return _render_outcome(
             request,

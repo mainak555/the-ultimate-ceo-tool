@@ -379,7 +379,7 @@ User browser (popup)            Backend                      OAuth provider
       |                            | get_and_delete_mcp_oauth_state(state)     |
       |                            | POST token_url code + code_verifier       |
       |                            |----------- exchange code for token ------>|
-      |                            |<----------- {access_token, expires_in} ---|
+      |                            |<----------- {access_token (JWT)} ---------|
       |                            | set_mcp_oauth_token(session_id, ...)      |
       |<-- popup page: postMessage({type:"mcp_oauth_done"}) + window.close() -|
 ```
@@ -519,7 +519,7 @@ Logger: `server.mcp_views`. Every branch of the start + callback handlers emits 
 | `agents.mcp.oauth_gate_blocked` | INFO | Pre-run gate fired: backend returned 409 with `status:"awaiting_mcp_oauth"`; readiness counter seeded in Redis; `session.status` set to `"awaiting_mcp_oauth"` in MongoDB. |
 | `agents.mcp.oauth_gate_blocked_midrun` | INFO | Same check triggered between turns; SSE `awaiting_mcp_oauth` event emitted; run paused pending re-authorization. |
 | `agents.mcp.oauth_ws_auth_failed` | WARN | WebSocket connection rejected — invalid `?skey=` (closed with code 4003). |
-| `agents.mcp.oauth_ws_subscribed` | INFO | WebSocket accepted and Redis pub/sub subscription active; payload: `session_id`, `server_count`. |
+| `agents.mcp.oauth_ws_subscribed` | INFO | WebSocket accepted and Redis pub/sub subscription active; payload: `session_id`, `server_count`, `channel`. |
 | `agents.mcp.oauth_ws_complete` | INFO | All servers authorized; `complete` frame sent; WebSocket closed normally. |
 | `agents.mcp.oauth_ws_error` | ERROR | Session or project not found after WS accept; `error` frame sent. |
 | `agents.mcp.oauth_ws_listen_error` | ERROR | Redis pub/sub receive loop raised an exception; WS closed. |

@@ -124,9 +124,17 @@ class OAuthReadinessConsumer:
             self._load_session_data, session_id
         )
         if session is None:
+            logger.error(
+                "agents.mcp.oauth_ws_error",
+                extra={"session_id": session_id, "reason": "session_not_found"},
+            )
             await self._send_json({"type": "error", "message": "Session not found."})
             return
         if project_raw is None:
+            logger.error(
+                "agents.mcp.oauth_ws_error",
+                extra={"session_id": session_id, "reason": "project_not_found"},
+            )
             await self._send_json({"type": "error", "message": "Project not found."})
             return
 
@@ -188,7 +196,11 @@ class OAuthReadinessConsumer:
                     await ps.subscribe(channel)
                     logger.info(
                         "agents.mcp.oauth_ws_subscribed",
-                        extra={"session_id": session_id, "channel": channel},
+                        extra={
+                            "session_id": session_id,
+                            "server_count": total,
+                            "channel": channel,
+                        },
                     )
                     async for raw_msg in ps.listen():
                         if self._closed:
