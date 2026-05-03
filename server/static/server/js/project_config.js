@@ -347,6 +347,9 @@ document.addEventListener("DOMContentLoaded", function () {
     syncIntegrationsFields();
     syncExportAgentCheckboxes();
     syncMcpDedicatedVisibility();
+    if (window.McpJsonEditor && typeof window.McpJsonEditor.mountAll === "function") {
+      window.McpJsonEditor.mountAll(document);
+    }
     updateSubmitState();
     syncProviderConfigState("trello");
   }
@@ -467,6 +470,9 @@ document.addEventListener("DOMContentLoaded", function () {
   document.body.addEventListener("htmx:beforeRequest", function (e) {
     var elt = e.detail && e.detail.elt;
     if (!elt || !elt.matches || !elt.matches("form.config-form")) return;
+    if (window.McpJsonEditor && typeof window.McpJsonEditor.prepareForSubmit === "function") {
+      window.McpJsonEditor.prepareForSubmit();
+    }
     var errors = validateMcpJsonOnSubmit(elt);
     if (errors.length) {
       e.preventDefault();

@@ -150,6 +150,7 @@ See [docs/agent_factory.md](agent_factory.md) for the full `agent_models.json` s
 
 - `server/static/server/js/app.js`: shared SPA helpers only (secret header injection, shared helper utilities, generic cross-page hooks).
 - `server/static/server/js/project_config.js`: project configuration feature behavior only (agent cards, form state sync, config-page secret gating).
+- `server/static/server/js/mcp_json_editor.js`: config-page MCP JSON editor lifecycle only (code-mode editor mount/unmount, format/validate controls, textarea sync).
 - `server/static/server/js/home.js`: home chat feature behavior only (chat runtime UI, SSE rendering, human gate interactions).
 - `server/static/server/js/trello_config.js`: Trello project-configuration behavior only (token generation, workspace/board/list cascade, create board/list modal).
 - `server/static/server/js/trello.js`: Trello export modal for chat sessions only.

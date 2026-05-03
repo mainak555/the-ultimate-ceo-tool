@@ -243,6 +243,60 @@ a:hover { text-decoration: underline; }
   line-height: 1.45;
 }
 
+.mcp-json-editor__source {
+  display: none;
+}
+
+.mcp-json-editor {
+  border: 1px solid $color-border;
+  border-radius: $radius;
+  background: $color-surface;
+}
+
+.mcp-json-editor__toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: $space-sm;
+  padding: $space-sm;
+  border-bottom: 1px solid $color-border;
+}
+
+.mcp-json-editor__toolbar-left,
+.mcp-json-editor__toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: $space-sm;
+}
+
+.mcp-json-editor__label {
+  font-size: $font-size-sm;
+  font-weight: 600;
+  color: $color-text;
+}
+
+.mcp-json-editor__status {
+  font-size: $font-size-sm;
+  color: $color-text-muted;
+}
+
+.mcp-json-editor__status--ok {
+  color: $color-success;
+}
+
+.mcp-json-editor__status--error {
+  color: $color-error;
+}
+
+.mcp-json-editor__canvas {
+  height: 320px;
+}
+
+.mcp-json-editor .jsoneditor,
+.mcp-json-editor .ace-jsoneditor {
+  border: 0;
+}
+
 select.input {
   appearance: auto;
 }
