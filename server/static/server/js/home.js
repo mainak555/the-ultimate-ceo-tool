@@ -796,7 +796,7 @@ document.addEventListener("DOMContentLoaded", function () {
         status.textContent = "Authorized \u2713";
       }
       var btn = row.querySelector(".chat-oauth-authorize-btn");
-      if (btn) { btn.disabled = true; btn.textContent = "Authorized \u2713"; }
+      if (btn) { btn.disabled = true; }
     }
 
     function _allAuthorized() {
