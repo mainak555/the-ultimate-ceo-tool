@@ -155,6 +155,37 @@ dict (`{"TAVILY_API_KEY": "tvly-…"}`) and is referenced via the
 `{"transport": "sse", ...}` is rejected at save time. SSE has been deprecated
 upstream by the MCP project. Use `transport: "http"` (Streamable HTTP) instead.
 
+## Project Config JSON editor standard
+
+Project Config edit mode uses a **code-first JSON editor** for MCP configuration
+fields:
+
+- `shared_mcp_tools` textarea (`.js-shared-mcp-json`)
+- per-agent dedicated `mcp_configuration` textarea (`.js-mcp-dedicated-json`)
+
+Behavior contract:
+
+- No tree-mode UX. The editor is configured for `code` mode (with optional
+  plain `text` mode only).
+- The source textarea remains the form submission contract; the editor syncs
+  text back to the textarea before validation and submit.
+- Manual actions: **Format** and **Validate** while editing.
+- Submit path auto-formats valid non-empty JSON for stable storage/readability.
+- Existing client checks in `project_config.js` remain in force (JSON parse and
+  unresolved `{KEY}` placeholder checks).
+- Backend validation in `server/schemas.py` remains the source of truth;
+  frontend editor UX never relaxes schema/transport contracts.
+
+Implementation ownership:
+
+- `server/static/server/js/mcp_json_editor.js` owns editor mount/unmount,
+  status, format, and validation controls.
+- `server/static/server/js/project_config.js` calls
+  `window.McpJsonEditor.mountAll()` during config sync and
+  `window.McpJsonEditor.prepareForSubmit()` before submit validation.
+- `server/templates/server/config.html` loads pinned JSONEditor assets and the
+  `mcp_json_editor.js` module on the config page.
+
 ## Validation rules (`server/schemas.py`)
 
 - `mcp_tools` must be one of `none` / `shared` / `dedicated`.

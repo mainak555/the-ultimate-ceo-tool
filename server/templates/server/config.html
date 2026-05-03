@@ -15,6 +15,8 @@
   <!-- HTMX -->
   <script src="https://unpkg.com/htmx.org@1.9.12/dist/htmx.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked@15/marked.min.js"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/jsoneditor@10.4.3/dist/jsoneditor.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/jsoneditor@10.4.3/dist/jsoneditor.min.js"></script>
   {% django_htmx_script %}
 </head>
 <body hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'>
@@ -53,6 +55,7 @@
   <script src="{% static 'server/js/provider_registry.js' %}"></script>
   <script src="{% static 'server/js/markdown_viewer.js' %}"></script>
   <script src="{% static 'server/js/config_readonly_markdown.js' %}"></script>
+  <script src="{% static 'server/js/mcp_json_editor.js' %}"></script>
   <script src="{% static 'server/js/project_config.js' %}"></script>
   <script src="{% static 'server/js/trello_config.js' %}"></script>
   <script src="{% static 'server/js/jira.js' %}"></script>

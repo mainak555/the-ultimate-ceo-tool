@@ -60,7 +60,21 @@ MCP (Model Context Protocol) tool wiring for assistant agents.
 - The frontend may not parse or transform MCP JSON beyond syntax validation
   in `project_config.js`.
 
-### Observability (see [docs/observability.md](../../docs/observability.md))
+### Config editor UX contract
+
+- MCP JSON edit surfaces (`shared_mcp_tools`, dedicated `mcp_configuration`)
+  use a code-first editor module at
+  `server/static/server/js/mcp_json_editor.js`.
+- UX is intentionally lightweight: `code` mode (optionally `text`) with
+  **Format**/**Validate** actions. Tree-mode UI is out of scope.
+- The source textarea is still the canonical form field contract; editor state
+  must sync back to textarea before submit.
+- `project_config.js` may call editor lifecycle hooks
+  (`mountAll`, `prepareForSubmit`) but must not duplicate editor mounting logic.
+- Frontend formatting must never change backend schema/transport validation;
+  `server/schemas.py` remains authoritative.
+
+### Observability (see [docs/observability.md](../../../docs/observability.md))
 
 - Logger: `agents.mcp_tools` (`logging.getLogger(__name__)`).
 - Event names: `agents.mcp.created`, `agents.mcp.closed`, `agents.mcp.failed`.
@@ -79,7 +93,7 @@ MCP (Model Context Protocol) tool wiring for assistant agents.
 
 ### Documentation parity
 
-- Schema or validation changes → update [docs/mcp_integration.md](../../docs/mcp_integration.md).
+- Schema or validation changes → update [docs/mcp_integration.md](../../../docs/mcp_integration.md).
 - New transport → update both `_validate_mcp_server_entry()` and
   `_build_server_params()`.
 - Deployment changes → update `deployments/README.md` and the relevant
@@ -99,7 +113,7 @@ MCP (Model Context Protocol) tool wiring for assistant agents.
   model names; declare `model_info` explicitly only for unrecognized model
   identifiers.
 - When introducing a new model that should be MCP-capable, update both
-  [`agent_models.json`](../../agent_models.json) and the README "Models &
+  [`agent_models.json`](../../../agent_models.json) and the README "Models &
   `model_info`" section if a new family/provider example is added.
 - Models that genuinely lack tool calling (reasoning-only, audio, embedding)
   must be paired only with agents whose `mcp_tools = "none"`. Never set

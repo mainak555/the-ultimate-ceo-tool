@@ -258,7 +258,7 @@
       </p>
       <div class="mcp-secrets__rows" id="mcp-oauth-configs-rows">
         {% for server_name, cfg in project.mcp_oauth_configs.items %}
-        <fieldset class="mcp-oauth-configs__row form-group--nested" data-oauth-index="{{ forloop.counter0 }}">
+        <fieldset class="mcp-oauth-configs__row" data-oauth-index="{{ forloop.counter0 }}">
           <div class="mcp-oauth-configs__row-header">
             <strong>{{ server_name }}</strong>
             <div class="mcp-oauth-configs__row-actions">
