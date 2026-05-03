@@ -18,13 +18,11 @@
     <h3>Assistant Agents</h3>
     {% for agent in project.agents %}
       <div class="agent-card agent-card--readonly">
-        <div class="agent-card__header">
-          <strong>{{ agent.name }}</strong>
+        <div class="agent-card__header-meta">
           <span class="badge">{{ agent.model }}</span>
+          <em class="agent-card__temp">Temperature: {{ agent.temperature }}</em>
         </div>
-        <div class="agent-card__detail">
-          <strong>Temperature:</strong> {{ agent.temperature }}
-        </div>
+        <strong class="agent-card__title">{{ agent.name }}</strong>
         <div class="agent-card__detail">
           <strong>MCP Tools:</strong>
           {% if agent.mcp_tools == 'dedicated' %}Dedicated{% elif agent.mcp_tools == 'shared' %}Shared{% else %}None{% endif %}
@@ -72,13 +70,11 @@
     </p>
     {% if project.team.type == 'selector' %}
       <div class="agent-card agent-card--readonly">
-        <div class="agent-card__header">
-          <strong>Selector</strong>
+        <div class="agent-card__header-meta">
           <span class="badge">{{ project.team.model }}</span>
+          <em class="agent-card__temp">Temperature: {{ project.team.temperature }}</em>
         </div>
-        <div class="agent-card__detail">
-          <strong>Temperature:</strong> {{ project.team.temperature }}
-        </div>
+        <strong class="agent-card__title">Selector</strong>
         <div class="agent-card__detail">
           <strong>System Prompt:</strong>
           <div class="agent-card__prompt agent-card__prompt--markdown markdown-prose" data-markdown>{{ project.team.system_prompt }}</div>
@@ -120,13 +116,14 @@
     {% if project.integrations.trello.enabled %}
       <div class="agent-card agent-card--readonly">
 
-        {# Row 1: Trello  +  model badge at right #}
-        <div class="agent-card__header">
-          <strong>Trello</strong>
-          {% if project.integrations.trello.export_mapping.model %}
-          <span class="badge">{{ project.integrations.trello.export_mapping.model }}</span>
-          {% endif %}
+        {# Meta float: model badge + temperature at right #}
+        {% if project.integrations.trello.export_mapping.model or project.integrations.trello.export_mapping.system_prompt %}
+        <div class="agent-card__header-meta">
+          {% if project.integrations.trello.export_mapping.model %}<span class="badge">{{ project.integrations.trello.export_mapping.model }}</span>{% endif %}
+          {% if project.integrations.trello.export_mapping.system_prompt %}<em class="agent-card__temp">Temperature: {{ project.integrations.trello.export_mapping.temperature }}</em>{% endif %}
         </div>
+        {% endif %}
+        <strong class="agent-card__title">Trello</strong>
 
         {# Row 2: App Name #}
         {% if project.integrations.trello.app_name %}
@@ -152,11 +149,8 @@
         </div>
         {% endif %}
 
-        {# Rows 4-5: Temperature + Extraction Prompt (only when prompt is set) #}
+        {# Extraction Prompt (temperature is in the card header) #}
         {% if project.integrations.trello.export_mapping.system_prompt %}
-        <div class="agent-card__detail">
-          <strong>Temperature:</strong> {{ project.integrations.trello.export_mapping.temperature }}
-        </div>
         <div class="agent-card__detail">
           <strong>Extraction Prompt:</strong>
           <div class="agent-card__prompt agent-card__prompt--markdown markdown-prose" data-markdown>{{ project.integrations.trello.export_mapping.system_prompt }}</div>
@@ -169,12 +163,13 @@
     {% if project.integrations.jira.enabled %}
       {% if project.integrations.jira.software.enabled %}
         <div class="agent-card agent-card--readonly">
-          <div class="agent-card__header">
-            <strong>Jira Software</strong>
-            {% if project.integrations.jira.software.export_mapping.model %}
-            <span class="badge">{{ project.integrations.jira.software.export_mapping.model }}</span>
-            {% endif %}
+          {% if project.integrations.jira.software.export_mapping.model or project.integrations.jira.software.export_mapping.system_prompt %}
+          <div class="agent-card__header-meta">
+            {% if project.integrations.jira.software.export_mapping.model %}<span class="badge">{{ project.integrations.jira.software.export_mapping.model }}</span>{% endif %}
+            {% if project.integrations.jira.software.export_mapping.system_prompt %}<em class="agent-card__temp">Temperature: {{ project.integrations.jira.software.export_mapping.temperature }}</em>{% endif %}
           </div>
+          {% endif %}
+          <strong class="agent-card__title">Jira Software</strong>
 
           {% if project.integrations.jira.software.site_url %}
           <div class="agent-card__detail">
@@ -204,9 +199,6 @@
 
           {% if project.integrations.jira.software.export_mapping.system_prompt %}
           <div class="agent-card__detail">
-            <strong>Temperature:</strong> {{ project.integrations.jira.software.export_mapping.temperature }}
-          </div>
-          <div class="agent-card__detail">
             <strong>Extraction Prompt:</strong>
             <div class="agent-card__prompt agent-card__prompt--markdown markdown-prose" data-markdown>{{ project.integrations.jira.software.export_mapping.system_prompt }}</div>
           </div>
@@ -216,12 +208,13 @@
 
       {% if project.integrations.jira.service_desk.enabled %}
         <div class="agent-card agent-card--readonly">
-          <div class="agent-card__header">
-            <strong>Jira Service Desk</strong>
-            {% if project.integrations.jira.service_desk.export_mapping.model %}
-            <span class="badge">{{ project.integrations.jira.service_desk.export_mapping.model }}</span>
-            {% endif %}
+          {% if project.integrations.jira.service_desk.export_mapping.model or project.integrations.jira.service_desk.export_mapping.system_prompt %}
+          <div class="agent-card__header-meta">
+            {% if project.integrations.jira.service_desk.export_mapping.model %}<span class="badge">{{ project.integrations.jira.service_desk.export_mapping.model }}</span>{% endif %}
+            {% if project.integrations.jira.service_desk.export_mapping.system_prompt %}<em class="agent-card__temp">Temperature: {{ project.integrations.jira.service_desk.export_mapping.temperature }}</em>{% endif %}
           </div>
+          {% endif %}
+          <strong class="agent-card__title">Jira Service Desk</strong>
 
           {% if project.integrations.jira.service_desk.site_url %}
           <div class="agent-card__detail">
@@ -251,9 +244,6 @@
 
           {% if project.integrations.jira.service_desk.export_mapping.system_prompt %}
           <div class="agent-card__detail">
-            <strong>Temperature:</strong> {{ project.integrations.jira.service_desk.export_mapping.temperature }}
-          </div>
-          <div class="agent-card__detail">
             <strong>Extraction Prompt:</strong>
             <div class="agent-card__prompt agent-card__prompt--markdown markdown-prose" data-markdown>{{ project.integrations.jira.service_desk.export_mapping.system_prompt }}</div>
           </div>
@@ -263,12 +253,13 @@
 
       {% if project.integrations.jira.business.enabled %}
         <div class="agent-card agent-card--readonly">
-          <div class="agent-card__header">
-            <strong>Jira Business</strong>
-            {% if project.integrations.jira.business.export_mapping.model %}
-            <span class="badge">{{ project.integrations.jira.business.export_mapping.model }}</span>
-            {% endif %}
+          {% if project.integrations.jira.business.export_mapping.model or project.integrations.jira.business.export_mapping.system_prompt %}
+          <div class="agent-card__header-meta">
+            {% if project.integrations.jira.business.export_mapping.model %}<span class="badge">{{ project.integrations.jira.business.export_mapping.model }}</span>{% endif %}
+            {% if project.integrations.jira.business.export_mapping.system_prompt %}<em class="agent-card__temp">Temperature: {{ project.integrations.jira.business.export_mapping.temperature }}</em>{% endif %}
           </div>
+          {% endif %}
+          <strong class="agent-card__title">Jira Business</strong>
 
           {% if project.integrations.jira.business.site_url %}
           <div class="agent-card__detail">
@@ -297,9 +288,6 @@
           {% endif %}
 
           {% if project.integrations.jira.business.export_mapping.system_prompt %}
-          <div class="agent-card__detail">
-            <strong>Temperature:</strong> {{ project.integrations.jira.business.export_mapping.temperature }}
-          </div>
           <div class="agent-card__detail">
             <strong>Extraction Prompt:</strong>
             <div class="agent-card__prompt agent-card__prompt--markdown markdown-prose" data-markdown>{{ project.integrations.jira.business.export_mapping.system_prompt }}</div>

@@ -20,6 +20,7 @@ Token-level styling implementation (colors, spacing variables, selector scoping)
 5. **Textarea hint text is mandatory**: every `<textarea>` in a config form must be followed by `<small class="form-hint">` with a plain-language description of the field's purpose. The hint must name the integration and type (e.g. "Prompt used by the extraction agent to parse the discussion into Jira Service Desk requests."). No textarea may be left without a hint.
 6. **Human gate control order is fixed**: top row = optional decision shortcuts (`Approve`, `Reject`), middle = optional notes textarea (shortcut click prefill uses `APPROVED`/`REJECTED` + blank line), bottom row = execution (`Continue`, `Stop`). Do not reintroduce interaction-mode branching.
 7. **Single-assistant config contract is fixed**: when assistant count is exactly 1, the config UI must hide Team Setup and force Human Gate enabled (chat mode). When assistant count is 2+, Team Setup is visible again and normal team controls apply.
+8. **Readonly card header layout is fixed for all `agent-card--readonly` cards**: `agent-card__header-meta` (float right) must be the first DOM child; `agent-card__title` follows as a sibling. Do not use `agent-card__header` flex wrapper on readonly cards. The card element requires `overflow: hidden`. See `docs/scss_style_guide.md` §"Readonly Card Layout" for the mandatory DOM structure and the complete list of card types that must comply.
 
 ## Export Modal Guardrails
 1. Keep baseline split layout and action order consistent across providers.
@@ -43,3 +44,4 @@ Token-level styling implementation (colors, spacing variables, selector scoping)
 8. Confirm item heading count badges use `export-modal__count-badge` and reflect current rendered item count.
 9. Confirm dropdowns in export item editors do not show duplicate labels (for example repeated `Epic`).
 10. Confirm config form reflects single-assistant chat mode: Team section hidden, Human Gate forced on, and explanatory hint shown.
+11. Confirm every `agent-card--readonly` card uses the float layout: `agent-card__header-meta` first in DOM (float right), then `agent-card__title`, then detail rows — no `agent-card__header` flex wrapper. Confirm `overflow: hidden` on the card element.

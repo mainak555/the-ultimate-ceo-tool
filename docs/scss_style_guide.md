@@ -56,6 +56,44 @@ This guide defines the mandatory styling contract for Product Discovery so new U
 5. **Nesting levels must use identical `margin-left`**: both `.form-group--nested` (L1) and `.form-group--nested-l2` (L2) use `margin-left: $space-md` — do not increase indent at L2 (e.g. `$space-lg`) as it creates visual misalignment between Trello and Jira sub-type sections.
 6. **Do not add `margin-top` to nested fieldsets**: vertical rhythm between a checkbox row and the following nested fieldset, and between consecutive nested fieldsets, comes entirely from the preceding `.form-group`'s `margin-bottom` (resolved by `.config-form fieldset.form-group { margin-bottom: $space-md }`). Adding explicit `margin-top` on nested elements doubles the gap and creates inconsistency.
 
+## Readonly Card Layout
+
+All `agent-card--readonly` cards across the Config readonly view must share a single float-based header layout. This applies to: **Assistant Agents, Selector/Team, Trello, Jira Software, Jira Service Desk, Jira Business**.
+
+### DOM Order (Mandatory)
+
+```html
+<div class="agent-card agent-card--readonly">
+  <!-- 1. Meta block FIRST so browser float positions it at right edge -->
+  <div class="agent-card__header-meta">
+    <span class="badge">model-name</span>
+    <em class="agent-card__temp">Temperature: 0.7</em>   <!-- only when applicable -->
+  </div>
+  <!-- 2. Title as next sibling — flows left beside the float -->
+  <strong class="agent-card__title">Card Title</strong>
+  <!-- 3. Detail rows fill left column below title; when float height exhausted they go full-width -->
+  <div class="agent-card__detail">...</div>
+</div>
+```
+
+### SCSS Classes (Mandatory Tokens Only)
+
+| Class | Required properties |
+|---|---|
+| `.agent-card--readonly` | `overflow: hidden` (float clearfix) |
+| `.agent-card__header-meta` | `float: right`, `text-align: right`, `margin-left: $space-md`, `margin-bottom: $space-xs`, flex column, `align-items: flex-end`, `gap: $space-xs` |
+| `.agent-card__title` | `font-size: $font-size-lg`, `font-weight: 700`, `line-height: 1.4` |
+| `.agent-card__temp` | `font-size: $font-size-sm`, `color: $color-text-muted`, `font-style: italic` |
+
+### Rules
+
+1. **`agent-card__header-meta` must be the first child** — float layout depends on source order.
+2. **No `agent-card__header` flex wrapper** on readonly cards — the float replaces the flex row.
+3. **Temperature is conditional for integration cards**: only render `agent-card__temp` when a system prompt is set on that integration.
+4. **Model badge is conditional**: only render when model is non-empty.
+5. **Do not use `justify-content: space-between`** on readonly card headers — it creates empty whitespace between title and meta at all viewport sizes.
+6. Adding a new card type to the readonly view must follow this exact DOM and class structure with no variation.
+
 ## Feature Scoping Rules
 
 1. Feature-specific SCSS must be scoped to feature blocks (for example Trello-specific selectors stay inside Trello sections).

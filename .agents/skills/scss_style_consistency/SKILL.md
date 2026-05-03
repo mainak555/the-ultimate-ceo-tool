@@ -25,6 +25,7 @@ Behavior/layout semantics (what controls and interaction order are required) are
 3. Card and modal spacing/border rhythm must match existing `main.scss` patterns.
 4. Delete controls must match shared icon/button danger behavior.
 5. Nested integration sub-sections (`.form-group--nested`, `.form-group--nested-l2`) must always declare both `padding-left` AND `padding-right`. Missing `padding-right` causes textarea scrollbars and inputs to overflow into the parent section's right border.
+6. **Readonly card float layout**: `agent-card--readonly` cards must use `overflow: hidden` (clearfix). `agent-card__header-meta` is `float: right` with `text-align: right`, `flex-direction: column`, `align-items: flex-end`, `gap: $space-xs`, `margin-left: $space-md`, `margin-bottom: $space-xs`. `agent-card__title` uses `font-size: $font-size-lg`, `font-weight: 700`. `agent-card__temp` uses `font-size: $font-size-sm`, `color: $color-text-muted`, `font-style: italic`. Do **not** use `justify-content: space-between` on readonly card rows — it creates blank whitespace at all viewport sizes. See `docs/scss_style_guide.md` §"Readonly Card Layout".
 
 ## Export Modal Guardrails
 1. Keep split layout and footer action order consistent with baseline export modal pattern.
@@ -47,3 +48,4 @@ Behavior/layout semantics (what controls and interaction order are required) are
 8. Confirm export-popup add/create buttons use `export-modal__context-add-btn` and keep consistent hover/focus color behavior.
 9. Confirm export-popup editable card backgrounds remain token-derived and visually consistent across providers.
 10. Confirm export-popup item heading badges use `export-modal__count-badge` and avoid ad-hoc badge class duplication.
+11. Confirm new or updated `agent-card--readonly` cards follow the float layout: `overflow: hidden` on card, `agent-card__header-meta` is `float: right` and first in DOM, `agent-card__title` uses `$font-size-lg`, `agent-card__temp` uses `$color-text-muted` italic. No `justify-content: space-between` on the row.

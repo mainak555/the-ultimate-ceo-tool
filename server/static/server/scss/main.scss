@@ -565,8 +565,32 @@ select.input {
 .agent-card__header {
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: flex-start;
   margin-bottom: $space-sm;
+}
+
+.agent-card__title {
+  font-size: $font-size-lg;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.agent-card__header-meta {
+  float: right;
+  text-align: right;
+  margin-left: $space-md;
+  margin-bottom: $space-xs;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: $space-xs;
+}
+
+.agent-card__temp {
+  font-size: $font-size-sm;
+  color: $color-text-muted;
+  font-style: italic;
+  line-height: 1.2;
 }
 
 .agent-card__number {
@@ -672,6 +696,7 @@ select.input {
 .agent-card--readonly {
   background: $color-surface;
   margin-bottom: $space-md;
+  overflow: hidden; // clearfix for floated header-meta
 }
 
 // ---------------------------------------------------------------------------
