@@ -23,6 +23,7 @@ from django.views.decorators.http import require_GET, require_POST, require_http
 
 from . import services
 from . import attachment_service
+from . import util
 from .logging_utils import bind_request_id, clear_request_id, get_request_id
 from core.tracing import context_from_traceparent, start_root_span
 
@@ -748,27 +749,9 @@ def chat_session_update(request, session_id):
 # SSE helpers
 # ---------------------------------------------------------------------------
 
-def _json_default(value):
-    """JSON serializer fallback for datetime payload values."""
-    if isinstance(value, datetime):
-        if value.tzinfo is None:
-            value = value.replace(tzinfo=timezone.utc)
-        return value.isoformat()
-    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
-
-
-def _json_dumps(payload) -> str:
-    """Serialize JSON payloads with datetime support."""
-    return json.dumps(payload, default=_json_default)
-
 def _sse(event: str, data: dict) -> str:
     """Format a single SSE frame."""
-    return f"event: {event}\ndata: {_json_dumps(data)}\n\n"
-
-
-def _json_error(message: str, status: int) -> HttpResponse:
-    """Return a standard JSON error response."""
-    return HttpResponse(_json_dumps({"error": message}), status=status, content_type="application/json")
+    return f"event: {event}\ndata: {util.json_dumps(data)}\n\n"
 
 
 def _friendly_run_error(exc: Exception) -> str:
@@ -870,19 +853,19 @@ async def chat_session_run(request, session_id):
             attachment_ids — optional repeated form field values
     """
     if not _has_valid_secret(request):
-        return _json_error("Unauthorized", 403)
+        return util.json_error("Unauthorized", 403)
 
     session = await asyncio.to_thread(services.get_chat_session, session_id)
     if session is None:
-        return _json_error("Session not found", 404)
+        return util.json_error("Session not found", 404)
 
     valid_states = ("idle", "awaiting_input", "awaiting_mcp_oauth")
     if session["status"] not in valid_states:
-        return _json_error(f"Session is currently '{session['status']}'", 409)
+        return util.json_error(f"Session is currently '{session['status']}'", 409)
 
     project = await asyncio.to_thread(services.get_project, session["project_id"])
     if project is None:
-        return _json_error("Project not found", 404)
+        return util.json_error("Project not found", 404)
 
     # Runtime needs unmasked MCP secrets for placeholder substitution; the
     # normalized project carries SECRET_MASK values for UI safety.
@@ -896,7 +879,7 @@ async def chat_session_run(request, session_id):
     # First run must have a task; gate resume may send empty string
     is_first_run = session["status"] == "idle" and not session.get("discussions")
     if is_first_run and not task and not attachment_ids:
-        return _json_error("'task' is required to start a conversation.", 400)
+        return util.json_error("'task' is required to start a conversation.", 400)
 
     # Single-assistant chat mode: empty Continue is invalid (no new context for agent).
     # Attachments alone are not sufficient — a text message is required.
@@ -905,7 +888,7 @@ async def chat_session_run(request, session_id):
         and len(project.get("agents") or []) == 1
     )
     if is_single_assistant_gate and not is_first_run and not task:
-        return _json_error("A message is required to continue.", 400)
+        return util.json_error("A message is required to continue.", 400)
 
     # MCP OAuth pre-run gate: any reachable MCP server that requires OAuth and
     # has no session-scoped Bearer token in Redis blocks the run start. The
@@ -953,7 +936,7 @@ async def chat_session_run(request, session_id):
 
     redis_ok = await asyncio.to_thread(ensure_redis_available)
     if not redis_ok:
-        return _json_error("Active session coordinator is unavailable.", 503)
+        return util.json_error("Active session coordinator is unavailable.", 503)
 
     try:
         acquired = await asyncio.to_thread(acquire_run_lease, session_id, owner_id)
@@ -962,10 +945,10 @@ async def chat_session_run(request, session_id):
             "agents.session.redis_unavailable",
             extra={"session_id": session_id, "phase": "acquire_lease"},
         )
-        return _json_error("Active session coordinator is unavailable.", 503)
+        return util.json_error("Active session coordinator is unavailable.", 503)
 
     if not acquired:
-        return _json_error("Session is already running on another worker.", 409)
+        return util.json_error("Session is already running on another worker.", 409)
 
     try:
         await asyncio.to_thread(clear_cancel_signal, session_id)
@@ -978,7 +961,7 @@ async def chat_session_run(request, session_id):
                     "agents.session.redis_unavailable",
                     extra={"session_id": session_id, "phase": "release_conflict"},
                 )
-            return _json_error("Session status changed before run start.", 409)
+            return util.json_error("Session status changed before run start.", 409)
         # Clean up the OAuth readiness counter — it is no longer needed once running.
         from agents.session_coordination import delete_mcp_oauth_readiness
         await asyncio.to_thread(delete_mcp_oauth_readiness, session_id)
@@ -988,7 +971,7 @@ async def chat_session_run(request, session_id):
             "agents.session.redis_unavailable",
             extra={"session_id": session_id, "phase": "prepare_run"},
         )
-        return _json_error("Active session coordinator is unavailable.", 503)
+        return util.json_error("Active session coordinator is unavailable.", 503)
 
     # Capture request_id now — middleware clears it before event_stream() runs.
     _captured_request_id = get_request_id()
@@ -1412,14 +1395,14 @@ def chat_session_respond(request, session_id):
             text   — optional user context to inject before continuing
     """
     if not _has_valid_secret(request):
-        return _json_error("Unauthorized", 403)
+        return util.json_error("Unauthorized", 403)
 
     session = services.get_chat_session(session_id)
     if session is None:
-        return _json_error("Session not found", 404)
+        return util.json_error("Session not found", 404)
 
     if session["status"] != "awaiting_input":
-        return _json_error(f"Session is not awaiting input (status: {session['status']})", 409)
+        return util.json_error(f"Session is not awaiting input (status: {session['status']})", 409)
 
     action = request.POST.get("action", "").strip()
     text = request.POST.get("text", "").strip()
@@ -1429,16 +1412,16 @@ def chat_session_respond(request, session_id):
         from agents.runtime import evict_team
         services.set_session_status(session_id, "stopped")
         evict_team(session_id)
-        return HttpResponse(_json_dumps({"status": "stopped"}), content_type="application/json")
+        return HttpResponse(util.json_dumps({"status": "stopped"}), content_type="application/json")
 
     if action == "continue":
         services.set_session_status(session_id, "idle")
         return HttpResponse(
-            _json_dumps({"status": "ok", "task": text, "attachment_ids": attachment_ids}),
+            util.json_dumps({"status": "ok", "task": text, "attachment_ids": attachment_ids}),
             content_type="application/json",
         )
 
-    return HttpResponse(_json_dumps({"error": "Invalid action"}), status=400,
+    return HttpResponse(util.json_dumps({"error": "Invalid action"}), status=400,
                         content_type="application/json")
 
 
@@ -1455,29 +1438,29 @@ def chat_session_restart(request, session_id):
       text - optional instruction when mode=continue_with_context
     """
     if not _has_valid_secret(request):
-        return _json_error("Unauthorized", 403)
+        return util.json_error("Unauthorized", 403)
 
     session = services.get_chat_session(session_id)
     if session is None:
-        return _json_error("Session not found", 404)
+        return util.json_error("Session not found", 404)
 
     if session.get("status") not in ("completed", "stopped"):
-        return _json_error(f"Session cannot be restarted from status '{session.get('status')}'.", 409)
+        return util.json_error(f"Session cannot be restarted from status '{session.get('status')}'.", 409)
 
     if not session.get("has_agent_state"):
-        return _json_error("No persisted agent state is available for this session.", 409)
+        return util.json_error("No persisted agent state is available for this session.", 409)
 
     mode = (request.POST.get("mode", "continue_only") or "continue_only").strip()
     text = (request.POST.get("text", "") or "").strip()
     if mode not in ("continue_only", "continue_with_context"):
-        return _json_error("Invalid restart mode.", 400)
+        return util.json_error("Invalid restart mode.", 400)
 
     if mode == "continue_with_context" and not text:
-        return _json_error("'text' is required when mode is continue_with_context.", 400)
+        return util.json_error("'text' is required when mode is continue_with_context.", 400)
 
     services.set_session_status(session_id, "idle")
     task = text if mode == "continue_with_context" else ""
-    return HttpResponse(_json_dumps({"status": "ok", "task": task, "mode": mode}), content_type="application/json")
+    return HttpResponse(util.json_dumps({"status": "ok", "task": task, "mode": mode}), content_type="application/json")
 
 
 # ---------------------------------------------------------------------------
@@ -1494,12 +1477,12 @@ def chat_session_stop(request, session_id):
     handles the CancelledError and emits a 'stopped' event.
     """
     if not _has_valid_secret(request):
-        return _json_error("Unauthorized", 403)
+        return util.json_error("Unauthorized", 403)
 
     from agents.session_coordination import SessionCoordinationError, ensure_redis_available, signal_cancel
 
     if not ensure_redis_available():
-        return _json_error("Active session coordinator is unavailable.", 503)
+        return util.json_error("Active session coordinator is unavailable.", 503)
 
     try:
         signal_cancel(session_id)
@@ -1508,11 +1491,11 @@ def chat_session_stop(request, session_id):
             "agents.session.redis_unavailable",
             extra={"session_id": session_id, "phase": "signal_cancel"},
         )
-        return _json_error("Active session coordinator is unavailable.", 503)
+        return util.json_error("Active session coordinator is unavailable.", 503)
 
     from agents.runtime import cancel_team
     cancel_team(session_id)
-    return HttpResponse(_json_dumps({"status": "cancelling"}), content_type="application/json")
+    return HttpResponse(util.json_dumps({"status": "cancelling"}), content_type="application/json")
 
 
 @csrf_exempt
@@ -1520,23 +1503,23 @@ def chat_session_stop(request, session_id):
 def chat_session_upload_attachments(request, session_id):
     """Upload one or more files for a session and return attachment descriptors."""
     if not _has_valid_secret(request):
-        return _json_error("Unauthorized", 403)
+        return util.json_error("Unauthorized", 403)
 
     session = services.get_chat_session(session_id)
     if session is None:
-        return _json_error("Session not found", 404)
+        return util.json_error("Session not found", 404)
 
     files = list(request.FILES.getlist("files"))
     try:
         uploaded = attachment_service.upload_session_attachments(session=session, files=files)
     except ValueError as exc:
-        return _json_error(str(exc), 400)
+        return util.json_error(str(exc), 400)
     except Exception:
         logger.exception("attachments.upload_failed", extra={"session_id": session_id})
-        return _json_error("Attachment upload failed.", 500)
+        return util.json_error("Attachment upload failed.", 500)
 
     enriched = _enrich_attachments_for_display(session_id, uploaded)
-    return HttpResponse(_json_dumps({"status": "ok", "attachments": enriched}), content_type="application/json")
+    return HttpResponse(util.json_dumps({"status": "ok", "attachments": enriched}), content_type="application/json")
 
 
 @require_GET

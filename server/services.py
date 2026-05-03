@@ -20,6 +20,7 @@ from pymongo.errors import DuplicateKeyError
 
 from .db import get_collection, ensure_indexes, CHAT_SESSIONS_COLLECTION
 from . import attachment_service
+from . import util
 from .model_catalog import (
     get_agent_model_names,
     default_system_prompt_hint,
@@ -28,11 +29,6 @@ from .model_catalog import (
     jira_export_prompt_hint as _get_jira_export_prompt_hint,
 )
 from .schemas import validate_project, validate_chat_session
-
-
-def _utc_now() -> datetime:
-    """Return current UTC datetime (timezone-aware). Used for all BSON Date writes."""
-    return datetime.now(timezone.utc)
 
 
 def _coerce_dt_to_iso(value) -> str:
@@ -52,18 +48,9 @@ def _coerce_dt_to_iso(value) -> str:
     return str(value) if value else ""
 
 
-def _json_default(value):
-    """Serialize datetime values for JSON-only boundaries."""
-    if isinstance(value, datetime):
-        if value.tzinfo is None:
-            value = value.replace(tzinfo=timezone.utc)
-        return value.isoformat()
-    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
-
-
 def _json_size_bytes(value) -> int:
     """Return UTF-8 byte size of JSON payload with datetime-safe serialization."""
-    return len(json.dumps(value, ensure_ascii=True, default=_json_default).encode("utf-8"))
+    return len(json.dumps(value, ensure_ascii=True, default=util.json_default).encode("utf-8"))
 
 from core.tracing import traced_function
 
@@ -438,7 +425,7 @@ def create_project(data):
     ensure_indexes()
     col = get_collection("project_settings")
     doc = cleaned.copy()
-    now = _utc_now()
+    now = util.utc_now()
     doc["created_at"] = now
     doc["updated_at"] = now
     try:
@@ -490,8 +477,8 @@ def update_project(project_id, data):
     cleaned = validate_project(data)
 
     # Preserve original created_at; stamp updated_at as BSON Date
-    cleaned["created_at"] = existing.get("created_at") or _utc_now()
-    cleaned["updated_at"] = _utc_now()
+    cleaned["created_at"] = existing.get("created_at") or util.utc_now()
+    cleaned["updated_at"] = util.utc_now()
 
     try:
         result = col.replace_one({"_id": oid}, cleaned)
@@ -1047,7 +1034,7 @@ def save_agent_state(session_id, state):
     payload = {
         "source": "autogen_team_state",
         "version": str(state.get("version") or ""),
-        "saved_at": _utc_now(),  # BSON Date — coerced to ISO string on read
+        "saved_at": util.utc_now(),  # BSON Date — coerced to ISO string on read
         "state": state,
     }
     try:

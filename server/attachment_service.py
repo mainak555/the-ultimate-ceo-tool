@@ -30,7 +30,6 @@ import io
 import json
 import logging
 import re
-from datetime import datetime, timezone
 from typing import Iterable
 from uuid import uuid4
 
@@ -43,6 +42,7 @@ from core.tracing import traced_function
 
 from .db import get_collection
 from .storage_backends import build_storage_strategy
+from . import util
 
 logger = logging.getLogger(__name__)
 
@@ -154,10 +154,6 @@ _ALLOWED_EXTENSIONS = {
 _IMAGE_EXTENSIONS = {
     "png", "jpg", "jpeg", "webp", "gif", "bmp", "svg", "heic", "heif", "tif", "tiff",
 }
-
-
-def _utc_now() -> datetime:
-    return datetime.now(timezone.utc)
 
 
 def _clean_filename(name: str) -> str:
@@ -329,7 +325,7 @@ def upload_session_attachments(*, session: dict, files: list[UploadedFile]) -> l
             "size_bytes": int(uploaded.size or len(raw)),
             "is_image": ext in _IMAGE_EXTENSIONS,
             "blob_key": key,
-            "uploaded_at": _utc_now(),
+            "uploaded_at": util.utc_now(),
         }
         col.insert_one(doc)
         placeholders.append(_attachment_descriptor(doc))
@@ -362,7 +358,7 @@ def bind_attachments_to_message(*, session_id: str, message_id: str, attachment_
     attachment_ids_clean = [d["attachment_id"] for d in docs]
     col.update_many(
         {"session_id": session_id, "attachment_id": {"$in": attachment_ids_clean}},
-        {"$set": {"message_id": message_id, "bound_at": _utc_now()}},
+        {"$set": {"message_id": message_id, "bound_at": util.utc_now()}},
     )
 
     return [
