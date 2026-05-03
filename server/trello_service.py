@@ -10,9 +10,10 @@ from urllib.parse import quote
 from bson import ObjectId
 from bson.errors import InvalidId
 
-from .db import get_collection, CHAT_SESSIONS_COLLECTION
+from .db import get_collection, CHAT_SESSIONS_COLLECTION, PROJECT_SETTINGS_COLLECTION
 from . import services
 from . import trello_client
+from . import util
 from core.tracing import traced_function
 
 logger = logging.getLogger(__name__)
@@ -67,7 +68,7 @@ def store_project_token(project_id, token):
     except (InvalidId, TypeError):
         raise ValueError(f"Invalid project ID '{project_id}'.")
 
-    col = get_collection("project_settings")
+    col = get_collection(PROJECT_SETTINGS_COLLECTION)
     now_dt = datetime.now(timezone.utc)  # BSON Date stored in MongoDB
     now_iso = now_dt.isoformat()          # ISO string returned to caller / JSON
     result = col.update_one(
@@ -89,7 +90,7 @@ def get_project_token(project_id):
     except (InvalidId, TypeError):
         return None
 
-    col = get_collection("project_settings")
+    col = get_collection(PROJECT_SETTINGS_COLLECTION)
     doc = col.find_one({"_id": oid}, {"integrations.trello.token": 1, "integrations.trello.token_generated_at": 1})
     if not doc:
         return None
@@ -124,7 +125,7 @@ def _resolve_project_credentials(project_id):
     except (InvalidId, TypeError):
         raise ValueError("Invalid project ID.")
 
-    col = get_collection("project_settings")
+    col = get_collection(PROJECT_SETTINGS_COLLECTION)
     project = col.find_one({"_id": project_oid})
     if not project:
         raise ValueError("Project not found.")
@@ -149,7 +150,7 @@ def build_project_auth_url(project_id, callback_url):
     except (InvalidId, TypeError):
         raise ValueError("Invalid project ID.")
 
-    col = get_collection("project_settings")
+    col = get_collection(PROJECT_SETTINGS_COLLECTION)
     project = col.find_one({"_id": oid})
     if not project:
         raise ValueError("Project not found.")
@@ -255,31 +256,6 @@ def create_list(session_id, name, board_id):
 PRIORITY_VALUES = {"low": "Low", "medium": "Medium", "high": "High", "critical": "Critical"}
 
 
-def _coerce_confidence(value):
-    try:
-        out = float(value)
-    except (TypeError, ValueError):
-        return 0.0
-    return max(0.0, min(1.0, out))
-
-
-def _normalize_labels(labels):
-    if not isinstance(labels, list):
-        return []
-    seen = set()
-    cleaned = []
-    for label in labels:
-        text = str(label or "").strip()
-        if not text:
-            continue
-        key = text.lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        cleaned.append(text)
-    return cleaned
-
-
 def _normalize_custom_fields(custom_fields):
     if not isinstance(custom_fields, list):
         return []
@@ -370,9 +346,9 @@ def normalize_export_items(items):
             "card_description": card_description,
             "checklists": _normalize_checklists(item),
             "custom_fields": _normalize_custom_fields(item.get("custom_fields")),
-            "labels": _normalize_labels(item.get("labels")),
+            "labels": util.normalize_labels(item.get("labels")),
             "priority": priority,
-            "confidence_score": _coerce_confidence(item.get("confidence_score", 0.0)),
+            "confidence_score": util.coerce_confidence(item.get("confidence_score", 0.0)),
         })
 
     return normalized
@@ -444,7 +420,7 @@ def run_export_extract(session_id, discussion_id):
         raise ValueError("Session is not linked to a project.")
 
     from .db import get_collection as _gc
-    project_col = _gc("project_settings")
+    project_col = _gc(PROJECT_SETTINGS_COLLECTION)
     try:
         project_oid = ObjectId(project_id)
     except (InvalidId, TypeError):

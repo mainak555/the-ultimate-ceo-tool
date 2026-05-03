@@ -8,6 +8,10 @@ description: Enforce consistent delete controls, color tokens, spacing, and typo
 ## Purpose
 Preserve a consistent visual language across Config, Home, and export modals.
 
+## Scope Boundary
+This skill owns UX/behavior contracts (what must be present, where controls appear, and interaction/order semantics).
+Token-level styling implementation (colors, spacing variables, selector scoping) is owned by `.agents/skills/scss_style_consistency/SKILL.md`.
+
 ## Required Consistency Areas
 1. Delete controls: icon style, hover behavior, and danger semantics must match shared patterns.
 2. Color scheme: use shared SCSS tokens and existing button modifiers.
@@ -26,7 +30,7 @@ Preserve a consistent visual language across Config, Home, and export modals.
 6. Item section headings should show a shared count badge pattern (`Cards <count>`, `Issues <count>`) using `export-modal__count-badge`.
 7. Jira Software issue editor must keep delete control in the issue-card header row next to the issue title.
 8. Jira Software Add Issue button must stay in the section header row (same row as Issues title/count) and use shared button semantics.
-9. Jira Software destination cascade (Project, Sprint, Epic) must remain aligned and responsive using shared form/select patterns.
+9. Jira Software destination cascade (Project + Sprint) must remain aligned and responsive using shared form/select patterns.
 
 ## Review Checklist
 1. Compare delete controls with chat list and agent card patterns.

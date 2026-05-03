@@ -65,6 +65,7 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.staticfiles",
     # Third-party
+    "channels",
     "django_htmx",
     "compressor",
     # Project

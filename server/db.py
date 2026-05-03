@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 _client = None
 PROJECT_SETTINGS_COLLECTION = "project_settings"
 CHAT_SESSIONS_COLLECTION = "chat_sessions"
+ATTACHMENTS_COLLECTION = "chat_attachments"
 
 
 def _redact_uri(uri: str) -> str:
@@ -80,6 +81,20 @@ def ensure_indexes():
         unique=True,
         partialFilterExpression={"discussions.id": {"$type": "string"}},
         name="uniq_session_discussions_id",
+    )
+
+    if ATTACHMENTS_COLLECTION not in db.list_collection_names():
+        try:
+            db.create_collection(ATTACHMENTS_COLLECTION)
+        except CollectionInvalid:
+            pass
+
+    attachments_col = db[ATTACHMENTS_COLLECTION]
+    attachments_col.create_index("session_id")
+    attachments_col.create_index(
+        [("session_id", 1), ("attachment_id", 1)],
+        unique=True,
+        name="uniq_session_attachment_id",
     )
 
 

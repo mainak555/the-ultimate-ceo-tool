@@ -18,8 +18,14 @@ from bson.errors import InvalidId
 logger = logging.getLogger(__name__)
 from pymongo.errors import DuplicateKeyError
 
-from .db import get_collection, ensure_indexes, CHAT_SESSIONS_COLLECTION
+from .db import (
+    get_collection,
+    ensure_indexes,
+    CHAT_SESSIONS_COLLECTION,
+    PROJECT_SETTINGS_COLLECTION,
+)
 from . import attachment_service
+from . import util
 from .model_catalog import (
     get_agent_model_names,
     default_system_prompt_hint,
@@ -28,11 +34,6 @@ from .model_catalog import (
     jira_export_prompt_hint as _get_jira_export_prompt_hint,
 )
 from .schemas import validate_project, validate_chat_session
-
-
-def _utc_now() -> datetime:
-    """Return current UTC datetime (timezone-aware). Used for all BSON Date writes."""
-    return datetime.now(timezone.utc)
 
 
 def _coerce_dt_to_iso(value) -> str:
@@ -52,18 +53,9 @@ def _coerce_dt_to_iso(value) -> str:
     return str(value) if value else ""
 
 
-def _json_default(value):
-    """Serialize datetime values for JSON-only boundaries."""
-    if isinstance(value, datetime):
-        if value.tzinfo is None:
-            value = value.replace(tzinfo=timezone.utc)
-        return value.isoformat()
-    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
-
-
 def _json_size_bytes(value) -> int:
     """Return UTF-8 byte size of JSON payload with datetime-safe serialization."""
-    return len(json.dumps(value, ensure_ascii=True, default=_json_default).encode("utf-8"))
+    return len(json.dumps(value, ensure_ascii=True, default=util.json_default).encode("utf-8"))
 
 from core.tracing import traced_function
 
@@ -372,7 +364,7 @@ def normalize_project(project):
 def list_projects():
     """Return all project settings, sorted by project_name ascending."""
     ensure_indexes()
-    col = get_collection("project_settings")
+    col = get_collection(PROJECT_SETTINGS_COLLECTION)
     cursor = col.find({}).sort("project_name", 1)
     projects = [normalize_project(p) for p in cursor]
     project_ids = [p["project_id"] for p in projects if p.get("project_id")]
@@ -396,7 +388,7 @@ def get_project(project_id):
         oid = ObjectId(project_id)
     except (InvalidId, TypeError):
         return None
-    col = get_collection("project_settings")
+    col = get_collection(PROJECT_SETTINGS_COLLECTION)
     project = col.find_one({"_id": oid})
     normalized = normalize_project(project)
     if not normalized:
@@ -418,7 +410,7 @@ def get_project_raw(project_id):
         oid = ObjectId(project_id)
     except (InvalidId, TypeError):
         return None
-    col = get_collection("project_settings")
+    col = get_collection(PROJECT_SETTINGS_COLLECTION)
     doc = col.find_one({"_id": oid})
     if doc:
         doc["project_id"] = str(doc.pop("_id"))
@@ -436,9 +428,9 @@ def create_project(data):
     cleaned = validate_project(data)
 
     ensure_indexes()
-    col = get_collection("project_settings")
+    col = get_collection(PROJECT_SETTINGS_COLLECTION)
     doc = cleaned.copy()
-    now = _utc_now()
+    now = util.utc_now()
     doc["created_at"] = now
     doc["updated_at"] = now
     try:
@@ -479,7 +471,7 @@ def update_project(project_id, data):
 
     # Load existing doc to preserve masked secrets
     ensure_indexes()
-    col = get_collection("project_settings")
+    col = get_collection(PROJECT_SETTINGS_COLLECTION)
     existing = col.find_one({"_id": oid})
     if existing is None:
         raise ValueError("Project not found.")
@@ -490,8 +482,8 @@ def update_project(project_id, data):
     cleaned = validate_project(data)
 
     # Preserve original created_at; stamp updated_at as BSON Date
-    cleaned["created_at"] = existing.get("created_at") or _utc_now()
-    cleaned["updated_at"] = _utc_now()
+    cleaned["created_at"] = existing.get("created_at") or util.utc_now()
+    cleaned["updated_at"] = util.utc_now()
 
     try:
         result = col.replace_one({"_id": oid}, cleaned)
@@ -581,7 +573,7 @@ def delete_project(project_id):
             "Cannot delete project while chat sessions exist. Delete chat sessions first."
         )
 
-    col = get_collection("project_settings")
+    col = get_collection(PROJECT_SETTINGS_COLLECTION)
     result = col.delete_one({"_id": oid})
     if result.deleted_count == 0:
         raise ValueError("Project not found.")
@@ -602,7 +594,7 @@ def clone_project(project_id):
         raise ValueError("Project not found.")
 
     ensure_indexes()
-    col = get_collection("project_settings")
+    col = get_collection(PROJECT_SETTINGS_COLLECTION)
     raw = col.find_one({"_id": oid})
     if raw is None:
         raise ValueError("Project not found.")
@@ -792,10 +784,7 @@ def set_session_status(session_id, status):
 
 @traced_function("service.chat.try_set_running")
 def try_set_session_running(session_id):
-    """Atomically set status to running only from idle/awaiting_input/awaiting_oauth.
-
-    Also clears any ``pending_oauth_servers`` left over from an awaiting_oauth gate.
-    """
+    """Atomically set status to running only from idle/awaiting_input/awaiting_mcp_oauth."""
     try:
         oid = ObjectId(session_id)
     except (InvalidId, TypeError):
@@ -803,28 +792,28 @@ def try_set_session_running(session_id):
 
     col = get_collection(CHAT_SESSIONS_COLLECTION)
     result = col.update_one(
-        {"_id": oid, "status": {"$in": ["idle", "awaiting_input", "awaiting_oauth"]}},
-        {"$set": {"status": "running"}, "$unset": {"pending_oauth_servers": ""}},
+        {"_id": oid, "status": {"$in": ["idle", "awaiting_input", "awaiting_mcp_oauth"]}},
+        {"$set": {"status": "running"}},
     )
     return result.modified_count == 1
 
 
-@traced_function("service.chat.set_awaiting_oauth")
-def set_session_awaiting_oauth(session_id, server_names):
+@traced_function("service.chat.set_awaiting_mcp_oauth")
+def set_session_awaiting_oauth(session_id, server_names=None):
     """Mark a chat session as awaiting MCP OAuth authorization.
 
-    Stores the pending server-name list and flips ``status`` to ``awaiting_oauth``.
-    Idempotent. Caller is responsible for ordering the server names.
+    Flips ``status`` to ``awaiting_mcp_oauth``.  Idempotent.
+    ``server_names`` is accepted for backward compatibility but not stored —
+    the pending list is tracked entirely via Redis (readiness counter + pub/sub).
     """
     try:
         oid = ObjectId(session_id)
     except (InvalidId, TypeError):
         return
-    names = [str(s) for s in (server_names or []) if isinstance(s, str)]
     col = get_collection(CHAT_SESSIONS_COLLECTION)
     col.update_one(
         {"_id": oid},
-        {"$set": {"status": "awaiting_oauth", "pending_oauth_servers": names}},
+        {"$set": {"status": "awaiting_mcp_oauth"}},
     )
 
 
@@ -868,6 +857,42 @@ def compute_pending_oauth_servers(raw_project, session_id):
     from agents.session_coordination import list_authorized_oauth_servers
     authorized = set(list_authorized_oauth_servers(session_id, needs_auth))
     return [name for name in needs_auth if name not in authorized]
+
+
+def list_all_reachable_oauth_servers(raw_project):
+    """Return all MCP server names that are reachable by this project AND require OAuth.
+
+    Unlike ``compute_pending_oauth_servers`` this does NOT check Redis for
+    existing tokens — it returns the full set regardless of authorization state.
+    Used to compute ``total_count`` for the readiness counter.
+    """
+    if not isinstance(raw_project, dict):
+        return []
+    oauth_configs = raw_project.get("mcp_oauth_configs") or {}
+    if not isinstance(oauth_configs, dict) or not oauth_configs:
+        return []
+
+    reachable: set[str] = set()
+    agents = raw_project.get("agents") or []
+    has_shared = False
+    for agent in agents:
+        if not isinstance(agent, dict):
+            continue
+        scope = (agent.get("mcp_tools") or "none").strip().lower()
+        if scope == "shared":
+            has_shared = True
+        elif scope == "dedicated":
+            cfg = agent.get("mcp_configuration") or {}
+            servers = (cfg or {}).get("mcpServers") or {}
+            if isinstance(servers, dict):
+                reachable.update(servers.keys())
+    if has_shared:
+        shared_cfg = raw_project.get("shared_mcp_tools") or {}
+        shared_servers = (shared_cfg or {}).get("mcpServers") or {}
+        if isinstance(shared_servers, dict):
+            reachable.update(shared_servers.keys())
+
+    return sorted(reachable.intersection(oauth_configs.keys()))
 
 
 @traced_function("service.chat.append_messages")
@@ -1014,7 +1039,7 @@ def save_agent_state(session_id, state):
     payload = {
         "source": "autogen_team_state",
         "version": str(state.get("version") or ""),
-        "saved_at": _utc_now(),  # BSON Date — coerced to ISO string on read
+        "saved_at": util.utc_now(),  # BSON Date — coerced to ISO string on read
         "state": state,
     }
     try:

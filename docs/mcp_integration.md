@@ -361,8 +361,8 @@ ensures tokens are present in Redis before the agent team is built.
 | Method | Path | Purpose |
 |--------|------|---------|
 | GET | `/mcp/oauth/start/` | Start OAuth flow — generates PKCE pair, stores state, redirects to `auth_url`. Discriminated by `?flow=test` (Project Config Test button) or `?flow=run` (pre-run authorize) |
-| GET | `/mcp/oauth/callback/` | Provider callback — exchanges code for token, renders shared `oauth_flow.html` outcome page (postMessage + auto-close) |
-| GET | `/mcp/oauth/check/<session_id>/` | Pre-run check — returns authorization status for all OAuth servers |
+| GET | `/mcp/oauth/callback/` | Provider callback — exchanges code for token, publishes Redis pub/sub event, renders shared `oauth_flow.html` outcome page (postMessage + auto-close) |
+| WS | `ws/mcp/oauth/<session_id>/` | WebSocket readiness stream — authenticates via `?skey=`, sends initial `state` frame, then pushes `update`/`complete` frames as OAuth callbacks complete. No polling required. |
 
 ### PKCE flow sequence
 
@@ -436,31 +436,49 @@ Both success and error branches of `/mcp/oauth/callback/` render the shared `ser
 
 ### Pre-run and mid-run OAuth gate
 
-The gate is **server-driven** — no client-side pre-check occurs before the run POST.
+The gate is **server-driven** — no client-side pre-check occurs before the run POST. Readiness updates are delivered via a **WebSocket + Redis pub/sub** channel, eliminating polling.
 
 **Pre-run flow:**
 
 1. `home.js::_doStartRun()` posts to `POST /chat/sessions/<id>/run/`.
 2. The backend calls `compute_pending_oauth_servers(raw_project, session_id)`, which intersects the project's `mcp_oauth_configs` keys with the MCP server names reachable by active agents (shared + dedicated scopes), then checks Redis for session-scoped Bearer tokens.
-3. If any server lacks a token the backend returns **HTTP 409** `{"status": "awaiting_oauth", "servers": [...]}` and sets `session.status = "awaiting_oauth"` in MongoDB.
-4. The frontend detects the 409 and calls `_showOAuthGatePanel(sessionId, secretKey, servers, replayTask, replayAttachmentIds)`, which renders a `.chat-oauth-panel` in-history card (not a modal overlay) with one **Authorize** button per server.
-5. Clicking **Authorize** calls `window.McpOAuth.openAuthPopup(serverName, sessionId, projectId, secretKey)`, opening the consent popup.
-6. The popup's `oauth_flow.html` outcome page posts `{type: "mcp_oauth_done", success: true, server_name}` to the parent window via `postMessage`.
-7. The parent marks the row authorized; when all rows are authorized, `_onAllAuthorized()` calls `_doStartRun()` again — the server re-checks Redis and proceeds normally.
-8. **Popup-blocker fallback:** a 3 s polling timer calls `McpOAuth.fetchStatus(sessionId, secretKey)` (`GET /mcp/oauth/check/<sessionId>/`) to detect tokens written by the callback; marks rows and triggers `_onAllAuthorized()` the same way.
+3. If any server lacks a token the backend:
+   - computes `authorized_count = total_servers − pending_count` via `list_all_reachable_oauth_servers()`,
+   - seeds the Redis readiness counter: `init_mcp_oauth_readiness(session_id, authorized_count)` → `{ns}:mcp_oauth:run:{session_id}:servers` (24 h TTL),
+   - sets `session.status = "awaiting_mcp_oauth"` in MongoDB (no `pending_oauth_servers` field — the counter is the source of truth),
+   - returns **HTTP 409** `{"status": "awaiting_mcp_oauth", "servers": [...]}` (pending server names only).
+4. The frontend detects the 409 and calls `_showOAuthGatePanel(sessionId, secretKey, servers, replayTask, replayAttachmentIds)`, which renders a `.chat-oauth-panel` skeleton card in the chat history and immediately opens a **WebSocket** to `ws/mcp/oauth/<session_id>/?skey=<key>`.
+5. On WebSocket connect the consumer sends an initial **`state`** frame `{type:"state", servers:[{name, authorized}], total}` derived from Redis and the project config.
+6. Clicking **Authorize** in the card calls `window.McpOAuth.openAuthPopup(serverName, sessionId, projectId, secretKey)`, opening the PKCE consent popup.
+7. After the user grants access, the OAuth callback handler calls `publish_oauth_server_authorized(session_id, server_name, total_count)`, which atomically increments the Redis readiness counter and publishes a message to the Redis pub/sub channel `{ns}:mcp_oauth:readiness:{session_id}`.
+8. The WebSocket consumer receives the pub/sub message and pushes an **`update`** frame `{type:"update", server_name, authorized_count, total_count}` to the browser, which marks the row authorized.
+9. When `authorized_count >= total_count` the consumer pushes a **`complete`** frame `{type:"complete"}` and the client calls `_onAllAuthorized()`, which replays `_doStartRun()`. The server then deletes the readiness counter, acquires the run lease, and proceeds.
 
-`window.McpOAuth` exposes only `openAuthPopup()` and `fetchStatus()`. `checkAndAuthorize` does not exist.
+`window.McpOAuth` exposes only `openAuthPopup(serverName, sessionId, projectId, secretKey)`. There is no `fetchStatus`, no polling, and no `checkAndAuthorize`.
+
+**WebSocket message protocol** (`ws/mcp/oauth/<session_id>/`):
+
+| Frame | Direction | Payload |
+|-------|-----------|--------|
+| `state` | server → client | `{type:"state", servers:[{name, authorized}], total:N}` — sent once on connect with current Redis state |
+| `update` | server → client | `{type:"update", server_name, authorized_count, total_count}` — sent when a callback increments the counter |
+| `complete` | server → client | `{type:"complete"}` — sent when `authorized_count >= total_count` |
+| `error` | server → client | `{type:"error", message}` — sent when session or project cannot be loaded |
+
+The WebSocket **authentication** gate: `?skey=<APP_SECRET_KEY>` is validated before `accept()` is called. Invalid credentials cause an immediate close with code `4003` (no connection accepted).
+
+**Page-reload and session-switch restore:** the template renders a `.chat-oauth-panel` card when `session.status == "awaiting_mcp_oauth"`. Both `DOMContentLoaded` and `htmx:afterSwap` handlers scan for this card and call `_attachOAuthGateBehavior()`, which re-opens the WebSocket to restore live readiness tracking without user interaction.
 
 **Mid-run gate:**
 
 If a token expires between turns during a run, the SSE stream emits:
 
 ```
-event: awaiting_oauth
+event: awaiting_mcp_oauth
 data: {"servers": ["server-name", ...]}
 ```
 
-The frontend handles this in the SSE pump loop by calling `_showOAuthGatePanel()` with empty `replayTask` and `replayAttachmentIds`. Once all servers are re-authorized, `_onAllAuthorized()` replays `_doStartRun()` automatically. There is no mid-session token refresh without user action (v1 limitation).
+The frontend handles this in the SSE pump loop by calling `_showOAuthGatePanel()` with empty `replayTask` and `replayAttachmentIds`. The same WebSocket + pub/sub flow applies. Once all servers are re-authorized, `_onAllAuthorized()` replays `_doStartRun()` automatically. There is no mid-session token refresh without user action (v1 limitation).
 
 ### Runtime injection
 
@@ -471,6 +489,8 @@ The frontend handles this in the SSE pump loop by calling `_showOAuthGatePanel()
 | Purpose | Key pattern |
 |---------|-------------|
 | Session-scoped run token | `{ns}:mcp_oauth:run:{session_id}:{server_name}:token` |
+| Readiness counter (authorized count) | `{ns}:mcp_oauth:run:{session_id}:servers` (24 h TTL; set by pre-run gate, incremented by callback, deleted on run start) |
+| Pub/sub readiness channel | `{ns}:mcp_oauth:readiness:{session_id}` (publish-only; no TTL; consumed by WebSocket consumer) |
 | PKCE state (one-time) | `{ns}:mcp_oauth_state:{state}:meta` (300 s TTL) |
 | Test authorization result | `{ns}:mcp_oauth:test:{project_id}:{server_name}:status` (600 s TTL) |
 
@@ -496,8 +516,13 @@ Logger: `server.mcp_views`. Every branch of the start + callback handlers emits 
 | `agents.mcp.oauth_token_missing` | WARN | 2xx but no `access_token` field; logs `response_keys`. |
 | `agents.mcp.oauth_test_authorized` | INFO | `flow=test` success — Redis status flag written. |
 | `agents.mcp.oauth_authorized` | INFO | `flow=run` success — session token written; logs `ttl_seconds`. |
-| `agents.mcp.oauth_gate_blocked` | INFO | Pre-run gate fired: `compute_pending_oauth_servers` found ≥1 server without a Redis token; backend returned 409; `session.status` set to `awaiting_oauth`. |
-| `agents.mcp.oauth_gate_blocked_midrun` | INFO | Same check triggered between turns; SSE `awaiting_oauth` event emitted; run paused pending re-authorization. |
+| `agents.mcp.oauth_gate_blocked` | INFO | Pre-run gate fired: backend returned 409 with `status:"awaiting_mcp_oauth"`; readiness counter seeded in Redis; `session.status` set to `"awaiting_mcp_oauth"` in MongoDB. |
+| `agents.mcp.oauth_gate_blocked_midrun` | INFO | Same check triggered between turns; SSE `awaiting_mcp_oauth` event emitted; run paused pending re-authorization. |
+| `agents.mcp.oauth_ws_auth_failed` | WARN | WebSocket connection rejected — invalid `?skey=` (closed with code 4003). |
+| `agents.mcp.oauth_ws_subscribed` | INFO | WebSocket accepted and Redis pub/sub subscription active; payload: `session_id`, `server_count`. |
+| `agents.mcp.oauth_ws_complete` | INFO | All servers authorized; `complete` frame sent; WebSocket closed normally. |
+| `agents.mcp.oauth_ws_error` | ERROR | Session or project not found after WS accept; `error` frame sent. |
+| `agents.mcp.oauth_ws_listen_error` | ERROR | Redis pub/sub receive loop raised an exception; WS closed. |
 | `agents.mcp.oauth_token_store_failed` | WARN | Redis `SET` of the session-scoped token key failed (Redis unavailable or serialization error). |
 
 Tracing: three nested OTel spans per OAuth round-trip:

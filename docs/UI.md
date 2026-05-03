@@ -109,6 +109,7 @@ Shared markdown rendering for Home and export reference panes must go through `s
 
 `home.js` also handles (home chat page only):
 - Restart controls for sessions with persisted agent state.
+- Chat-session readiness cards (`.chat-status-badge--gate`, `.chat-oauth-panel`, `.chat-restart-panel`) with in-history rendering and restore behavior.
 - Two restart modes: continue from last state, or add context and continue.
 - Human gate: when the SSE `gate` event fires, a non-interactive status badge (`.chat-status-badge--gate`) is appended to chat and the bottom input bar enters **gate mode** — placeholder updates to show the round, Stop button stays visible, Send routes to `sendRespond("continue")`. No separate panel widget is injected.
 - When a session with `status == "awaiting_input"` is loaded from the server, `chat_session_history.html` renders the gate status badge (carrying `data-gate-context`). Both the `DOMContentLoaded` bootstrap (initial page load) and `htmx:afterSwap` (session switch) scan for this badge and call `setGateMode()` to restore the Stop button and input placeholder without an extra API call.
@@ -116,6 +117,9 @@ Shared markdown rendering for Home and export reference panes must go through `s
 - Attachment chip rendering during composition and thumbnail rendering in chat history for image attachments.
 - **Copy-to-clipboard** on every chat message (see [Chat Message Copy](#chat-message-copy) below).
 - **Stop button idempotency**: the Stop button is disabled immediately on first click to prevent double-submission. `setRunningState()` always resets `disabled` when hiding the button so the next run starts with a fresh enabled state.
+
+Detailed readiness-card contract (behavior strict, UI override allowed by use case):
+- [docs/chat_session_readiness_cards.md](chat_session_readiness_cards.md)
 
 ## Chat Message Copy
 

@@ -702,11 +702,14 @@ document.addEventListener("DOMContentLoaded", function () {
   // MCP OAuth in-history authorization panel
   // ------------------------------------------------------------------
 
-  var _oauthPollTimer = null;
+  var _oauthWs = null;
   var _oauthMessageListener = null;
 
   function _teardownOAuthGate() {
-    if (_oauthPollTimer) { clearInterval(_oauthPollTimer); _oauthPollTimer = null; }
+    if (_oauthWs) {
+      try { _oauthWs.close(); } catch (_) {}
+      _oauthWs = null;
+    }
     if (_oauthMessageListener) {
       window.removeEventListener("message", _oauthMessageListener);
       _oauthMessageListener = null;
@@ -721,6 +724,34 @@ document.addEventListener("DOMContentLoaded", function () {
     return pid;
   }
 
+  /** Build server rows HTML and inject into the panel, removing the loading indicator. */
+  function _renderOAuthRows(panel, servers) {
+    var rowsContainer = panel.querySelector(".chat-oauth-panel__rows");
+    if (!rowsContainer) return;
+    // Remove loading indicator if present.
+    var loading = rowsContainer.querySelector(".chat-oauth-panel__loading");
+    if (loading) loading.remove();
+
+    (servers || []).forEach(function (srv) {
+      var name = typeof srv === "string" ? srv : (srv.name || "");
+      var authorized = typeof srv === "object" && srv.authorized;
+      // Skip if row already exists (idempotent).
+      if (panel.querySelector('.chat-oauth-panel__row[data-server-name="' + name.replace(/"/g, '\\"') + '"]')) return;
+      var safe = escapeHtml(name);
+      var rowHtml = '<div class="chat-oauth-panel__row'
+        + (authorized ? " chat-oauth-panel__row--authorized" : "") + '" data-server-name="' + safe + '">'
+        + '<span class="chat-oauth-panel__server">' + safe + '</span>'
+        + '<span class="chat-oauth-panel__status '
+        + (authorized ? "chat-oauth-panel__status--authorized" : "chat-oauth-panel__status--pending") + '">'
+        + (authorized ? "Authorized \u2713" : "Pending") + '</span>'
+        + '<button type="button" class="btn btn--primary chat-oauth-authorize-btn" data-server-name="' + safe + '"'
+        + (authorized ? " disabled" : "") + '>'
+        + (authorized ? "Authorized \u2713" : "Authorize") + '</button>'
+        + '</div>';
+      rowsContainer.insertAdjacentHTML("beforeend", rowHtml);
+    });
+  }
+
   function _showOAuthGatePanel(sessionId, secretKey, servers, replayTask, replayAttachmentIds) {
     setRunningState(false);
     _teardownOAuthGate();
@@ -730,14 +761,6 @@ document.addEventListener("DOMContentLoaded", function () {
     });
 
     var projectId = _resolveProjectId();
-    var rowsHtml = (servers || []).map(function (name) {
-      var safe = escapeHtml(name);
-      return '<div class="chat-oauth-panel__row" data-server-name="' + safe + '">'
-        + '<span class="chat-oauth-panel__server">' + safe + '</span>'
-        + '<span class="chat-oauth-panel__status chat-oauth-panel__status--pending">Pending</span>'
-        + '<button type="button" class="btn btn--primary chat-oauth-authorize-btn" data-server-name="' + safe + '">Authorize</button>'
-        + '</div>';
-    }).join("");
 
     chatMessages.insertAdjacentHTML(
       "beforeend",
@@ -746,7 +769,7 @@ document.addEventListener("DOMContentLoaded", function () {
       + ' data-project-id="' + escapeHtml(projectId) + '">'
       + '<div class="chat-oauth-panel__title">&#x1F510; MCP authorization required</div>'
       + '<p class="chat-oauth-panel__hint">One or more MCP servers used by this project require OAuth authorization for this session. Authorize each server below; the run will resume automatically once all are connected.</p>'
-      + '<div class="chat-oauth-panel__rows">' + rowsHtml + '</div>'
+      + '<div class="chat-oauth-panel__rows"><p class="chat-oauth-panel__loading">Connecting\u2026</p></div>'
       + '</div>'
     );
 
@@ -754,6 +777,8 @@ document.addEventListener("DOMContentLoaded", function () {
     if (!panel) return;
     panel._replayTask = replayTask || "";
     panel._replayAttachmentIds = (replayAttachmentIds || []).slice();
+    // Stash server list for postMessage path before WS connects.
+    panel._pendingServers = (servers || []).slice();
     chatMessages.scrollTop = chatMessages.scrollHeight;
 
     _attachOAuthGateBehavior(panel, sessionId, secretKey);
@@ -771,7 +796,7 @@ document.addEventListener("DOMContentLoaded", function () {
         status.textContent = "Authorized \u2713";
       }
       var btn = row.querySelector(".chat-oauth-authorize-btn");
-      if (btn) { btn.disabled = true; btn.textContent = "Authorized \u2713"; }
+      if (btn) { btn.disabled = true; }
     }
 
     function _allAuthorized() {
@@ -793,29 +818,64 @@ document.addEventListener("DOMContentLoaded", function () {
       setRunningState(true);
     }
 
-    // postMessage from popup callback page
+    // postMessage from popup callback page — instant feedback when popup is open.
     _oauthMessageListener = function (event) {
       var data = event.data || {};
       if (data.type === "mcp_oauth_done" && data.success && data.server_name) {
+        // Ensure rows are rendered if WS state hasn't arrived yet.
+        if (panel._pendingServers && panel._pendingServers.length) {
+          _renderOAuthRows(panel, panel._pendingServers);
+          panel._pendingServers = [];
+        }
         _markRowAuthorized(data.server_name);
         if (_allAuthorized()) _onAllAuthorized();
       }
     };
     window.addEventListener("message", _oauthMessageListener);
 
-    // Polling fallback (popup-blocker scenarios)
-    _oauthPollTimer = setInterval(function () {
-      if (!window.McpOAuth || !document.body.contains(panel)) {
-        _teardownOAuthGate();
-        return;
-      }
-      window.McpOAuth.fetchStatus(sessionId, secretKey).then(function (status) {
-        (status.servers || []).forEach(function (s) {
-          if (s.authorized) _markRowAuthorized(s.server_name);
-        });
-        if (status.all_authorized || _allAuthorized()) _onAllAuthorized();
-      }).catch(function () { /* keep polling */ });
-    }, 3000);
+    // WebSocket connection for server-push readiness updates.
+    var proto = location.protocol === "https:" ? "wss:" : "ws:";
+    var wsUrl = proto + "//" + location.host + "/ws/mcp/oauth/" + encodeURIComponent(sessionId)
+      + "/?skey=" + encodeURIComponent(secretKey);
+    try {
+      _oauthWs = new WebSocket(wsUrl);
+    } catch (_) {
+      _oauthWs = null;
+    }
+
+    if (_oauthWs) {
+      _oauthWs.onmessage = function (event) {
+        var msg;
+        try { msg = JSON.parse(event.data); } catch (_) { return; }
+        if (!document.body.contains(panel)) { _teardownOAuthGate(); return; }
+
+        if (msg.type === "state") {
+          // Full initial state: render all rows with their current authorized state.
+          _renderOAuthRows(panel, msg.servers || []);
+          panel._pendingServers = [];
+        } else if (msg.type === "update") {
+          // A server was just authorized: ensure rows exist then mark it.
+          if (panel._pendingServers && panel._pendingServers.length) {
+            _renderOAuthRows(panel, panel._pendingServers);
+            panel._pendingServers = [];
+          }
+          _markRowAuthorized(msg.server_name);
+        } else if (msg.type === "complete") {
+          _onAllAuthorized();
+        }
+      };
+      _oauthWs.onerror = function () {
+        // WS unavailable — postMessage path remains active for popup scenarios.
+        // Render rows from stash so the user can still click Authorize.
+        if (panel._pendingServers && panel._pendingServers.length) {
+          _renderOAuthRows(panel, panel._pendingServers);
+          panel._pendingServers = [];
+        }
+      };
+      _oauthWs.onclose = function () {
+        if (_oauthWs) { _oauthWs = null; }
+      };
+    }
   }
 
   // Delegated click handler for Authorize buttons (works for server-rendered
@@ -835,7 +895,7 @@ document.addEventListener("DOMContentLoaded", function () {
     }
     var serverName = btn.dataset.serverName;
     if (window.McpOAuth) window.McpOAuth.openAuthPopup(serverName, sessionId, projectId, secretKey);
-    // Wire postMessage + polling once on first click for a server-rendered panel.
+    // Wire WS + postMessage once on first click for a server-rendered panel.
     if (!_oauthMessageListener) _attachOAuthGateBehavior(panel, sessionId, secretKey);
   });
 
@@ -889,8 +949,8 @@ document.addEventListener("DOMContentLoaded", function () {
     setRunningState(true);
 
     // OAuth gate is now driven by the server: /run/ returns 409 +
-    // {status:"awaiting_oauth", servers:[...]} when authorization is needed,
-    // and the SSE stream may also emit `awaiting_oauth` mid-run. Both paths
+    // {status:"awaiting_mcp_oauth", servers:[...]} when authorization is needed,
+    // and the SSE stream may also emit `awaiting_mcp_oauth` mid-run. Both paths
     // are handled inside _doStartRun.
     _doStartRun(sessionId, secretKey, task, attachmentIds);
   }
@@ -912,10 +972,10 @@ document.addEventListener("DOMContentLoaded", function () {
       body: body.toString(),
     }).then(function (response) {
       if (response.status === 409) {
-        // Either awaiting_oauth (our gate) or "already running"/"changed".
+        // Either awaiting_mcp_oauth (our gate) or "already running"/"changed".
         // Distinguish by JSON body.
         return response.json().then(function (d) {
-          if (d && d.status === "awaiting_oauth") {
+          if (d && d.status === "awaiting_mcp_oauth") {
             _showOAuthGatePanel(sessionId, secretKey, d.servers || [], task, attachmentIds);
             return;
           }
@@ -1061,7 +1121,7 @@ document.addEventListener("DOMContentLoaded", function () {
     } else if (eventName === "error") {
       setRunningState(false);
       appendBubble('<div class="chat-bubble chat-bubble--error">' + (data.message || "Unknown error") + '</div>');
-    } else if (eventName === "awaiting_oauth") {
+    } else if (eventName === "awaiting_mcp_oauth") {
       // Mid-run token expiry: surface the same in-history authorization card.
       var sessionId = activeSessionIdInput ? activeSessionIdInput.value.trim() : "";
       var secretKey = getSecretKey();
@@ -1297,6 +1357,15 @@ document.addEventListener("DOMContentLoaded", function () {
     } else {
       clearGateMode();
     }
+    // Reconnect WS for server-rendered awaiting_mcp_oauth panels (session switch).
+    var oauthPanel = chatMessages && chatMessages.querySelector(".chat-oauth-panel");
+    if (oauthPanel && !_oauthMessageListener) {
+      var oauthSessionId = oauthPanel.dataset.sessionId || (activeSessionIdInput ? activeSessionIdInput.value.trim() : "");
+      var oauthSecretKey = getSecretKey();
+      if (oauthSessionId && oauthSecretKey) {
+        _attachOAuthGateBehavior(oauthPanel, oauthSessionId, oauthSecretKey);
+      }
+    }
   });
 
   document.body.addEventListener("input", function (e) {
@@ -1359,5 +1428,15 @@ document.addEventListener("DOMContentLoaded", function () {
     try {
       setGateMode(JSON.parse(initialGateBadge.dataset.gateContext));
     } catch (e) { /* malformed JSON — ignore */ }
+  }
+
+  // On initial page load, connect WS for server-rendered awaiting_mcp_oauth panels.
+  var initialOAuthPanel = chatMessages && chatMessages.querySelector(".chat-oauth-panel");
+  if (initialOAuthPanel) {
+    var initOAuthSessionId = initialOAuthPanel.dataset.sessionId || (activeSessionIdInput ? activeSessionIdInput.value.trim() : "");
+    var initOAuthSecretKey = getSecretKey();
+    if (initOAuthSessionId && initOAuthSecretKey) {
+      _attachOAuthGateBehavior(initialOAuthPanel, initOAuthSessionId, initOAuthSecretKey);
+    }
   }
 });
