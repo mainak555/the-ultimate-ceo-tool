@@ -73,6 +73,23 @@ def _get_form_context(project=None, mode="create", success=None):
     return context
 
 
+def _parse_form_remote_users(post_data):
+    """
+    Extract remote_users list from the flat POST form data.
+
+    Form fields: human_gate[remote_users][0][name], human_gate[remote_users][0][description], ...
+    """
+    remote_users = []
+    idx = 0
+    while f"human_gate[remote_users][{idx}][name]" in post_data:
+        remote_users.append({
+            "name": post_data.get(f"human_gate[remote_users][{idx}][name]", "").strip(),
+            "description": post_data.get(f"human_gate[remote_users][{idx}][description]", "").strip(),
+        })
+        idx += 1
+    return remote_users
+
+
 def _parse_form_agents(post_data):
     """
     Extract agent list from the flat POST form data.
@@ -165,6 +182,8 @@ def _build_project_data(post_data, existing_project=None):
         "human_gate": {
             "enabled": human_gate_enabled,
             "name": post_data.get("human_gate[name]", "").strip(),
+            "quorum": post_data.get("human_gate[quorum]", "all").strip(),
+            "remote_users": _parse_form_remote_users(post_data),
         },
         "team": {
             "type": post_data.get("team[type]", "round_robin").strip(),

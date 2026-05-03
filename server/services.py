@@ -262,11 +262,24 @@ def normalize_project(project):
     human_gate = {
         "enabled": False,
         "name": "",
+        "quorum": "",
+        "remote_users": [],
     }
     if isinstance(raw_human_gate, dict):
+        raw_ru = raw_human_gate.get("remote_users") or []
+        remote_users = [
+            {
+                "name": (ru.get("name") or "").strip(),
+                "description": (ru.get("description") or "").strip(),
+            }
+            for ru in raw_ru
+            if isinstance(ru, dict) and (ru.get("name") or "").strip()
+        ]
         human_gate = {
             "enabled": bool(raw_human_gate.get("enabled", True)),
             "name": (raw_human_gate.get("name") or "").strip(),
+            "quorum": (raw_human_gate.get("quorum") or "").strip(),
+            "remote_users": remote_users,
         }
 
     raw_team = project.get("team") or {}

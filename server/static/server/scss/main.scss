@@ -373,6 +373,20 @@ select.input {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.form-row--between {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: $space-sm;
+  margin-bottom: $space-xs;
+}
+
+.section-divider {
+  border: none;
+  border-top: 1px solid $color-border;
+  margin: $space-md 0;
+}
+
 @media (max-width: 768px) {
   .form-row--two-col {
     grid-template-columns: 1fr;

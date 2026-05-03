@@ -6,8 +6,31 @@ feature views/services to keep behavior consistent and avoid helper duplication.
 
 from datetime import datetime, timezone
 import json
+import re
 
 from django.http import HttpResponse
+
+
+def sanitize_identifier(raw_name: str, label: str) -> str:
+    """Sanitize a raw string to a valid Python identifier.
+
+    Rules (identical to AutoGen agent name requirements):
+    - Spaces and hyphens are replaced with underscores.
+    - All remaining non-word characters are stripped.
+    - A leading digit triggers a prepended underscore.
+    - Raises ValueError if the result is not a valid identifier.
+    """
+    name = (raw_name or "").strip()
+    sanitised = re.sub(r"[\s\-]+", "_", name)
+    sanitised = re.sub(r"[^\w]", "", sanitised)
+    if sanitised and sanitised[0].isdigit():
+        sanitised = "_" + sanitised
+    if not sanitised or not sanitised.isidentifier():
+        raise ValueError(
+            f"{label} '{name}' is not a valid identifier. "
+            "Use only letters, digits, and underscores (no spaces or special characters)."
+        )
+    return sanitised
 
 
 def utc_now() -> datetime:
