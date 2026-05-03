@@ -40,33 +40,71 @@ Open **http://127.0.0.1:8000** in your browser.
 When Human Gate is enabled for a project, the run pauses after each round. The
 bottom input bar switches to **gate mode**:
 
-- A status badge appears in chat: `⏸ Round N/M — response is required`
-  (single-assistant shows `Round N`, no max).
+- A status badge appears in chat: `⏸ Round N/M — response is required`.
+  Pure single-assistant mode (no remote users) shows `Round N` with no max.
 - The **Stop** button stays visible so the user can stop at any time.
   Clicking Stop disables the button immediately to prevent double-submission;
   it re-enables automatically when the next run starts.
 - Typing in the send box and pressing **Send** (or Enter) resumes the run,
   forwarding the typed text as context for the next round.
-- The Approve / Reject decision shortcuts have been removed; users type their
-  response directly.
+- Notes sent with Send are rendered as markdown in both live chat and
+  persisted session history.
 
-HITL notes sent with Send are rendered as markdown in both live chat and
-persisted session history.
+---
 
-Single-assistant contract:
+### Mode reference
 
-- With exactly one assistant, the project runs in **chat mode**.
-- Team Setup is hidden in configuration for this mode.
-- Human Gate is mandatory.
+There are three distinct runtime modes depending on the number of assistant
+agents and whether any remote users are configured.
+
+| Configuration | Team Setup visible? | Iteration limit? | Empty Continue allowed? |
+|---|---|---|---|
+| 1 assistant, no remote users | No (hidden) | No — runs until **Stop** | No — text or attachment required |
+| 1 assistant, ≥ 1 remote user | **Yes** (honored) | Yes — `max_iterations` | Yes |
+| ≥ 2 assistants | **Yes** (honored) | Yes — `max_iterations` | Yes |
+
+**Selector team** type requires ≥ 2 assistant agents OR (≥ 1 assistant agent & ≥ 1 remote user)
+
+---
+
+### Pure single-assistant chat mode (1 assistant, no remote users)
+
+- Team Setup is hidden in project configuration.
+- Human Gate is mandatory and cannot be disabled.
 - The run pauses after each assistant turn and continues only when the human
-  sends a reply; conversation ends when the human clicks **Stop**.
-- `max_iterations` is not used as an auto-completion condition in
-  single-assistant chat mode.
-- **Send requires a message or attachment** in single-assistant mode.
-  The button stays disabled until text is typed or a file is attached.
-  An empty send is rejected at the backend with HTTP 400.
+  sends a reply; the conversation ends when the human clicks **Stop**.
+- `max_iterations` is **not** used — there is no automatic completion.
+- **Send requires a message or attachment.** The button stays disabled until
+  text is typed or a file is attached. An empty send is rejected with HTTP 400.
 
-Multi-assistant gate contract:
+---
+
+### Single-assistant + remote users (1 assistant, ≥ 1 remote user)
+
+- **Team Setup is visible** and its values are honored.
+- Human Gate is still mandatory and cannot be disabled.
+- The run pauses after each assistant turn, exactly as above, but now
+  completes automatically when `current_round` reaches `max_iterations`.
+- Empty Continue is allowed (same as multi-assistant).
+- **Quorum**: configure how many remote users must respond before the run
+  resumes — *Wait for all*, *First response wins*, or *Agent planner decides*.
+  Quorum is only applied when at least one remote user is listed; it has no
+  effect in the pure single-assistant or multi-assistant-only cases.
+
+#### Adding remote users
+
+In the project **Human Gate** section:
+1. Click **+ Add Remote User**.
+2. Enter a **Name** (must be a valid identifier, e.g. `product_owner`).
+3. Optionally add a **Description** to give the agent team context about this
+   participant's role.
+4. Repeat for each additional remote user.
+5. Select the **Quorum** that controls when the run resumes.
+6. Save the configuration.
+
+---
+
+### Multi-assistant gate contract (≥ 2 assistants)
 
 - Gate pauses after each full agent round (all agents have spoken once).
 - Send may be submitted with an empty textarea — agents resume with the
