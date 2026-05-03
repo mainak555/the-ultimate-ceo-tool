@@ -902,9 +902,12 @@ async def chat_session_run(request, session_id):
 
     # Single-assistant chat mode: empty Continue is invalid (no new context for agent).
     # Attachments alone are not sufficient — a text message is required.
+    # This only applies when there are NO remote users; with remote users the
+    # team config is honored (max_iterations + gate resume) instead.
     is_single_assistant_gate = (
         project.get("human_gate", {}).get("enabled", False)
         and len(project.get("agents") or []) == 1
+        and not project.get("human_gate", {}).get("remote_users")
     )
     if is_single_assistant_gate and not is_first_run and not task:
         return util.json_error("A message is required to continue.", 400)
@@ -1120,8 +1123,13 @@ async def chat_session_run(request, session_id):
 
             has_gate = project.get("human_gate", {}).get("enabled", False)
             max_iter = project.get("team", {}).get("max_iterations", 5)
+            # Single-assistant chat mode (unlimited continuation) only applies
+            # when there are no remote users. When remote users are present,
+            # the team config (max_iterations) is honored instead.
             is_single_assistant_chat_mode = (
-                has_gate and len(project.get("agents") or []) == 1
+                has_gate
+                and len(project.get("agents") or []) == 1
+                and not project.get("human_gate", {}).get("remote_users")
             )
 
             # Export integration metadata for client-side export actions.

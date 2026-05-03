@@ -383,7 +383,7 @@ def validate_human_gate(data):
     }
 
 
-def validate_team(data, human_gate_enabled, assistant_count=None):
+def validate_team(data, human_gate_enabled, assistant_count=0, remote_user_count=0):
     """Validate and clean team configuration."""
     if not isinstance(data, dict):
         data = {}
@@ -392,7 +392,7 @@ def validate_team(data, human_gate_enabled, assistant_count=None):
     if team_type not in TEAM_TYPES:
         raise ValueError(f"'team.type' must be one of {TEAM_TYPES}.")
 
-    if assistant_count == 1 and team_type == "selector":
+    if assistant_count == 1 and remote_user_count < 1 and team_type == "selector":
         raise ValueError(
             "Single-assistant chat mode does not support Selector team type. "
             "Use Round Robin."
@@ -690,6 +690,7 @@ def validate_project(data):
         data.get("team") or {},
         human_gate["enabled"],
         assistant_count=assistant_count,
+        remote_user_count=len(human_gate["remote_users"])
     )
     integrations = validate_integrations(
         data.get("integrations") or {},
@@ -753,9 +754,13 @@ def validate_project(data):
         "mcp_oauth_configs": mcp_oauth_configs,
     }
 
-    # In single-assistant chat mode, Team Setup is not a persisted contract.
-    # Runtime falls back to Round Robin defaults when team config is absent.
-    if assistant_count >= 2:
+    # Team Setup is persisted when there are 2+ agents, or when there is
+    # exactly 1 agent with at least 1 remote user (team config is visible and
+    # honored in that scenario). Pure single-assistant chat mode (1 agent, no
+    # remote users) does not persist team config; runtime uses Round Robin
+    # defaults with unlimited Human Gate continuation until Stop.
+    remote_users_count = len(human_gate.get("remote_users") or [])
+    if assistant_count >= 2 or (assistant_count == 1 and remote_users_count >= 1):
         cleaned["team"] = team
 
     return cleaned

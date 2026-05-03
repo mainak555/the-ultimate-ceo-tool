@@ -233,9 +233,20 @@ document.addEventListener("DOMContentLoaded", function () {
     return container.querySelectorAll(".agent-card").length;
   }
 
+  function getRemoteUserCount() {
+    var container = document.getElementById("remote-users-container");
+    if (!container) return 0;
+    return container.querySelectorAll(".agent-card").length;
+  }
+
   function syncSingleAssistantMode() {
     var assistantCount = getAssistantCount();
+    var remoteUserCount = getRemoteUserCount();
     var isSingleAssistant = assistantCount === 1;
+    // True only when there are NO remote users: pure single-assistant chat mode
+    // (unlimited Human Gate continuation). With remote users, team config is
+    // visible and honored (max_iterations + normal gate resume apply).
+    var isSingleAssistantChatMode = isSingleAssistant && remoteUserCount === 0;
 
     var humanGateEnabled = document.getElementById("human-gate-enabled");
     var humanGateDefaultHint = document.getElementById("human-gate-default-hint");
@@ -264,22 +275,23 @@ document.addEventListener("DOMContentLoaded", function () {
     }
 
     if (humanGateDefaultHint) {
-      humanGateDefaultHint.hidden = isSingleAssistant;
+      humanGateDefaultHint.hidden = isSingleAssistantChatMode;
     }
     if (humanGateSingleHint) {
-      humanGateSingleHint.hidden = !isSingleAssistant;
+      humanGateSingleHint.hidden = !isSingleAssistantChatMode;
     }
 
     if (teamFieldset) {
-      teamFieldset.hidden = isSingleAssistant;
+      teamFieldset.hidden = isSingleAssistantChatMode;
       teamFieldset.querySelectorAll("input, select, textarea").forEach(function (field) {
-        field.disabled = isSingleAssistant;
+        field.disabled = isSingleAssistantChatMode;
       });
     }
     if (teamDisabledHint) {
-      teamDisabledHint.hidden = !isSingleAssistant;
+      teamDisabledHint.hidden = !isSingleAssistantChatMode;
     }
 
+    // Selector is still invalid for 1 agent regardless of remote users
     if (isSingleAssistant && teamTypeSelect && teamTypeSelect.value === "selector") {
       teamTypeSelect.value = "round_robin";
     }
@@ -432,6 +444,7 @@ document.addEventListener("DOMContentLoaded", function () {
 
     container.insertAdjacentHTML("beforeend", html);
     reindexRemoteUsers();
+    syncFormState();
   });
 
   document.body.addEventListener("click", function (e) {
@@ -459,6 +472,7 @@ document.addEventListener("DOMContentLoaded", function () {
 
     card.remove();
     reindexRemoteUsers();
+    syncFormState();
   });
 
   document.body.addEventListener("click", function (e) {

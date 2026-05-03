@@ -278,14 +278,15 @@ idle ──► running ──► awaiting_input ──► running ──► ... 
   - `DOMContentLoaded` bootstrap (initial page render — runs once at script start).
   - `htmx:afterSwap` handler (session switch via sidebar — runs on every HTMX history swap).
   Neither path makes an extra API call.
-- **Gate badge format**: `⏸ Round N/M — response is required` for multi-agent; `⏸ Round N — response is required` for single-assistant (no iteration limit). The placeholder also updates to show the round.
+- **Gate badge format**: `⏸ Round N/M — response is required` for multi-agent or single-assistant with remote users; `⏸ Round N — response is required` for pure single-assistant chat mode (no iteration limit, so no `/M` denominator). The placeholder also updates to show the round.
 - **SSE pump stop-button guard**: the `pump()` loop in `_doStartRun()` checks `if (!_gateData) setRunningState(false)` before hiding the Stop button when the SSE stream closes (`result.done`) or errors. This prevents the `result.done` callback — which fires immediately after the `gate` frame — from re-hiding the Stop button that `setGateMode()` just showed.
 - **Restart panel + Send interaction**: when `.chat-restart-panel` is present in chat history (stopped/completed session), the `chatSendBtn` handler clears the session ID and forces the create-session path. The user's text starts a **new** session and run. The restart panel's own `data-session-id` continues to own "Continue from last" / "Add context and continue" independently.
 
 Mode-specific pause behavior:
 
 - **Multi-assistant (`n_agents >= 2`)**: gate pauses after each full round and completion can occur when `current_round` reaches `max_iterations`.
-- **Single-assistant (`n_agents == 1`) chat mode**: gate pauses after every assistant turn and does not auto-complete via `max_iterations`; the human `Stop` action controls termination.
+- **Single-assistant, no remote users (`n_agents == 1`, `remote_users == []`) — pure chat mode**: gate pauses after every assistant turn and does not auto-complete via `max_iterations`; the human `Stop` action controls termination. Empty Continue (no text, no attachments) is rejected with HTTP 400.
+- **Single-assistant with remote users (`n_agents == 1`, `len(remote_users) >= 1`)**: behaves like multi-assistant — team config is persisted and `max_iterations` governs run completion. Empty Continue is allowed (same as multi-assistant). Team Setup is visible in the config UI.
 
 ---
 

@@ -67,12 +67,12 @@
   </div>
 
   <div class="config-readonly__section">
-    {% if project.agents|length == 1 %}
+    {% if project.agents|length == 1 and not project.human_gate.remote_users %}
     <h3>Mode</h3>
     {% else %}
     <h3>Team</h3>
     {% endif %}
-    {% if project.agents|length == 1 %}
+    {% if project.agents|length == 1 and not project.human_gate.remote_users %}
     <p>
       <strong>Mode:</strong> Chat Mode (single assistant) &nbsp;|&nbsp;
       <strong>Runtime:</strong> Round Robin with Human Gate continuation until Stop

@@ -98,8 +98,8 @@
                  class="input"
                  value="{{ project.human_gate.name|default:'Architect' }}"
                  placeholder="Architect">
-          <small class="form-hint" id="human-gate-default-hint" {% if not project.agents or project.agents|length == 1 %}hidden{% endif %}>During chat pause, the reviewer selects Approve or Reject, can add optional notes, then chooses Continue or Stop. If disabled, team max iterations cannot exceed 10.</small>
-          <small class="form-hint" id="human-gate-single-assistant-hint" {% if project.agents and project.agents|length != 1 %}hidden{% endif %}
+          <small class="form-hint" id="human-gate-default-hint" {% if not project.agents or project.agents|length == 1 and not project.human_gate.remote_users %}hidden{% endif %}>During chat pause, the reviewer selects Approve or Reject, can add optional notes, then chooses Continue or Stop. If disabled, team max iterations cannot exceed 10.</small>
+          <small class="form-hint" id="human-gate-single-assistant-hint" {% if not project.agents or project.agents|length != 1 or project.human_gate.remote_users %}hidden{% endif %}
                  style="font-style:italic;">Single-assistant chat mode requires Human Gate. The loop continues until the human chooses Stop.</small>
         </div>
         <div class="form-group">
@@ -126,9 +126,9 @@
   </fieldset>
 
   <!-- ====== TEAM ====== -->
-  <fieldset class="form-group section-fieldset" id="team-settings-fieldset" {% if not project.agents or project.agents|length == 1 %}hidden{% endif %}>
+  <fieldset class="form-group section-fieldset" id="team-settings-fieldset" {% if not project.agents or project.agents|length == 1 and not project.human_gate.remote_users %}hidden{% endif %}>
     <legend>Team</legend>
-    <small class="form-hint" id="team-settings-disabled-hint" hidden>Team setup is available when there are at least 2 assistant agents.</small>
+    <small class="form-hint" id="team-settings-disabled-hint" hidden>Team setup is available when there are at least 2 assistant agents or at least 1 remote user.</small>
 
     <div class="form-row">
       <div class="form-group">

@@ -110,7 +110,10 @@ This keeps provider behavior consistent while allowing provider-specific payload
 - `agents[0][system_prompt]` — textarea string
 - `agents[0][temperature]` — float string
 - `human_gate[enabled]` — `"on"` if checked
-- `human_gate[name]` — string
+- `human_gate[name]` — string (required when gate is enabled; used as the AutoGen participant label for the human reviewer)
+- `human_gate[quorum]` — `"all"` | `"first_win"` | `"team_choice"` (ignored / set to `"na"` automatically when no remote users are present)
+- `human_gate[remote_users][N][name]` — string; repeated for each remote user (N = 0-based index)
+- `human_gate[remote_users][N][description]` — string; optional description for remote user at index N
 - `team[type]` — `round_robin` | `selector`
 - `team[max_iterations]` — integer string
 - `team[model]` — model name (required when `team[type]=selector`)
@@ -119,10 +122,9 @@ This keeps provider behavior consistent while allowing provider-specific payload
 - `team[allow_repeated_speaker]` — `"on"` if checked (default on; only used for selector)
 
 Single-assistant chat mode semantics:
-- When exactly one assistant is configured, `human_gate[enabled]` is required.
-- `team[type]=selector` is invalid with one assistant.
-- Team Setup controls may be hidden in the UI for one-assistant projects; server-side validation remains authoritative.
-- On save, the persisted project document may omit the `team` object in one-assistant mode.
+- When exactly one assistant is configured **and no remote users are present**, `human_gate[enabled]` is required, `team[type]=selector` is rejected, and the persisted project document omits the `team` object — runtime uses Round Robin with unlimited Human Gate continuation until Stop.
+- When exactly one assistant is configured **and at least one remote user is present**, Team Setup is visible and its values are honored: the `team` object is persisted, `max_iterations` governs run completion, and `team[type]=selector` is still rejected (selector requires ≥ 2 agents).
+- Team Setup controls may be hidden in the UI for pure single-assistant projects (no remote users); server-side validation remains authoritative.
 
 **Success response**: HTML partial (`config_form.html`) with `HX-Trigger: refreshSidebar`
 
@@ -167,7 +169,11 @@ Model runtime notes:
   ],
   "human_gate": {
     "enabled": true,
-    "name": "Architect"
+    "name": "Architect",
+    "quorum": "all",
+    "remote_users": [
+      { "name": "product_owner", "description": "Reviews output for business alignment" }
+    ]
   },
   "team": {
     "type": "round_robin | selector",
