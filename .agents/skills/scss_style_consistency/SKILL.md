@@ -25,7 +25,8 @@ Behavior/layout semantics (what controls and interaction order are required) are
 3. Card and modal spacing/border rhythm must match existing `main.scss` patterns.
 4. Delete controls must match shared icon/button danger behavior.
 5. Nested integration sub-sections (`.form-group--nested`, `.form-group--nested-l2`) must always declare both `padding-left` AND `padding-right`. Missing `padding-right` causes textarea scrollbars and inputs to overflow into the parent section's right border.
-6. **Readonly card float layout**: `agent-card--readonly` cards must use `overflow: hidden` (clearfix). `agent-card__header-meta` is `float: right` with `text-align: right`, `flex-direction: column`, `align-items: flex-end`, `gap: $space-xs`, `margin-left: $space-md`, `margin-bottom: $space-xs`. `agent-card__title` uses `font-size: $font-size-lg`, `font-weight: 700`. `agent-card__temp` uses `font-size: $font-size-sm`, `color: $color-text-muted`, `font-style: italic`. Do **not** use `justify-content: space-between` on readonly card rows — it creates blank whitespace at all viewport sizes. See `docs/scss_style_guide.md` §"Readonly Card Layout".
+6. **`form-group--nested` is for fieldset sub-sections only**: DO NOT apply `.form-group--nested` (or `--nested-l2`) to repeating card-style rows (e.g. MCP OAuth config rows, MCP Secrets rows, Trello custom-field rows). Card rows must use their own dedicated BEM block class. Mixing `form-group--nested` on a card element adds an unwanted `margin-left: $space-md` + `border-left: 3px` stripe that visually indents the card away from the section header. Card rows must not carry `margin-left` at the row level either.
+7. **Readonly card float layout**: `agent-card--readonly` cards must use `overflow: hidden` (clearfix). `agent-card__header-meta` is `float: right` with `text-align: right`, `flex-direction: column`, `align-items: flex-end`, `gap: $space-xs`, `margin-left: $space-md`, `margin-bottom: $space-xs`. `agent-card__title` uses `font-size: $font-size-lg`, `font-weight: 700`. `agent-card__temp` uses `font-size: $font-size-sm`, `color: $color-text-muted`, `font-style: italic`. Do **not** use `justify-content: space-between` on readonly card rows — it creates blank whitespace at all viewport sizes. See `docs/scss_style_guide.md` §"Readonly Card Layout".
 
 ## Export Modal Guardrails
 1. Keep split layout and footer action order consistent with baseline export modal pattern.
@@ -44,8 +45,9 @@ Behavior/layout semantics (what controls and interaction order are required) are
 4. Confirm desktop/mobile usability remains intact.
 5. Confirm feature-specific styles are scoped and do not pollute shared layers.
 6. Confirm nested sections have symmetric `padding-left` + `padding-right` (both required — right side prevents scrollbar/control clipping).
-7. Confirm Jira Software destination cascade and issue-card styles remain scoped to Jira classes and do not modify Trello-specific selectors.
-8. Confirm export-popup add/create buttons use `export-modal__context-add-btn` and keep consistent hover/focus color behavior.
-9. Confirm export-popup editable card backgrounds remain token-derived and visually consistent across providers.
-10. Confirm export-popup item heading badges use `export-modal__count-badge` and avoid ad-hoc badge class duplication.
-11. Confirm new or updated `agent-card--readonly` cards follow the float layout: `overflow: hidden` on card, `agent-card__header-meta` is `float: right` and first in DOM, `agent-card__title` uses `$font-size-lg`, `agent-card__temp` uses `$color-text-muted` italic. No `justify-content: space-between` on the row.
+7. Confirm card-style rows (MCP OAuth, MCP Secrets, Trello custom fields, etc.) do NOT carry `form-group--nested` or `form-group--nested-l2` class, and do NOT have `margin-left` at the row level.
+8. Confirm Jira Software destination cascade and issue-card styles remain scoped to Jira classes and do not modify Trello-specific selectors.
+9. Confirm export-popup add/create buttons use `export-modal__context-add-btn` and keep consistent hover/focus color behavior.
+10. Confirm export-popup editable card backgrounds remain token-derived and visually consistent across providers.
+11. Confirm export-popup item heading badges use `export-modal__count-badge` and avoid ad-hoc badge class duplication.
+12. Confirm new or updated `agent-card--readonly` cards follow the float layout: `overflow: hidden` on card, `agent-card__header-meta` is `float: right` and first in DOM, `agent-card__title` uses `$font-size-lg`, `agent-card__temp` uses `$color-text-muted` italic. No `justify-content: space-between` on the row.

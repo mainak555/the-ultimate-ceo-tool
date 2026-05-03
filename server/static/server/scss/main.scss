@@ -491,8 +491,6 @@ select.input {
 // MCP OAuth App Registration rows
 .mcp-oauth-configs {
   &__row {
-    margin-left: $space-md;
-    padding-right: $space-sm;
     border: 1px solid $color-border;
     border-radius: $radius;
     padding: $space-sm $space-md;

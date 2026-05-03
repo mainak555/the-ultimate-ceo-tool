@@ -544,7 +544,7 @@ document.addEventListener("DOMContentLoaded", function () {
       if (!container) return;
       var idx = container.querySelectorAll(".mcp-oauth-configs__row").length;
       var html =
-        '<fieldset class="mcp-oauth-configs__row form-group--nested" data-oauth-index="' + idx + '">' +
+        '<fieldset class="mcp-oauth-configs__row" data-oauth-index="' + idx + '">' +
           '<div class="mcp-oauth-configs__row-header">' +
             '<strong>New OAuth Config</strong>' +
             '<div class="mcp-oauth-configs__row-actions">' +
