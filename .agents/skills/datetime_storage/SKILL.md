@@ -20,21 +20,20 @@ Never display a raw UTC string to the user.
 
 ## Python (write path)
 
-### 1. Produce datetimes with `_utc_now()`
+### 1. Produce datetimes with `util.utc_now()`
 
 ```python
-# server/services.py exposes this helper — import it or call it directly
-from datetime import datetime, timezone
+# server/util.py exposes this helper — import and reuse it
+from . import util
 
-def _utc_now() -> datetime:
-    return datetime.now(timezone.utc)
+doc["created_at"] = util.utc_now()
 ```
 
-Use `_utc_now()` everywhere a datetime is written to MongoDB:
+Use `util.utc_now()` everywhere a datetime is written to MongoDB:
 
 ```python
-doc["created_at"] = _utc_now()   # BSON Date ✓
-doc["updated_at"] = _utc_now()   # BSON Date ✓
+doc["created_at"] = util.utc_now()   # BSON Date ✓
+doc["updated_at"] = util.utc_now()   # BSON Date ✓
 ```
 
 ### 2. Never call `.isoformat()` or `.strftime()` before writing to MongoDB
@@ -44,13 +43,13 @@ doc["updated_at"] = _utc_now()   # BSON Date ✓
 doc["timestamp"] = datetime.now(timezone.utc).isoformat()
 
 # GOOD — stores a BSON Date
-doc["timestamp"] = _utc_now()
+doc["timestamp"] = util.utc_now()
 ```
 
 ### 3. When you need an ISO string for a JSON response, derive it after writing
 
 ```python
-now_dt  = _utc_now()
+now_dt  = util.utc_now()
 now_iso = now_dt.isoformat()          # for the JSON / SSE payload only
 doc["timestamp"] = now_dt             # BSON Date → MongoDB
 return {"timestamp": now_iso}         # ISO string → JSON response
@@ -205,7 +204,7 @@ transparently at read time.
 Before adding a new datetime field to any MongoDB document:
 
 - [ ] Type in `docs/db_schema.md` is `datetime (UTC BSON Date)`
-- [ ] Written with `_utc_now()` (not `.isoformat()`, not `.strftime()`)
+- [ ] Written with `util.utc_now()` (not `.isoformat()`, not `.strftime()`)
 - [ ] Read path calls `_coerce_dt_to_iso()` in the `normalize_*` function
 - [ ] Template wraps the value in `<time class="local-time" data-utc="...">` 
 - [ ] JS injection uses `new Date().toISOString()` + `window.renderLocalTimes()`

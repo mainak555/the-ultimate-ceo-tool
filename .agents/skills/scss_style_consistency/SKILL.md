@@ -8,6 +8,10 @@ description: Enforce token-only SCSS, shared component semantics, and consistent
 ## Purpose
 Preserve a single visual language across Config, Home, and provider export modals.
 
+## Scope Boundary
+This skill owns token-level implementation (how styles are applied: token usage, spacing rhythm, selector scoping).
+Behavior/layout semantics (what controls and interaction order are required) are owned by `.agents/skills/ui_consistency_guardrails/SKILL.md`.
+
 ## Required Rules
 1. Colors must come from `$color-*` tokens in `server/static/server/scss/_variables.scss`.
 2. Spacing must use `$space-*` tokens only.

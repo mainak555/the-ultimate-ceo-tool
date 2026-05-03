@@ -15,7 +15,7 @@ exact same name through every layer listed below:
 | **Templates** | `server/templates/server/partials/config_form.html`, `config_readonly.html`, `_agent_card.html` | `name="team[<name>]"` / `project.team.<name>` |
 | **Runtime** | `agents/team_builder.py` — `build_team()`, `build_agent_runtime_spec()` | `team_cfg.get("<name>")` / `agent_config.get("<name>")` |
 
-Cross-references: [docs/API.md](API.md) (form fields + HTTP schema), [AGENTS.md](../AGENTS.md) rules 1–5, [docs/integrations.md](integrations.md) (integrations sub-document).
+Cross-references: [docs/API.md](API.md) (form fields + HTTP schema), [AGENTS.md](../AGENTS.md) rules 1–5, [docs/trello_integration.md](trello_integration.md), [docs/jira_integration.md](jira_integration.md), [docs/mcp_integration.md](mcp_integration.md).
 
 ---
 

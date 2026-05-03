@@ -53,7 +53,11 @@ product-discovery/
 ### `db.py` — Data Access
 - Provides `get_client()`, `get_db()`, `get_collection(name)`.
 - Manages MongoDB connection as a module-level singleton.
-- Creates indexes on startup (`project_name` unique index on `project_settings`).
+- Defines canonical collection constants used across server modules: `PROJECT_SETTINGS_COLLECTION`, `CHAT_SESSIONS_COLLECTION`, `ATTACHMENTS_COLLECTION`.
+- Creates collections/indexes on startup via `ensure_indexes()`:
+	- `project_settings`: unique index on `project_name`
+	- `chat_sessions`: index on `project_id`; unique partial index `(_id, discussions.id)`
+	- `chat_attachments`: index on `session_id`; unique index `(session_id, attachment_id)`
 
 ### `schemas.py` — Validation
 - `validate_project(data)` — validates and cleans project configuration data.
@@ -138,6 +142,9 @@ See [docs/agent_factory.md](agent_factory.md) for the full `agent_models.json` s
 - **SCSS**: Compiled at request time in dev, offline in production.
 - **SCSS style contract**: Follow [docs/scss_style_guide.md](scss_style_guide.md) for token usage, component semantics, and responsive guardrails.
 - **Template naming**: Partials in `partials/` subdirectory, prefixed with `_` for includes.
+- **Collection name contract**: Never hardcode collection names in feature modules; import collection constants from `server/db.py`.
+- **Utility reuse contract**: Reuse shared server helpers from `server/util.py` (`utc_now`, `json_response`, `json_error`, `json_dumps`) instead of duplicating helper behavior in services/views/integration modules.
+- **Duplicate conflict contract**: Services catch `DuplicateKeyError`, log a structured warning, and raise a user-safe `ValueError` with clear remediation text.
 
 ## Frontend JS Boundaries
 
