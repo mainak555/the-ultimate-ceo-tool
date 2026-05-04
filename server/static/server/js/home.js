@@ -993,12 +993,9 @@ document.addEventListener("DOMContentLoaded", function () {
       return;
     }
 
-    // Build options from the single-source list injected by the server.
-    var options = window._quorumOptions || [
-      {value: "all",         label: "Wait for all remote users to reply"},
-      {value: "first_win",   label: "First user response continues the run"},
-      {value: "team_choice", label: "Let the agent planner decide who must reply"},
-    ];
+    // Build options from the single-source list injected by the server (util.QUORUM_OPTIONS → window._quorumOptions).
+    var options = window._quorumOptions;
+    if (!options || !options.length) return; // server should always inject this
 
     var sessionId = panel.dataset.sessionId || (activeSessionIdInput ? activeSessionIdInput.value.trim() : "");
     var optionsHtml = options.map(function (opt) {
