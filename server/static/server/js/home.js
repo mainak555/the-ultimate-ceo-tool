@@ -985,20 +985,31 @@ document.addEventListener("DOMContentLoaded", function () {
     var effectiveQuorum = (!quorum || quorum === "na") ? "all" : quorum;
     var isTeamChoice = effectiveQuorum === "team_choice";
 
-    // Idempotent: if dropdown already exists, update value and disabled state.
+    // Build options from the single-source list injected by the server (util.QUORUM_OPTIONS → window._quorumOptions).
+    var allOptions = window._quorumOptions;
+    if (!allOptions || !allOptions.length) return; // server should always inject this
+
+    // 'team_choice' is only selectable via Project Config; hide it from the live dropdown
+    // unless the project is already configured with that value.
+    var visibleOptions = isTeamChoice
+      ? allOptions
+      : allOptions.filter(function (o) { return o.value !== "team_choice"; });
+
+    // Idempotent: if dropdown already exists, update value, disabled state, and option set.
     var existingSel = footer.querySelector(".remote-panel-quorum-select");
     if (existingSel) {
+      // Remove team_choice option if it shouldn't be visible.
+      if (!isTeamChoice) {
+        var tcOpt = existingSel.querySelector('option[value="team_choice"]');
+        if (tcOpt) tcOpt.remove();
+      }
       existingSel.value = effectiveQuorum;
       existingSel.disabled = isTeamChoice;
       return;
     }
 
-    // Build options from the single-source list injected by the server (util.QUORUM_OPTIONS → window._quorumOptions).
-    var options = window._quorumOptions;
-    if (!options || !options.length) return; // server should always inject this
-
     var sessionId = panel.dataset.sessionId || (activeSessionIdInput ? activeSessionIdInput.value.trim() : "");
-    var optionsHtml = options.map(function (opt) {
+    var optionsHtml = visibleOptions.map(function (opt) {
       return '<option value="' + escapeHtml(opt.value) + '"'
         + (opt.value === effectiveQuorum ? " selected" : "") + ">"
         + escapeHtml(opt.label) + "</option>";
