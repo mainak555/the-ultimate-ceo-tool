@@ -7,7 +7,7 @@
 
 {% if project %}
 <div class="config-readonly">
-  <h2 class="config-readonly__title">{{ project.project_name }}</h2>
+  <h2 class="config-readonly__title">{{ project.project_name }} <small class="config-readonly__version">v{{ project.version|floatformat:1 }}</small></h2>
 
   <div class="config-readonly__section">
     <h3>Objective</h3>

@@ -624,6 +624,22 @@ See [AGENTS.md](AGENTS.md) for full architecture and development instructions.
 - The AutoGen runtime lives in the root `agents/` package, separate from the Django `server/` app.
 - Agent execution is streamed over SSE (`/chat/sessions/<id>/run/`). The server **must** run under ASGI (`uvicorn`) for real-time streaming; WSGI will buffer the entire response before sending.
 
+## Project Versioning
+
+Every project document carries a server-managed `version` float displayed as `vX.Y` in the sidebar and config page header.
+
+| Event | Version rule |
+|-------|-------------|
+| **Create** | Starts at `1.0` |
+| **Save / Edit** | Decimal incremented: `1.0 → 1.1 → 1.2 …` |
+| **Clone** | Integer part bumped by 1, decimal reset: `1.x → 2.0`, `2.x → 3.0` |
+
+The field is computed entirely server-side in `server/services.py`. It is never exposed as a user-editable input. Legacy documents (written before this field was added) default to `1.0` on read via `normalize_project()`. To persist the default to MongoDB, run:
+
+```js
+db.project_settings.updateMany({ version: { $exists: false } }, { $set: { version: 1.0 } });
+```
+
 ---
 
 ## Export Schema Contract (Trello)

@@ -113,6 +113,14 @@ a:hover { text-decoration: underline; }
   white-space: nowrap;
 }
 
+.sidebar__version {
+  display: block;
+  font-size: $font-size-sm;
+  font-weight: 400;
+  color: $color-text-muted;
+  margin-top: 0.1rem;
+}
+
 .sidebar__delete {
   flex-shrink: 0;
   margin-left: $space-sm;
@@ -456,6 +464,15 @@ select.input {
   font-weight: 700;
   margin-bottom: $space-lg;
   color: $color-text;
+}
+
+.config-form__version,
+.config-readonly__version {
+  font-size: $font-size-sm;
+  font-weight: 400;
+  color: $color-text-muted;
+  margin-left: $space-xs;
+  vertical-align: middle;
 }
 
 // ---------------------------------------------------------------------------

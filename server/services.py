@@ -357,6 +357,7 @@ def normalize_project(project):
         "project_id": str(project["_id"]) if project.get("_id") else "",
         "project_name": project.get("project_name", ""),
         "objective": project.get("objective", ""),
+        "version": round(float(project.get("version") or 1.0), 1),
         "created_at": _coerce_dt_to_iso(project.get("created_at")),
         "updated_at": _coerce_dt_to_iso(project.get("updated_at")),
         "agents": assistants,
@@ -431,9 +432,12 @@ def get_project_raw(project_id):
 
 
 @traced_function("service.project.create")
-def create_project(data):
+def create_project(data, initial_version=1.0):
     """
     Validate and insert a new project configuration.
+
+    initial_version controls the starting version float (default 1.0; clones pass a
+    major-bumped value, e.g. 2.0 when cloning a 1.x project).
 
     Returns the created document (with project_id populated).
     Raises ValueError on validation errors or duplicate name.
@@ -446,6 +450,7 @@ def create_project(data):
     now = util.utc_now()
     doc["created_at"] = now
     doc["updated_at"] = now
+    doc["version"] = round(float(initial_version), 1)
     try:
         col.insert_one(doc)
     except DuplicateKeyError:
@@ -497,6 +502,9 @@ def update_project(project_id, data):
     # Preserve original created_at; stamp updated_at as BSON Date
     cleaned["created_at"] = existing.get("created_at") or util.utc_now()
     cleaned["updated_at"] = util.utc_now()
+    # Increment the decimal part of the version on every save (1.0 → 1.1 → 1.2 …)
+    current_version = float(existing.get("version") or 1.0)
+    cleaned["version"] = round(current_version + 0.1, 1)
 
     try:
         result = col.replace_one({"_id": oid}, cleaned)
@@ -626,7 +634,10 @@ def clone_project(project_id):
         "shared_mcp_tools": raw.get("shared_mcp_tools") or {},
         "mcp_secrets": raw.get("mcp_secrets") or {},
     }
-    return create_project(data)
+    # Bump the major version: 1.x → 2.0, 2.x → 3.0, etc.
+    source_version = float(raw.get("version") or 1.0)
+    clone_version = float(int(source_version) + 1)
+    return create_project(data, initial_version=clone_version)
 
 
 # ---------------------------------------------------------------------------

@@ -70,8 +70,9 @@ product-discovery/
 ### `services.py` — Business Logic
 - `list_projects()` — returns all projects sorted by name.
 - `get_project(project_id)` — returns a single normalized project by MongoDB ObjectId hex string or `None`.
-- `create_project(data)` — validates, inserts, handles duplicate name errors.
-- `update_project(project_id, data)` — validates, replaces existing document.
+- `create_project(data, initial_version=1.0)` — validates, inserts, sets `version` to `initial_version` (default `1.0`). Handles duplicate name errors.
+- `update_project(project_id, data)` — validates, replaces existing document, increments `version` by `0.1` (e.g. `1.0 → 1.1`).
+- `clone_project(project_id)` — copies project as `"{name} - Copy"`, bumps major version (e.g. `1.x → 2.0`, `2.x → 3.0`).
 - `delete_project(project_id)` — deletes only when no dependent chat sessions exist.
 - `normalize_project(data)` — adapts old documents to the new nested shape for display.
 - `get_available_models()` — returns the sorted model catalog used by the UI.

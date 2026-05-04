@@ -8,6 +8,7 @@
               hx-target="#main-content"
               hx-push-url="false">
           {{ project.project_name }}
+          <small class="sidebar__version">v{{ project.version|floatformat:1 }}</small>
         </span>
         <button class="sidebar__delete"
                 hidden

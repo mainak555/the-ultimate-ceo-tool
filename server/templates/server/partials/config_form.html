@@ -21,7 +21,7 @@
   <input type="hidden" id="config-project-id" value="{{ project.project_id|default:'' }}">
 
   <h2 class="config-form__title">
-    {% if mode == "create" %}New Configuration{% else %}Edit: {{ project.project_name }}{% endif %}
+    {% if mode == "create" %}New Configuration{% else %}Edit: {{ project.project_name }} <small class="config-form__version">v{{ project.version|floatformat:1 }}</small>{% endif %}
   </h2>
 
   <!-- Project Name -->

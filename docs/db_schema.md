@@ -26,6 +26,7 @@ Cross-references: [docs/API.md](API.md) (form fields + HTTP schema), [AGENTS.md]
   // ── Top-level ─────────────────────────────────────────────────────────────
   "project_name": "string (unique, used as URL slug)",
   "objective":    "string — injected into every agent system prompt and selector system prompt at runtime",
+  "version":      1.0,  // float — server-managed; set to 1.0 on create, incremented by 0.1 on every save, bumped to next integer on clone (e.g. 1.x → 2.0)
   "created_at":   "datetime (UTC BSON Date — set on insert, never overwritten)",
   "updated_at":   "datetime (UTC BSON Date — stamped on every replace_one)",
 
@@ -341,3 +342,18 @@ db.project_settings.updateMany(
 
 There is **no automatic backward-compat fallback** in `normalize_project()`. Any document
 that still uses old field names will render empty strings for those fields until migrated.
+
+---
+
+### Backfill `version` for existing documents
+
+All documents written before the `version` field was introduced lack the field.
+`normalize_project()` defaults to `1.0` on read, so existing projects display `v1.0`
+without a migration. To persist the value in MongoDB for completeness:
+
+```js
+db.project_settings.updateMany(
+  { version: { $exists: false } },
+  { $set: { version: 1.0 } }
+);
+```

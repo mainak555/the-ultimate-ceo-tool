@@ -113,6 +113,7 @@ See [docs/observability.md](docs/observability.md) for:
 10. **SCSS** compiled by django-compressor + django-libsass
 11. **No test suite yet** — planned for a future phase
 12. **Project deletion safety**: never cascade delete chats when deleting a project. If any chat sessions exist for a project, deletion must be blocked with a clear error message.
+12a. **Project version is server-managed**: the `version` float on every project document is set and incremented exclusively in `server/services.py` — never exposed as a form field and never accepted from user input. Rules: create → `1.0`; every save → `+0.1` (e.g. `1.0 → 1.1`); clone → `floor(source_version) + 1` (e.g. `1.x → 2.0`, `2.x → 3.0`). `normalize_project()` defaults to `1.0` for legacy docs that lack the field. Display via `{{ project.version|floatformat:1 }}` in sidebar, config form header, and readonly view.
 13. **Common layer remains common**: global/shared modules (for example `server/static/server/js/app.js`) may contain only cross-feature utilities and hooks.
 14. **Feature ownership is mandatory**: Home, Project Config, Trello, and Jira implementations must stay separated in HTMX templates, JS modules, views, and services. Avoid adding feature-specific logic to shared files.
 15. **Provider registry is required for exports**: shared modules must use `server/static/server/js/provider_registry.js` (`window.ProviderRegistry`) instead of hardcoding provider names or provider-specific window globals.
