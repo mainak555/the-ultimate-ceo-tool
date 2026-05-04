@@ -713,11 +713,26 @@ def chat_session_detail(request, session_id):
         )
     project = services.get_project(session["project_id"]) if session.get("project_id") else None
     export_meta = _build_export_meta(project)
+
+    # For sessions awaiting remote users, resolve the effective quorum so the
+    # template can embed it in data-quorum and the JS dropdown renders immediately
+    # on session switch / page reload (without waiting for the WS state message).
+    session_quorum = None
+    if session.get("status") == "awaiting_remote_users":
+        try:
+            from agents.session_coordination import get_session_quorum  # noqa: PLC0415
+            session_quorum = get_session_quorum(session_id)
+        except Exception:  # noqa: BLE001
+            pass
+        if not session_quorum and project:
+            session_quorum = (project.get("human_gate") or {}).get("quorum") or "na"
+
     return render(request, "server/partials/chat_session_history.html", {
         "session": session,
         "project": project,
         "history_export_meta": export_meta,
         "history_messages": _build_history_messages(session, export_meta),
+        "session_quorum": session_quorum or "na",
     })
 
 

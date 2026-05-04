@@ -131,7 +131,8 @@
 {% if session.status == "awaiting_remote_users" %}
   <div class="chat-remote-panel"
        data-session-id="{{ session.session_id }}"
-       data-project-id="{{ session.project_id }}">
+       data-project-id="{{ session.project_id }}"
+       data-quorum="{{ session_quorum|default:'na' }}">
     <div class="chat-remote-panel__title">&#x1F465; Waiting for remote participants</div>
     <p class="chat-remote-panel__hint">
       This session requires remote users to join before the run can start.

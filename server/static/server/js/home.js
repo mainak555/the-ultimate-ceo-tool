@@ -1645,6 +1645,9 @@ document.addEventListener("DOMContentLoaded", function () {
       var remotePanelSessionId = remotePanel.dataset.sessionId || (activeSessionIdInput ? activeSessionIdInput.value.trim() : "");
       var remotePanelSecretKey = getSecretKey();
       if (remotePanelSessionId && remotePanelSecretKey) {
+        // Render the quorum dropdown immediately from data-quorum (server-injected);
+        // the WS state message will update it once connected.
+        _renderQuorumDropdown(remotePanel, remotePanel.dataset.quorum || "na");
         _attachRemoteUserGateBehavior(remotePanel, remotePanelSessionId, remotePanelSecretKey);
       }
     }
@@ -1727,6 +1730,9 @@ document.addEventListener("DOMContentLoaded", function () {
     var initRemoteSessionId = initialRemotePanel.dataset.sessionId || (activeSessionIdInput ? activeSessionIdInput.value.trim() : "");
     var initRemoteSecretKey = getSecretKey();
     if (initRemoteSessionId && initRemoteSecretKey) {
+      // Render the quorum dropdown immediately from data-quorum (server-injected);
+      // the WS state message will update it once connected.
+      _renderQuorumDropdown(initialRemotePanel, initialRemotePanel.dataset.quorum || "na");
       _attachRemoteUserGateBehavior(initialRemotePanel, initRemoteSessionId, initRemoteSecretKey);
     }
   }

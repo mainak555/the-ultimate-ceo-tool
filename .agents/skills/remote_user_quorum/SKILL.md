@@ -78,6 +78,7 @@ defaults to `"chat_agent"` and `env` = `settings.ENVIRONMENT`.
 | `{NS}:gate_response:{session_id}:{name}` | JSON `{"text": str, "attachment_ids": list}` | 6 h |
 | `{NS}:gate_winner:{session_id}` | claimer name string | 6 h |
 | `{NS}:pending_task:{session_id}` | JSON `{"task": str, "attachment_ids": list}` | 5 min |
+| `{NS}:quorum:{session_id}` | string `all \| first_win \| team_choice` | token TTL (24 h) |
 
 All three key groups are cleared together by `clear_gate_responses(session_id, expected_names)`
 immediately after quorum is met and the session is set to `idle`. The TTLs are safety nets only.
@@ -321,6 +322,72 @@ return HTTP 202 for gate user until all remotes have called the new remote-respo
 
 ---
 
+## Quorum options — single source of truth
+
+`QUORUM_OPTIONS` and `VALID_QUORUM_VALUES` are defined once in `server/util.py`:
+
+```python
+QUORUM_OPTIONS = [
+    {"value": "all",         "label": "Wait for all remote users to reply"},
+    {"value": "first_win",   "label": "First user response continues the run"},
+    {"value": "team_choice", "label": "Let the agent planner decide who must reply"},
+]
+VALID_QUORUM_VALUES = {opt["value"] for opt in QUORUM_OPTIONS}
+```
+
+- `server/views.py` imports `QUORUM_OPTIONS` and passes it to templates as `quorum_options` (config form) and as `window._quorumOptions` JSON (home page).
+- `server/remote_user_views.py` imports `VALID_QUORUM_VALUES` for `set_session_quorum_view` validation.
+- Templates iterate `{% for opt in quorum_options %}` — never hardcode option values.
+
+---
+
+## Participants readiness panel — quorum dropdown contract
+
+The `.chat-remote-panel` in `home.js` carries a quorum dropdown rendered by `_renderQuorumDropdown(panel, quorum)`.
+
+### Visibility rule
+
+`team_choice` is **only selectable via Project Config**. It must **not appear** in the live chat dropdown unless the project is already configured with that value:
+
+```js
+var visibleOptions = isTeamChoice
+  ? allOptions          // show all three (disabled) so the value is visible
+  : allOptions.filter(function (o) { return o.value !== "team_choice"; });
+```
+
+### Disabled rule
+
+When `effectiveQuorum === "team_choice"` the `<select>` is rendered with `disabled`. Users cannot change quorum from `team_choice` in the chat panel.
+
+### Idempotent update path
+
+When the dropdown already exists (WS `state` refresh), the function:
+1. Removes the `team_choice` option if `isTeamChoice` is false (handles reconnect after project config change).
+2. Updates `value` and `disabled` in place.
+
+### Page-load and session-switch reconnect
+
+Both `htmx:afterSwap` and the `DOMContentLoaded` bootstrap call `_renderQuorumDropdown(panel, panel.dataset.quorum)` **before** `_attachRemoteUserGateBehavior`. This makes the dropdown appear immediately from the server-injected `data-quorum` attribute without waiting for the WS `state` message.
+
+### `data-quorum` attribute — how it reaches the DOM
+
+The server-rendered `.chat-remote-panel` in `chat_session_history.html` carries `data-quorum="{{ session_quorum|default:'na' }}"`.
+
+`chat_session_detail` (and the create/swap OOB paths) resolve `session_quorum` for `awaiting_remote_users` sessions:
+
+```python
+session_quorum = None
+if session.get("status") == "awaiting_remote_users":
+    from agents.session_coordination import get_session_quorum
+    session_quorum = get_session_quorum(session_id)
+    if not session_quorum and project:
+        session_quorum = (project.get("human_gate") or {}).get("quorum") or "na"
+```
+
+Resolution order: Redis quorum override → project config quorum → `"na"`.
+
+---
+
 ## Files to touch when changing quorum behavior
 
 | File | Why |
@@ -328,10 +395,16 @@ return HTTP 202 for gate user until all remotes have called the new remote-respo
 | `agents/session_coordination.py` | Gate Redis helpers, key builders, TTL constants |
 | `agents/team_builder.py` | `build_team()` UserProxyAgent wiring for team_choice |
 | `agents/runtime.py` | `get_or_build_team()` remote_users passthrough |
-| `server/views.py` | `chat_session_create`, `event_stream`, `chat_session_respond` |
+| `server/views.py` | `chat_session_create`, `event_stream`, `chat_session_respond`, `chat_session_detail` |
+| `server/util.py` | `QUORUM_OPTIONS`, `VALID_QUORUM_VALUES` (single source) |
+| `server/remote_user_views.py` | `set_session_quorum_view` validation |
 | `server/services.py` | `create_chat_session`, `normalize_chat_session` |
 | `server/urls.py` | Phase 2: new remote-respond route |
 | `server/consumers.py` | Phase 2: WebSocket gate readiness subscription |
+| `server/static/server/js/home.js` | `_renderQuorumDropdown`, reconnect bootstrap paths |
+| `server/templates/server/home.html` | `window._quorumOptions` JSON injection |
+| `server/templates/server/partials/config_form.html` | Quorum `<select>` template loop |
+| `server/templates/server/partials/chat_session_history.html` | `data-quorum` on `.chat-remote-panel` |
 | `docs/agent_teams.md` | Update quorum/proxy docs |
 | `docs/db_schema.md` | Update session schema |
 | `.agents/skills/active_session_coordination/SKILL.md` | Update gate key contracts |
