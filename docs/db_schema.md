@@ -134,6 +134,7 @@ Cross-references: [docs/API.md](API.md) (form fields + HTTP schema), [AGENTS.md]
 {
   "_id": "ObjectId",
   "project_id": "string (project ObjectId hex)",
+  "project_version": 1.0,  // float — snapshot of project.version at session creation time; never updated after insert
   "description": "string",
   "created_at": "datetime",
   "discussions": [

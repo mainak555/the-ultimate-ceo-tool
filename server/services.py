@@ -732,6 +732,7 @@ def normalize_chat_session(doc):
     return {
         "session_id": str(doc["_id"]),
         "project_id": doc.get("project_id", ""),
+        "project_version": round(float(doc.get("project_version") or 1.0), 1),
         "description": doc.get("description", ""),
         "created_at": created_at,
         "discussions": [_normalize_discussion(m) for m in doc.get("discussions", [])],
@@ -772,9 +773,22 @@ def _ensure_discussion_ids(doc, col=None):
 def create_chat_session(project_id, description):
     """Insert a new chat session. Returns the normalized document."""
     cleaned = validate_chat_session({"project_id": project_id, "description": description})
+
+    # Snapshot the current project version at session creation time
+    project_version = 1.0
+    try:
+        proj_oid = ObjectId(cleaned["project_id"])
+        proj_col = get_collection(PROJECT_SETTINGS_COLLECTION)
+        proj_doc = proj_col.find_one({"_id": proj_oid}, {"version": 1})
+        if proj_doc and proj_doc.get("version") is not None:
+            project_version = round(float(proj_doc["version"]), 1)
+    except Exception:
+        pass  # fall back to 1.0 — non-fatal
+
     col = get_collection(CHAT_SESSIONS_COLLECTION)
     doc = {
         "project_id": cleaned["project_id"],
+        "project_version": project_version,
         "description": cleaned["description"],
         "created_at": datetime.now(timezone.utc),
         "discussions": [],
