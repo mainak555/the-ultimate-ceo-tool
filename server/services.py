@@ -729,6 +729,7 @@ def normalize_chat_session(doc):
         "has_agent_state": isinstance(agent_state, dict) and isinstance(agent_state.get("state"), dict),
         "agent_state_meta": state_meta,
         "pending_oauth_servers": [str(s) for s in pending_oauth if isinstance(s, str)],
+        "remote_users": doc.get("remote_users") or [],
     }
 
 
@@ -758,7 +759,7 @@ def _ensure_discussion_ids(doc, col=None):
 
 
 @traced_function("service.chat.create")
-def create_chat_session(project_id, description):
+def create_chat_session(project_id, description, remote_users=None):
     """Insert a new chat session. Returns the normalized document."""
     cleaned = validate_chat_session({"project_id": project_id, "description": description})
     col = get_collection(CHAT_SESSIONS_COLLECTION)
@@ -769,6 +770,7 @@ def create_chat_session(project_id, description):
         "discussions": [],
         "status": "idle",
         "current_round": 0,
+        "remote_users": list(remote_users) if remote_users else [],
     }
     col.insert_one(doc)
     normalized = normalize_chat_session(doc)

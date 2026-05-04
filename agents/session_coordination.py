@@ -538,13 +538,194 @@ def delete_mcp_oauth_readiness(session_id: str) -> None:
         pass
 
 
+# ---------------------------------------------------------------------------
+# Human gate quorum — per-user Redis response keys
+# ---------------------------------------------------------------------------
+
+_GATE_RESPONSE_TTL: Final[int] = 6 * 3600  # 6 hours — gate may wait a long time
+_PENDING_TASK_TTL: Final[int] = 300        # 5 minutes — frontend calls /run/ immediately
+
+
+def _gate_response_key(session_id: str, responder_name: str) -> str:
+    return f"{_namespace()}:gate_response:{session_id}:{responder_name}"
+
+
+def _gate_winner_key(session_id: str) -> str:
+    return f"{_namespace()}:gate_winner:{session_id}"
+
+
+def _pending_task_key(session_id: str) -> str:
+    return f"{_namespace()}:pending_task:{session_id}"
+
+
+def store_gate_response(
+    session_id: str,
+    responder_name: str,
+    text: str,
+    attachment_ids: list,
+) -> None:
+    """Store a gate responder's input in an individual Redis key.
+
+    Key: ``{NS}:gate_response:{session_id}:{responder_name}``
+    Each responder owns their own key — no shared hash, no write contention.
+    """
+    import json as _json
+
+    key = _gate_response_key(session_id, responder_name)
+    payload = _json.dumps({"text": text or "", "attachment_ids": list(attachment_ids or [])})
+    try:
+        _get_client().set(key, payload, ex=_GATE_RESPONSE_TTL)
+    except Exception as exc:  # noqa: BLE001
+        raise SessionCoordinationError("Unable to store gate response.") from exc
+    logger.debug(
+        "agents.session.gate_response_stored",
+        extra={"session_id": session_id, "responder": responder_name},
+    )
+
+
+def get_gate_response(session_id: str, responder_name: str) -> dict | None:
+    """Return the stored gate response for a single responder, or None if absent."""
+    import json as _json
+
+    key = _gate_response_key(session_id, responder_name)
+    try:
+        raw = _get_client().get(key)
+        return _json.loads(raw) if raw else None
+    except Exception as exc:  # noqa: BLE001
+        raise SessionCoordinationError("Unable to get gate response.") from exc
+
+
+def check_all_gate_responses(
+    session_id: str, expected_names: list[str]
+) -> tuple[bool, dict]:
+    """Check whether all expected responders have submitted gate responses.
+
+    Returns ``(all_present, collected)`` where ``collected`` maps
+    ``responder_name → {text, attachment_ids}`` for each present responder,
+    in the same order as ``expected_names``. Uses a pipelined GET for one
+    round-trip regardless of responder count.
+    """
+    import json as _json
+
+    try:
+        client = _get_client()
+        pipe = client.pipeline(transaction=False)
+        for name in expected_names:
+            pipe.get(_gate_response_key(session_id, name))
+        results = pipe.execute()
+    except Exception as exc:  # noqa: BLE001
+        raise SessionCoordinationError("Unable to check gate responses.") from exc
+
+    collected: dict = {}
+    all_present = True
+    for name, raw in zip(expected_names, results):
+        if raw is None:
+            all_present = False
+        else:
+            try:
+                collected[name] = _json.loads(raw)
+            except Exception:  # noqa: BLE001
+                all_present = False
+    return all_present, collected
+
+
+def claim_gate_winner(session_id: str, claimer_name: str) -> bool:
+    """Atomically claim the gate winner role using SET NX.
+
+    Returns ``True`` when this claimer wins the race; ``False`` when another
+    caller already claimed (concurrent POST scenario).
+    """
+    key = _gate_winner_key(session_id)
+    try:
+        return bool(_get_client().set(key, claimer_name, ex=_GATE_RESPONSE_TTL, nx=True))
+    except Exception as exc:  # noqa: BLE001
+        raise SessionCoordinationError("Unable to claim gate winner.") from exc
+
+
+def clear_gate_responses(session_id: str, expected_names: list[str]) -> None:
+    """Delete all per-user gate response keys and the winner key.
+
+    Called once quorum is met and the session has been set to idle.
+    DEL on non-existent keys is a no-op in Redis — safe to call with a full
+    expected_names list even when some users never responded (phase 1 auto-complete).
+    """
+    keys = [_gate_response_key(session_id, name) for name in expected_names]
+    keys.append(_gate_winner_key(session_id))
+    try:
+        _get_client().delete(*keys)
+    except Exception as exc:  # noqa: BLE001
+        raise SessionCoordinationError("Unable to clear gate responses.") from exc
+    logger.debug(
+        "agents.session.gate_responses_cleared",
+        extra={"session_id": session_id, "count": len(expected_names)},
+    )
+
+
+def store_pending_task(
+    session_id: str,
+    task: str,
+    attachment_ids: list | None = None,
+) -> None:
+    """Store a quorum-composed task for the next /run/ call to consume.
+
+    The key is consumed atomically by ``pop_pending_task`` at run start.
+    Storing the task here (rather than passing it back via the respond response
+    body) prevents a second human discussion entry from being persisted in
+    event_stream — the quorum path already inserts ordered per-user entries.
+    """
+    import json as _json
+
+    key = _pending_task_key(session_id)
+    payload = _json.dumps({"task": task or "", "attachment_ids": list(attachment_ids or [])})
+    try:
+        _get_client().set(key, payload, ex=_PENDING_TASK_TTL)
+    except Exception as exc:  # noqa: BLE001
+        raise SessionCoordinationError("Unable to store pending task.") from exc
+
+
+def pop_pending_task(session_id: str) -> dict | None:
+    """Atomically get-and-delete the pending quorum task for a session.
+
+    Returns ``{task: str, attachment_ids: list}`` when a pending task exists,
+    or ``None`` when no pending task is stored (non-quorum resume).
+    Uses GETDEL (Redis 6.2+) with a GET+DEL pipeline fallback for older Redis.
+    """
+    import json as _json
+
+    key = _pending_task_key(session_id)
+    try:
+        client = _get_client()
+        try:
+            raw = client.getdel(key)
+        except AttributeError:
+            # Redis < 6.2 — fall back to pipeline GET + DEL
+            pipe = client.pipeline(transaction=True)
+            pipe.get(key)
+            pipe.delete(key)
+            results = pipe.execute()
+            raw = results[0]
+    except Exception as exc:  # noqa: BLE001
+        raise SessionCoordinationError("Unable to pop pending task.") from exc
+
+    if raw is None:
+        return None
+    try:
+        return _json.loads(raw)
+    except Exception:  # noqa: BLE001
+        return None
+
+
 __all__ = [
     "SessionCoordinationError",
     "acquire_run_lease",
+    "check_all_gate_responses",
+    "claim_gate_winner",
     "clear_cancel_signal",
+    "clear_gate_responses",
     "clear_run_traceparent",
     "delete_mcp_oauth_readiness",
     "ensure_redis_available",
+    "get_gate_response",
     "get_heartbeat_interval_seconds",
     "get_instance_id",
     "get_mcp_oauth_authorized_count",
@@ -556,6 +737,7 @@ __all__ = [
     "init_mcp_oauth_readiness",
     "is_cancel_signaled",
     "list_authorized_oauth_servers",
+    "pop_pending_task",
     "publish_oauth_server_authorized",
     "purge_mcp_oauth_tokens",
     "release_run_lease",
@@ -564,5 +746,7 @@ __all__ = [
     "set_mcp_oauth_test_status",
     "set_mcp_oauth_token",
     "signal_cancel",
+    "store_gate_response",
+    "store_pending_task",
     "store_run_traceparent",
 ]

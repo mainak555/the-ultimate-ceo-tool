@@ -117,7 +117,7 @@ def build_agent_runtime_spec(
     }
 
 
-def build_team(project: dict, session_id: str | None = None):
+def build_team(project: dict, session_id: str | None = None, remote_users: list | None = None):
     """
     Build an AutoGen team from a normalized project config.
 
@@ -174,6 +174,40 @@ def build_team(project: dict, session_id: str | None = None):
             mcp_agent_count += 1
         agents.append(AssistantAgent(**agent_kwargs))
 
+    # Add UserProxyAgent placeholders for team_choice quorum.
+    # Each proxy has an async input_func that returns immediately so the run
+    # is never blocked — real remote user input delivery is deferred to a
+    # later phase (Redis pub-sub / WebSocket).
+    proxy_count = 0
+    if (project.get("human_gate") or {}).get("quorum") == "team_choice" and remote_users:
+        from autogen_agentchat.agents import UserProxyAgent
+
+        def _make_input_func(proxy_name: str):
+            async def _placeholder(prompt: str) -> str:
+                logger.debug(
+                    "agents.proxy.placeholder_input",
+                    extra={"proxy": proxy_name},
+                )
+                return "Continue."
+            return _placeholder
+
+        for ru in remote_users:
+            raw_name = ru.get("name") or ""
+            safe_proxy_name = re.sub(r"[\s\-]+", "_", raw_name)
+            safe_proxy_name = re.sub(r"[^\w]", "", safe_proxy_name)
+            if safe_proxy_name and safe_proxy_name[0].isdigit():
+                safe_proxy_name = "_" + safe_proxy_name
+            if not safe_proxy_name:
+                safe_proxy_name = f"remote_user_{proxy_count}"
+            agents.append(
+                UserProxyAgent(
+                    name=safe_proxy_name,
+                    description=ru.get("description") or "Remote participant",
+                    input_func=_make_input_func(safe_proxy_name),
+                )
+            )
+            proxy_count += 1
+
     # Stash workbenches on the team so runtime can register them after build.
     project.setdefault("_runtime", {})["mcp_workbenches"] = all_workbenches
 
@@ -223,6 +257,7 @@ def build_team(project: dict, session_id: str | None = None):
                 "human_gate": has_gate,
                 "selector_model": selector_model_name,
                 "mcp_agent_count": mcp_agent_count,
+                "proxy_count": proxy_count,
             },
         )
         return SelectorGroupChat(
@@ -244,6 +279,7 @@ def build_team(project: dict, session_id: str | None = None):
             "max_iterations": max_iter,
             "human_gate": has_gate,
             "mcp_agent_count": mcp_agent_count,
+            "proxy_count": proxy_count,
         },
     )
     return RoundRobinGroupChat(agents, termination_condition=termination)

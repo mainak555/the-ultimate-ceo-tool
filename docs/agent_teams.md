@@ -49,9 +49,11 @@ Converts a single saved agent dict into a runtime spec:
 
 `description` is consumed by `SelectorGroupChat`'s `{roles}` placeholder (see Selector Prompt below). For `RoundRobinGroupChat` it has no runtime effect but is always populated for future-proofing.
 
-### `build_team(project)`
+### `build_team(project, session_id=None, remote_users=None)`
 
 Reads `project["team"]["type"]` and builds the appropriate AutoGen team.
+
+- `remote_users` — list of remote user dicts `{name, description}` taken from the **session snapshot** (`chat_sessions.remote_users`), never directly from the project. Passed in from `get_or_build_team`. When `quorum == "team_choice"` and this list is non-empty, `UserProxyAgent` instances are added after all `AssistantAgent` instances. See [Remote Users & Quorum](#remote-users--quorum) below.
 
 #### Termination strategy
 
@@ -65,8 +67,50 @@ consume one agent turn on every `run_stream()` call.
 | `false` | `AgentMessageTermination(n_agents × max_iterations)` — runs all rounds automatically |
 | `true` | `AgentMessageTermination(n_agents) \| ExternalTermination()` — stops after one full agent round or when Stop is pressed (graceful); see Stop Mechanism below |
 
-`ExternalTermination` is stored in `project["_runtime"]["external_termination"]` after `build_team()` so
-`runtime.cancel_team()` can call `.set()` for a graceful stop.
+`n_agents` counts **all participants** — `AssistantAgent` instances plus any `UserProxyAgent` instances added for `quorum == "team_choice"` (see below). This ensures `AgentMessageTermination` fires after one full round including proxy turns.
+
+---
+
+## Remote Users & Quorum
+
+### Overview
+
+A project can define `human_gate.remote_users` — additional human participants beyond the gate owner. Three quorum modes control how their responses combine to form the agent task and resume the run:
+
+| `quorum` | Meaning |
+|----------|---------|
+| `"na"` | No remote users (forced automatically by `validate_human_gate` when `remote_users == []`) |
+| `"first_win"` | First responder wins; all subsequent POSTs return 409 |
+| `"all"` | All configured participants must respond before the run resumes; inputs are merged into one composed task |
+| `"team_choice"` | Remote users participate as `UserProxyAgent` nodes inside the AutoGen team; selector routing chooses them as needed |
+
+### Session Snapshot Contract
+
+`chat_sessions.remote_users` is **always** the snapshot from `project["human_gate"]["remote_users"]` written at session creation time. It is the composition lock: team building on resume uses the session copy, never the live project config. `quorum` is **never** stored in the session — it is always read from the project at runtime.
+
+### `quorum == "team_choice"` — UserProxyAgent Wiring
+
+`build_team()` creates one `UserProxyAgent` per remote user when `quorum == "team_choice"` and `remote_users` is non-empty:
+
+```python
+UserProxyAgent(
+    name=safe_name,                            # sanitized with same re.sub as AssistantAgent
+    description=ru["description"] or "Remote participant",
+    input_func=placeholder_input_func,         # async, returns "Continue." immediately
+)
+```
+
+**Phase 1 placeholder**: `input_func` is an async closure that returns `"Continue."` immediately — the run is never blocked. When `UserInputRequestedEvent` appears in the SSE stream, `event_stream()` emits a `remote_input_requested` SSE breadcrumb `{proxy_name, request_id}` for future WebSocket integration.
+
+**Phase 1 limitation**: real remote user input is not delivered to the proxy. Full WebSocket/Redis pub-sub delivery is deferred to a later phase.
+
+### `quorum == "all"` and `quorum == "first_win"` — Gate-Level Quorum
+
+No `UserProxyAgent` is added to the team. Quorum is managed programmatically in `chat_session_respond()` using Redis per-user keys. See [active_session_coordination skill](./../.agents/skills/active_session_coordination/SKILL.md) and [remote_user_quorum skill](./../.agents/skills/remote_user_quorum/SKILL.md) for the full contract.
+
+**Composed task** (quorum=all): all non-empty responder texts joined with `"\n\n"` in `expected_names` order (gate user first, then remote users in project config order). The composed task is stored in Redis (`pending_task`) and consumed by the next `/run/` call.
+
+**Discussion entries**: one entry per responder is inserted into `discussions[]` in `expected_names` order immediately when quorum is met — before the session is set to `idle`. Each entry follows the standard discussion shape (`agent_name`, `role=user`, `content`, `timestamp`, `attachments`).
 
 AutoGen automatically calls `termination.reset()` after each round fires, so `AgentMessageTermination._count`
 and `ExternalTermination._setted` both reset cleanly between gate rounds without manual intervention.
@@ -205,7 +249,7 @@ session_id → ExternalTermination  (gated runs only; graceful stop signal)
 
 | Function | When to call |
 |----------|-------------|
-| `get_or_build_team(session_id, project)` | Before every `run_stream()` call. Builds on miss, returns cached on hit. Stashes `ExternalTermination` on cache miss |
+| `get_or_build_team(session_id, project, remote_users=None)` | Before every `run_stream()` call. Builds on miss, returns cached on hit. Stashes `ExternalTermination` on cache miss. Passes `remote_users` through to `build_team()` for `team_choice` proxy construction |
 | `reset_cancel_token(session_id)` | Before every `run_stream()` call to issue a fresh `CancellationToken`. `ExternalTermination` resets automatically when fired |
 | `cancel_team(session_id)` | To stop a running stream. Calls `ExternalTermination.set()` (graceful) then `CancellationToken.cancel()` (hard fallback) |
 | `evict_team(session_id)` | After session completes or is abandoned; clears `_TEAM_CACHE`, `_CANCEL_TOKENS`, `_EXTERNAL_TERMINATIONS`, and MCP workbenches |
@@ -286,7 +330,8 @@ Mode-specific pause behavior:
 
 - **Multi-assistant (`n_agents >= 2`)**: gate pauses after each full round and completion can occur when `current_round` reaches `max_iterations`.
 - **Single-assistant, no remote users (`n_agents == 1`, `remote_users == []`) — pure chat mode**: gate pauses after every assistant turn and does not auto-complete via `max_iterations`; the human `Stop` action controls termination. Empty Continue (no text, no attachments) is rejected with HTTP 400.
-- **Single-assistant with remote users (`n_agents == 1`, `len(remote_users) >= 1`)**: behaves like multi-assistant — team config is persisted and `max_iterations` governs run completion. Empty Continue is allowed (same as multi-assistant). Team Setup is visible in the config UI.
+- **Single-assistant with remote users (`n_agents == 1`, `len(remote_users) >= 1`)**: behaves like multi-assistant — team config is honored and `max_iterations` governs run completion. Empty Continue is allowed. Team Setup is visible in config UI.
+- **`quorum == "team_choice"` with `UserProxyAgent` participants**: proxies are counted in `n_agents`. `AgentMessageTermination` fires after one full round that includes proxy turns. The `is_single_assistant_gate`/`is_single_assistant_chat_mode` check uses `session["remote_users"]` (session snapshot), so this mode is never mistakenly classified as pure single-assistant chat mode.
 
 ---
 
