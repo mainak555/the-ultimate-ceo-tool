@@ -1071,53 +1071,53 @@ async def chat_session_run(request, session_id):
                     return
 
         try:
-            try:
-                team, _, cache_miss = get_or_build_team(session_id, project)
-                if cache_miss:
-                    saved_state = await asyncio.to_thread(services.get_agent_state, session_id)
-                    if saved_state:
-                        try:
-                            await load_team_state(team, saved_state)
-                        except Exception:
-                            evict_team(session_id)
-                            await asyncio.to_thread(services.set_session_status, session_id, "stopped")
-                            yield _sse("error", {"message": "Unable to restart: state version mismatch."})
-                            return
-            except Exception as exc:
-                evict_team(session_id)
-                # If the failure is a missing/expired MCP OAuth token,
-                # re-park the session in awaiting_oauth and surface the same
-                # in-history authorization card via an SSE event so the
-                # frontend swap path is identical to the pre-run gate.
-                pending_oauth_mid = await asyncio.to_thread(
-                    services.compute_pending_oauth_servers, raw_project, session_id
+            team, _, cache_miss = get_or_build_team(session_id, project)
+            if cache_miss:
+                saved_state = await asyncio.to_thread(services.get_agent_state, session_id)
+                if saved_state:
+                    try:
+                        await load_team_state(team, saved_state)
+                    except Exception:
+                        evict_team(session_id)
+                        await asyncio.to_thread(services.set_session_status, session_id, "stopped")
+                        yield _sse("error", {"message": "Unable to restart: state version mismatch."})
+                        return
+        except Exception as exc:
+            evict_team(session_id)
+            # If the failure is a missing/expired MCP OAuth token,
+            # re-park the session in awaiting_oauth and surface the same
+            # in-history authorization card via an SSE event so the
+            # frontend swap path is identical to the pre-run gate.
+            pending_oauth_mid = await asyncio.to_thread(
+                services.compute_pending_oauth_servers, raw_project, session_id
+            )
+            if pending_oauth_mid:
+                all_oauth_mid = await asyncio.to_thread(
+                    services.list_all_reachable_oauth_servers, raw_project
                 )
-                if pending_oauth_mid:
-                    all_oauth_mid = await asyncio.to_thread(
-                        services.list_all_reachable_oauth_servers, raw_project
-                    )
-                    authorized_count_mid = max(0, len(all_oauth_mid) - len(pending_oauth_mid))
-                    from agents.session_coordination import init_mcp_oauth_readiness
-                    await asyncio.to_thread(
-                        init_mcp_oauth_readiness, session_id, authorized_count_mid
-                    )
-                    await asyncio.to_thread(
-                        services.set_session_awaiting_oauth, session_id, pending_oauth_mid
-                    )
-                    logger.info(
-                        "agents.mcp.oauth_gate_blocked_midrun",
-                        extra={
-                            "session_id": session_id,
-                            "server_count": len(pending_oauth_mid),
-                            "server_names": pending_oauth_mid,
-                        },
-                    )
-                    yield _sse("awaiting_mcp_oauth", {"servers": pending_oauth_mid})
-                    return
-                await asyncio.to_thread(services.set_session_status, session_id, "idle")
-                yield _sse("error", {"message": str(exc)})
+                authorized_count_mid = max(0, len(all_oauth_mid) - len(pending_oauth_mid))
+                from agents.session_coordination import init_mcp_oauth_readiness
+                await asyncio.to_thread(
+                    init_mcp_oauth_readiness, session_id, authorized_count_mid
+                )
+                await asyncio.to_thread(
+                    services.set_session_awaiting_oauth, session_id, pending_oauth_mid
+                )
+                logger.info(
+                    "agents.mcp.oauth_gate_blocked_midrun",
+                    extra={
+                        "session_id": session_id,
+                        "server_count": len(pending_oauth_mid),
+                        "server_names": pending_oauth_mid,
+                    },
+                )
+                yield _sse("awaiting_mcp_oauth", {"servers": pending_oauth_mid})
                 return
-
+            await asyncio.to_thread(services.set_session_status, session_id, "idle")
+            yield _sse("error", {"message": str(exc)})
+            return
+        
+        try:            
             # Issue a fresh cancellation token for this run
             cancel_token = reset_cancel_token(session_id)
 
