@@ -830,7 +830,7 @@ def try_set_session_running(session_id):
 
     col = get_collection(CHAT_SESSIONS_COLLECTION)
     result = col.update_one(
-        {"_id": oid, "status": {"$in": ["idle", "awaiting_input", "awaiting_mcp_oauth"]}},
+        {"_id": oid, "status": {"$in": ["idle", "awaiting_input", "awaiting_mcp_oauth", "awaiting_remote_users"]}},
         {"$set": {"status": "running"}},
     )
     return result.modified_count == 1
@@ -853,6 +853,53 @@ def set_session_awaiting_oauth(session_id, server_names=None):
         {"_id": oid},
         {"$set": {"status": "awaiting_mcp_oauth"}},
     )
+
+
+@traced_function("service.chat.set_awaiting_remote_users")
+def set_session_awaiting_remote_users(session_id):
+    """Mark a chat session as awaiting remote users to join before the run starts."""
+    try:
+        oid = ObjectId(session_id)
+    except (InvalidId, TypeError):
+        return
+    col = get_collection(CHAT_SESSIONS_COLLECTION)
+    col.update_one(
+        {"_id": oid},
+        {"$set": {"status": "awaiting_remote_users"}},
+    )
+
+
+def compute_pending_remote_users(project, session_id):
+    """Return the list of remote user names still needed before the run can start.
+
+    Reads the current per-user status from Redis.  Users with status 'ignored'
+    are subtracted from required_count.  Returns None when all required users
+    are online (gate passes); returns a list (possibly empty) of still-pending
+    names otherwise.
+
+    ``project`` is the normalized project dict as returned by get_project_raw /
+    get_project — caller must not pass a masked copy.
+    """
+    if not isinstance(project, dict) or not session_id:
+        return None
+    remote_users_cfg = (project.get("human_gate") or {}).get("remote_users") or []
+    if not remote_users_cfg:
+        return None  # No remote users configured — gate not applicable.
+
+    all_names = [r["name"] for r in remote_users_cfg if isinstance(r, dict) and r.get("name")]
+    if not all_names:
+        return None
+
+    from agents.session_coordination import get_remote_user_statuses
+    statuses = get_remote_user_statuses(session_id, all_names)
+
+    pending = [
+        name for name in all_names
+        if statuses.get(name, "offline") not in ("online", "ignored")
+    ]
+    if not pending:
+        return None  # All required users are online/ignored → gate passes.
+    return pending
 
 
 def compute_pending_oauth_servers(raw_project, session_id):

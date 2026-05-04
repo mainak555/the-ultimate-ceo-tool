@@ -775,6 +775,19 @@ def _sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {util.json_dumps(data)}\n\n"
 
 
+def _publish_session_message_safe(session_id: str, sse_record: dict) -> None:
+    """Publish an agent message to the session pub/sub channel for remote users.
+
+    Failures are silently swallowed — remote user display is advisory only
+    and must never block the host SSE stream.
+    """
+    try:
+        from agents.session_coordination import publish_session_message
+        publish_session_message(session_id, {"type": "message", "message": sse_record})
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _friendly_run_error(exc: Exception) -> str:
     """Return a user-readable error string for agent run failures.
 
@@ -880,7 +893,7 @@ async def chat_session_run(request, session_id):
     if session is None:
         return util.json_error("Session not found", 404)
 
-    valid_states = ("idle", "awaiting_input", "awaiting_mcp_oauth")
+    valid_states = ("idle", "awaiting_input", "awaiting_mcp_oauth", "awaiting_remote_users")
     if session["status"] not in valid_states:
         return util.json_error(f"Session is currently '{session['status']}'", 409)
 
@@ -942,6 +955,48 @@ async def chat_session_run(request, session_id):
             {"status": "awaiting_mcp_oauth", "servers": pending_oauth},
             status=409,
         )
+
+    # Remote-user pre-run gate: when remote users are configured, all must
+    # be online (or host-ignored) before the run starts.
+    remote_users_cfg = (project.get("human_gate") or {}).get("remote_users") or []
+    if remote_users_cfg:
+        pending_remote = await asyncio.to_thread(
+            services.compute_pending_remote_users, project, session_id
+        )
+        if pending_remote is not None:
+            all_names = [r["name"] for r in remote_users_cfg if isinstance(r, dict) and r.get("name")]
+            from agents.session_coordination import (
+                get_remote_user_statuses,
+                init_remote_user_readiness,
+            )
+            statuses = await asyncio.to_thread(get_remote_user_statuses, session_id, all_names)
+            online_count = sum(1 for s in statuses.values() if s == "online")
+            ignored_count = sum(1 for s in statuses.values() if s == "ignored")
+            required_count = len(all_names) - ignored_count
+            await asyncio.to_thread(
+                init_remote_user_readiness, session_id, online_count, required_count
+            )
+            await asyncio.to_thread(services.set_session_awaiting_remote_users, session_id)
+            logger.info(
+                "agents.remote_user.gate_blocked",
+                extra={
+                    "session_id": session_id,
+                    "pending_count": len(pending_remote),
+                    "pending_users": pending_remote,
+                },
+            )
+            return JsonResponse(
+                {
+                    "status": "awaiting_remote_users",
+                    "users": [
+                        {"name": n, "status": statuses.get(n, "offline")} for n in all_names
+                    ],
+                    "required_count": required_count,
+                    "online_count": online_count,
+                    "quorum": (project.get("human_gate") or {}).get("quorum", "na"),
+                },
+                status=409,
+            )
 
     from agents.session_coordination import (
         SessionCoordinationError,
@@ -1288,6 +1343,10 @@ async def chat_session_run(request, session_id):
                         if export_meta:
                             sse_record["export"] = export_meta
                         yield _sse("message", sse_record)
+                        if (project.get("human_gate") or {}).get("remote_users"):
+                            await asyncio.to_thread(
+                                _publish_session_message_safe, session_id, sse_record
+                            )
 
                     elif isinstance(msg, ToolCallSummaryMessage) and msg.source != "user":
                         # Emitted when reflect_on_tool_use is False or unavailable.
@@ -1308,6 +1367,10 @@ async def chat_session_run(request, session_id):
                         if export_meta:
                             sse_record["export"] = export_meta
                         yield _sse("message", sse_record)
+                        if (project.get("human_gate") or {}).get("remote_users"):
+                            await asyncio.to_thread(
+                                _publish_session_message_safe, session_id, sse_record
+                            )
 
                     elif type(msg).__name__ == "UserInputRequestedEvent":
                         # team_choice quorum: placeholder proxy auto-responds immediately.

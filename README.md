@@ -472,6 +472,9 @@ Full documentation: [docs/mcp_integration.md](docs/mcp_integration.md).
 | `REDIS_RUN_HEARTBEAT_SECONDS` | Lease heartbeat interval (seconds) | `20` |
 | `REDIS_CANCEL_SIGNAL_TTL_SECONDS` | Cancel signal TTL (seconds) | `120` |
 | `REDIS_ATTACHMENT_TTL_SECONDS` | How long extracted attachment text is kept in Redis (seconds). Raise this if sessions span multiple days. | `86400` (24 h) |
+| `REDIS_GATE_RESPONSE_TTL_SECONDS` | TTL for HITL gate response keys in Redis (seconds) | `21600` (6 h) |
+| `REDIS_PENDING_TASK_TTL_SECONDS` | TTL for quorum pending-task keys in Redis (seconds) | `300` |
+| `REDIS_REMOTE_USER_TOKEN_TTL_SECONDS` | TTL for remote-user invitation tokens in Redis (seconds) | `21600` (6 h) |
 | `MAX_AGENT_STATE_BYTES` | Maximum byte size of serialised AutoGen agent state stored in MongoDB. Raise for long sessions with many attachments or embedded images. MongoDB's document limit is 16 MB (shared with `discussions[]`). | `1000000` (1 MB) |
 | `DEBUG` | Django debug mode | `True` |
 | `ALLOWED_HOSTS` | Comma-separated allowed hosts | `localhost,127.0.0.1` |

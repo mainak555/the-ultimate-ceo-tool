@@ -128,6 +128,22 @@
   </div>
 {% endif %}
 
+{% if session.status == "awaiting_remote_users" %}
+  <div class="chat-remote-panel"
+       data-session-id="{{ session.session_id }}"
+       data-project-id="{{ session.project_id }}">
+    <div class="chat-remote-panel__title">&#x1F465; Waiting for remote participants</div>
+    <p class="chat-remote-panel__hint">
+      This session requires remote users to join before the run can start.
+      Share the invite link with each participant; the run will resume automatically
+      once all required users are online.
+    </p>
+    <div class="chat-remote-panel__rows">
+      <p class="chat-remote-panel__loading">Connecting&hellip;</p>
+    </div>
+  </div>
+{% endif %}
+
 {% if session.has_agent_state %}
 {% if session.status == "completed" or session.status == "stopped" %}
 {% if project and session.project_version != project.version %}

@@ -1,0 +1,85 @@
+{% load compress static %}<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% if project_name %}{{ project_name }} — {% endif %}Remote Session{% if user_name %} · {{ user_name }}{% endif %}</title>
+  <meta name="robots" content="noindex,nofollow">
+  {% compress css %}
+  <link rel="stylesheet" type="text/x-scss" href="{% static 'server/scss/main.scss' %}">
+  {% endcompress %}
+  <script src="https://cdn.jsdelivr.net/npm/marked@15/marked.min.js"></script>
+</head>
+<body class="remote-user-page">
+
+  <header class="remote-user-page__header">
+    <div class="remote-user-page__title">
+      {% if project_name %}{{ project_name }}{% else %}Product Discovery{% endif %}
+      {% if user_name %} &middot; {{ user_name }}{% endif %}
+    </div>
+    <div class="remote-user-page__badge">Remote Participant</div>
+  </header>
+
+  {% if error %}
+  <main class="remote-user-page__error">
+    <div class="remote-user-page__error-icon">&#x26A0;</div>
+    <p class="remote-user-page__error-text">{{ error }}</p>
+  </main>
+  {% else %}
+
+  <main class="remote-user-page__main" id="remote-chat-main">
+
+    <div class="remote-user-page__messages" id="remote-chat-messages">
+
+      {% if discussions %}
+        {% for d in discussions %}
+          <div class="chat-message {% if d.role == 'user' %}chat-message--user{% else %}chat-message--agent{% endif %}">
+            <div class="chat-bubble {% if d.role == 'user' %}chat-bubble--user{% else %}chat-bubble--agent{% endif %}"
+                 data-raw-content="{{ d.content }}">
+              <div class="chat-bubble__meta">
+                <span class="chat-bubble__name">
+                  {% if d.role == 'user' %}You{% else %}{{ d.agent_name }}{% endif %}
+                </span>
+                {% if d.timestamp %}
+                <time class="local-time" data-utc="{{ d.timestamp }}"></time>
+                {% endif %}
+              </div>
+              <div class="chat-bubble__body chat-bubble__markdown markdown-body"></div>
+            </div>
+          </div>
+        {% endfor %}
+      {% else %}
+        <div class="remote-user-page__waiting">
+          <p>Waiting for the session to start&hellip;</p>
+        </div>
+      {% endif %}
+
+    </div>
+
+    <div class="remote-user-page__input-bar">
+      <p class="remote-user-page__input-hint">
+        &#x1F441;&#xFE0F; You are participating as a remote observer. Responses from the AI team will appear here in real time.
+      </p>
+    </div>
+
+  </main>
+
+  <script>
+    window._remoteUserToken = {{ token|safe|default:"null" }};
+    window._remoteUserName = {{ user_name|safe|default:"null" }};
+    window._remoteSessionId = {{ session_id|safe|default:"null" }};
+  </script>
+  <script>
+    // Wrap values in quotes for JS strings (Django template does not auto-escape for JS)
+    window._remoteUserToken = "{{ token }}";
+    window._remoteUserName = "{{ user_name }}";
+    window._remoteSessionId = "{{ session_id }}";
+  </script>
+  {% compress js %}
+  <script src="{% static 'server/js/remote_user.js' %}"></script>
+  {% endcompress %}
+
+  {% endif %}
+
+</body>
+</html>

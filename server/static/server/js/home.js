@@ -756,7 +756,7 @@ document.addEventListener("DOMContentLoaded", function () {
     setRunningState(false);
     _teardownOAuthGate();
 
-    chatMessages.querySelectorAll(".chat-status-badge, .chat-restart-panel, .chat-oauth-panel").forEach(function (el) {
+    chatMessages.querySelectorAll(".chat-status-badge, .chat-restart-panel, .chat-oauth-panel, .chat-remote-panel").forEach(function (el) {
       el.remove();
     });
 
@@ -899,6 +899,212 @@ document.addEventListener("DOMContentLoaded", function () {
     if (!_oauthMessageListener) _attachOAuthGateBehavior(panel, sessionId, secretKey);
   });
 
+  // ------------------------------------------------------------------
+  // Remote-user in-history readiness panel
+  // ------------------------------------------------------------------
+
+  var _remoteUserWs = null;
+
+  function _teardownRemoteUserGate() {
+    if (_remoteUserWs) {
+      try { _remoteUserWs.close(); } catch (_) {}
+      _remoteUserWs = null;
+    }
+  }
+
+  function _showRemoteUserGatePanel(sessionId, secretKey, users, quorum, replayTask, replayAttachmentIds) {
+    setRunningState(false);
+    _teardownRemoteUserGate();
+
+    chatMessages.querySelectorAll(".chat-status-badge, .chat-restart-panel, .chat-oauth-panel, .chat-remote-panel").forEach(function (el) {
+      el.remove();
+    });
+
+    var projectId = _resolveProjectId();
+
+    chatMessages.insertAdjacentHTML(
+      "beforeend",
+      '<div class="chat-remote-panel"'
+      + ' data-session-id="' + escapeHtml(sessionId) + '"'
+      + ' data-project-id="' + escapeHtml(projectId) + '"'
+      + ' data-quorum="' + escapeHtml(quorum || "na") + '">'
+      + '<div class="chat-remote-panel__title">&#x1F465; Waiting for remote participants</div>'
+      + '<p class="chat-remote-panel__hint">Share the invite link with each participant; the run will resume automatically once all required users are online.</p>'
+      + '<div class="chat-remote-panel__rows"><p class="chat-remote-panel__loading">Connecting\u2026</p></div>'
+      + '<div class="chat-remote-panel__footer">'
+      + '<button type="button" class="btn btn--sm btn--secondary remote-panel-cancel-btn">Cancel</button>'
+      + '</div>'
+      + '</div>'
+    );
+
+    var panel = chatMessages.querySelector(".chat-remote-panel");
+    if (!panel) return;
+    panel._replayTask = replayTask || "";
+    panel._replayAttachmentIds = (replayAttachmentIds || []).slice();
+    panel._users = (users || []).slice();
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+
+    _attachRemoteUserGateBehavior(panel, sessionId, secretKey);
+  }
+
+  function _renderRemoteUserRows(panel, users, quorum, secretKey) {
+    var rowsContainer = panel.querySelector(".chat-remote-panel__rows");
+    if (!rowsContainer) return;
+    var loading = rowsContainer.querySelector(".chat-remote-panel__loading");
+    if (loading) loading.remove();
+
+    var sessionId = panel.dataset.sessionId || (activeSessionIdInput ? activeSessionIdInput.value.trim() : "");
+    var isTeamChoice = (quorum || panel.dataset.quorum || "na") === "team_choice";
+
+    (users || []).forEach(function (u) {
+      var name = typeof u === "string" ? u : (u.name || "");
+      var status = typeof u === "object" ? (u.status || "offline") : "offline";
+      if (rowsContainer.querySelector('[data-remote-user-name="' + name.replace(/"/g, '\\"') + '"]')) return;
+
+      var safe = escapeHtml(name);
+      var statusClass = "remote-user-status--" + (status === "online" ? "online" : status === "ignored" ? "ignored" : "offline");
+      var statusLabel = status === "online" ? "Online \u2713" : status === "ignored" ? "Ignored" : "Offline";
+      var checkboxDisabled = isTeamChoice ? " disabled checked" : (status === "online" ? " checked" : "");
+
+      var rowHtml = '<div class="remote-user-row" data-remote-user-name="' + safe + '" data-status="' + escapeHtml(status) + '">'
+        + '<input type="checkbox" class="remote-user-row__checkbox" title="Require this user"' + checkboxDisabled + '>'
+        + '<span class="remote-user-row__name">' + safe + '</span>'
+        + '<span class="remote-user-row__status ' + statusClass + '">' + statusLabel + '</span>'
+        + '<button type="button" class="btn btn--sm btn--secondary remote-user-copy-btn" data-session-id="' + escapeHtml(sessionId) + '" data-user-name="' + safe + '" title="Copy invite link">Copy Link</button>'
+        + '</div>';
+      rowsContainer.insertAdjacentHTML("beforeend", rowHtml);
+    });
+  }
+
+  function _updateRemoteUserRow(panel, userName, status) {
+    var row = panel.querySelector('[data-remote-user-name="' + (window.CSS && CSS.escape ? CSS.escape(userName) : userName) + '"]');
+    if (!row) return;
+    row.dataset.status = status;
+    var statusEl = row.querySelector(".remote-user-row__status");
+    if (statusEl) {
+      statusEl.className = "remote-user-row__status remote-user-status--" + (status === "online" ? "online" : status === "ignored" ? "ignored" : "offline");
+      statusEl.textContent = status === "online" ? "Online \u2713" : status === "ignored" ? "Ignored" : "Offline";
+    }
+    var cb = row.querySelector(".remote-user-row__checkbox");
+    if (cb && !cb.disabled) {
+      cb.checked = (status !== "ignored");
+    }
+  }
+
+  function _attachRemoteUserGateBehavior(panel, sessionId, secretKey) {
+    function _onAllReady() {
+      _teardownRemoteUserGate();
+      var task = panel._replayTask || "";
+      var ids = panel._replayAttachmentIds || [];
+      panel.remove();
+      _doStartRun(sessionId, secretKey, task, ids);
+      setRunningState(true);
+    }
+
+    var proto = location.protocol === "https:" ? "wss:" : "ws:";
+    var wsUrl = proto + "//" + location.host + "/ws/remote-users/" + encodeURIComponent(sessionId)
+      + "/?skey=" + encodeURIComponent(secretKey);
+    try {
+      _remoteUserWs = new WebSocket(wsUrl);
+    } catch (_) {
+      _remoteUserWs = null;
+    }
+
+    if (_remoteUserWs) {
+      _remoteUserWs.onmessage = function (event) {
+        var msg;
+        try { msg = JSON.parse(event.data); } catch (_) { return; }
+        if (!document.body.contains(panel)) { _teardownRemoteUserGate(); return; }
+
+        var quorum = panel.dataset.quorum || "na";
+        if (msg.type === "state") {
+          _renderRemoteUserRows(panel, msg.users || [], quorum, secretKey);
+          panel._users = msg.users || [];
+        } else if (msg.type === "update") {
+          if (panel._users && !panel._users.some(function (u) { return u.name === msg.user_name; })) {
+            panel._users.push({name: msg.user_name, status: msg.status});
+            _renderRemoteUserRows(panel, [{name: msg.user_name, status: msg.status}], quorum, secretKey);
+          } else {
+            _updateRemoteUserRow(panel, msg.user_name, msg.status);
+          }
+        } else if (msg.type === "count_update" || msg.type === "complete") {
+          if (msg.type === "complete") _onAllReady();
+        }
+      };
+      _remoteUserWs.onerror = function () {
+        if (panel._users && panel._users.length) {
+          _renderRemoteUserRows(panel, panel._users, panel.dataset.quorum || "na", secretKey);
+        }
+      };
+      _remoteUserWs.onclose = function () {
+        if (_remoteUserWs) { _remoteUserWs = null; }
+      };
+    }
+  }
+
+  // Delegated: Copy invite link button
+  document.addEventListener("click", function (event) {
+    var btn = event.target && event.target.closest ? event.target.closest(".remote-user-copy-btn") : null;
+    if (!btn) return;
+    var sessionId = btn.dataset.sessionId || (activeSessionIdInput ? activeSessionIdInput.value.trim() : "");
+    var userName = btn.dataset.userName;
+    var secretKey = getSecretKey();
+    if (!sessionId || !userName || !secretKey) { alert("Enter the Secret Key first."); return; }
+
+    fetch("/chat/sessions/" + sessionId + "/remote-users/" + encodeURIComponent(userName) + "/invite/", {
+      method: "POST",
+      headers: {"X-App-Secret-Key": secretKey, "X-CSRFToken": csrfToken},
+    }).then(function (r) { return r.json(); }).then(function (d) {
+      if (d.join_url) {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(d.join_url).then(function () {
+            var orig = btn.textContent;
+            btn.textContent = "Copied!";
+            setTimeout(function () { btn.textContent = orig; }, 2000);
+          }).catch(function () { alert(d.join_url); });
+        } else { alert(d.join_url); }
+      } else { alert(d.error || "Failed to generate link."); }
+    }).catch(function () { alert("Error generating invite link."); });
+  });
+
+  // Delegated: checkbox toggle (ignore/unignore)
+  document.addEventListener("change", function (event) {
+    var cb = event.target && event.target.classList && event.target.classList.contains("remote-user-row__checkbox") ? event.target : null;
+    if (!cb) return;
+    var row = cb.closest(".remote-user-row");
+    var panel = cb.closest(".chat-remote-panel");
+    if (!row || !panel) return;
+    var sessionId = panel.dataset.sessionId || (activeSessionIdInput ? activeSessionIdInput.value.trim() : "");
+    var userName = row.dataset.remoteUserName;
+    var secretKey = getSecretKey();
+    if (!sessionId || !userName || !secretKey) return;
+
+    var endpoint = cb.checked ? "unignore" : "ignore";
+    fetch("/chat/sessions/" + sessionId + "/remote-users/" + encodeURIComponent(userName) + "/" + endpoint + "/", {
+      method: "POST",
+      headers: {"X-App-Secret-Key": secretKey, "X-CSRFToken": csrfToken},
+    }).catch(function () { /* non-fatal */ });
+  });
+
+  // Delegated: Cancel button on remote panel
+  document.addEventListener("click", function (event) {
+    var btn = event.target && event.target.closest ? event.target.closest(".remote-panel-cancel-btn") : null;
+    if (!btn) return;
+    var panel = btn.closest(".chat-remote-panel");
+    if (!panel) return;
+    var sessionId = panel.dataset.sessionId || (activeSessionIdInput ? activeSessionIdInput.value.trim() : "");
+    var secretKey = getSecretKey();
+    _teardownRemoteUserGate();
+    panel.remove();
+    setRunningState(false);
+    if (sessionId && secretKey) {
+      fetch("/chat/sessions/" + sessionId + "/stop/", {
+        method: "POST",
+        headers: {"X-App-Secret-Key": secretKey, "X-CSRFToken": csrfToken},
+      }).catch(function () {});
+    }
+  });
+
   function restartSession(panel, mode, text) {
     var sessionId = panel.dataset.sessionId
       || (activeSessionIdInput ? activeSessionIdInput.value.trim() : "");
@@ -942,7 +1148,7 @@ document.addEventListener("DOMContentLoaded", function () {
     var secretKey = getSecretKey();
     if (!secretKey) { alert("Enter the Secret Key first."); return; }
 
-    chatMessages.querySelectorAll(".chat-status-badge, .chat-restart-panel, .chat-oauth-panel").forEach(function (el) {
+    chatMessages.querySelectorAll(".chat-status-badge, .chat-restart-panel, .chat-oauth-panel, .chat-remote-panel").forEach(function (el) {
       el.remove();
     });
 
@@ -977,6 +1183,10 @@ document.addEventListener("DOMContentLoaded", function () {
         return response.json().then(function (d) {
           if (d && d.status === "awaiting_mcp_oauth") {
             _showOAuthGatePanel(sessionId, secretKey, d.servers || [], task, attachmentIds);
+            return;
+          }
+          if (d && d.status === "awaiting_remote_users") {
+            _showRemoteUserGatePanel(sessionId, secretKey, d.users || [], d.quorum || "na", task, attachmentIds);
             return;
           }
           throw new Error(d.error || "Run failed");
@@ -1366,6 +1576,15 @@ document.addEventListener("DOMContentLoaded", function () {
         _attachOAuthGateBehavior(oauthPanel, oauthSessionId, oauthSecretKey);
       }
     }
+    // Reconnect WS for server-rendered awaiting_remote_users panels (session switch).
+    var remotePanel = chatMessages && chatMessages.querySelector(".chat-remote-panel");
+    if (remotePanel && !_remoteUserWs) {
+      var remotePanelSessionId = remotePanel.dataset.sessionId || (activeSessionIdInput ? activeSessionIdInput.value.trim() : "");
+      var remotePanelSecretKey = getSecretKey();
+      if (remotePanelSessionId && remotePanelSecretKey) {
+        _attachRemoteUserGateBehavior(remotePanel, remotePanelSessionId, remotePanelSecretKey);
+      }
+    }
   });
 
   document.body.addEventListener("input", function (e) {
@@ -1437,6 +1656,15 @@ document.addEventListener("DOMContentLoaded", function () {
     var initOAuthSecretKey = getSecretKey();
     if (initOAuthSessionId && initOAuthSecretKey) {
       _attachOAuthGateBehavior(initialOAuthPanel, initOAuthSessionId, initOAuthSecretKey);
+    }
+  }
+  // On initial page load, connect WS for server-rendered awaiting_remote_users panels.
+  var initialRemotePanel = chatMessages && chatMessages.querySelector(".chat-remote-panel");
+  if (initialRemotePanel) {
+    var initRemoteSessionId = initialRemotePanel.dataset.sessionId || (activeSessionIdInput ? activeSessionIdInput.value.trim() : "");
+    var initRemoteSecretKey = getSecretKey();
+    if (initRemoteSessionId && initRemoteSecretKey) {
+      _attachRemoteUserGateBehavior(initialRemotePanel, initRemoteSessionId, initRemoteSecretKey);
     }
   }
 });

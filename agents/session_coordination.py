@@ -542,8 +542,22 @@ def delete_mcp_oauth_readiness(session_id: str) -> None:
 # Human gate quorum — per-user Redis response keys
 # ---------------------------------------------------------------------------
 
-_GATE_RESPONSE_TTL: Final[int] = 6 * 3600  # 6 hours — gate may wait a long time
-_PENDING_TASK_TTL: Final[int] = 300        # 5 minutes — frontend calls /run/ immediately
+def _gate_response_ttl() -> int:
+    """Return gate-response key TTL from settings (default 6 h)."""
+    raw = int(getattr(settings, "REDIS_GATE_RESPONSE_TTL_SECONDS", 21600) or 21600)
+    return max(60, raw)
+
+
+def _pending_task_ttl() -> int:
+    """Return pending-task key TTL from settings (default 5 min)."""
+    raw = int(getattr(settings, "REDIS_PENDING_TASK_TTL_SECONDS", 300) or 300)
+    return max(60, raw)
+
+
+def _remote_user_token_ttl() -> int:
+    """Return remote-user invitation token TTL from settings (default 6 h)."""
+    raw = int(getattr(settings, "REDIS_REMOTE_USER_TOKEN_TTL_SECONDS", 21600) or 21600)
+    return max(60, raw)
 
 
 def _gate_response_key(session_id: str, responder_name: str) -> str:
@@ -574,7 +588,7 @@ def store_gate_response(
     key = _gate_response_key(session_id, responder_name)
     payload = _json.dumps({"text": text or "", "attachment_ids": list(attachment_ids or [])})
     try:
-        _get_client().set(key, payload, ex=_GATE_RESPONSE_TTL)
+        _get_client().set(key, payload, ex=_gate_response_ttl())
     except Exception as exc:  # noqa: BLE001
         raise SessionCoordinationError("Unable to store gate response.") from exc
     logger.debug(
@@ -637,7 +651,7 @@ def claim_gate_winner(session_id: str, claimer_name: str) -> bool:
     """
     key = _gate_winner_key(session_id)
     try:
-        return bool(_get_client().set(key, claimer_name, ex=_GATE_RESPONSE_TTL, nx=True))
+        return bool(_get_client().set(key, claimer_name, ex=_gate_response_ttl(), nx=True))
     except Exception as exc:  # noqa: BLE001
         raise SessionCoordinationError("Unable to claim gate winner.") from exc
 
@@ -678,7 +692,7 @@ def store_pending_task(
     key = _pending_task_key(session_id)
     payload = _json.dumps({"task": task or "", "attachment_ids": list(attachment_ids or [])})
     try:
-        _get_client().set(key, payload, ex=_PENDING_TASK_TTL)
+        _get_client().set(key, payload, ex=_pending_task_ttl())
     except Exception as exc:  # noqa: BLE001
         raise SessionCoordinationError("Unable to store pending task.") from exc
 
@@ -715,6 +729,241 @@ def pop_pending_task(session_id: str) -> dict | None:
         return None
 
 
+# ---------------------------------------------------------------------------
+# Remote user readiness — invitation tokens, online status, pub/sub
+# ---------------------------------------------------------------------------
+
+def _remote_user_token_key(session_id: str, user_name: str) -> str:
+    """Forward key: session+name → token."""
+    return f"{_namespace()}:remote_user:{session_id}:{user_name}:token"
+
+
+def _remote_user_token_reverse_key(token: str) -> str:
+    """Reverse key: token → {session_id, user_name, project_id}."""
+    return f"{_namespace()}:remote_user:token:{token}"
+
+
+def _remote_user_status_key(session_id: str, user_name: str) -> str:
+    return f"{_namespace()}:remote_user:{session_id}:{user_name}:status"
+
+
+def _remote_user_readiness_key(session_id: str) -> str:
+    return f"{_namespace()}:remote_user:{session_id}:readiness"
+
+
+def _remote_user_pubsub_channel(session_id: str) -> str:
+    return f"{_namespace()}:remote_user:readiness:{session_id}"
+
+
+def _session_message_channel(session_id: str) -> str:
+    return f"{_namespace()}:session:messages:{session_id}"
+
+
+def generate_remote_user_token(session_id: str, user_name: str, project_id: str) -> str:
+    """Generate a UUID4 invitation token for a remote user and store it in Redis.
+
+    Stores forward key (session+name → token) and reverse key (token → metadata)
+    with the configured TTL. Returns the new token.
+    """
+    import json as _json
+    from uuid import uuid4 as _uuid4
+
+    token = str(_uuid4())
+    ttl = _remote_user_token_ttl()
+    meta = _json.dumps({"session_id": session_id, "user_name": user_name, "project_id": project_id})
+    try:
+        client = _get_client()
+        pipe = client.pipeline(transaction=False)
+        pipe.set(_remote_user_token_key(session_id, user_name), token, ex=ttl)
+        pipe.set(_remote_user_token_reverse_key(token), meta, ex=ttl)
+        pipe.execute()
+    except Exception as exc:  # noqa: BLE001
+        raise SessionCoordinationError("Unable to generate remote user token.") from exc
+    logger.info(
+        "agents.remote_user.token_generated",
+        extra={"session_id": session_id, "user_name": user_name},
+    )
+    return token
+
+
+def revoke_remote_user_token(session_id: str, user_name: str) -> None:
+    """Delete both forward and reverse token keys for a remote user."""
+    try:
+        client = _get_client()
+        token = client.get(_remote_user_token_key(session_id, user_name))
+        keys = [_remote_user_token_key(session_id, user_name)]
+        if token:
+            keys.append(_remote_user_token_reverse_key(token))
+        client.delete(*keys)
+    except Exception as exc:  # noqa: BLE001
+        raise SessionCoordinationError("Unable to revoke remote user token.") from exc
+
+
+def get_remote_user_token(session_id: str, user_name: str) -> str | None:
+    """Return the current invitation token for a remote user, or None if absent."""
+    try:
+        return _get_client().get(_remote_user_token_key(session_id, user_name))
+    except Exception as exc:  # noqa: BLE001
+        raise SessionCoordinationError("Unable to get remote user token.") from exc
+
+
+def get_remote_user_token_data(token: str) -> dict | None:
+    """Reverse-lookup a token → {session_id, user_name, project_id}, or None."""
+    import json as _json
+
+    try:
+        raw = _get_client().get(_remote_user_token_reverse_key(token))
+        return _json.loads(raw) if raw else None
+    except Exception as exc:  # noqa: BLE001
+        raise SessionCoordinationError("Unable to lookup remote user token.") from exc
+
+
+def get_remote_user_statuses(session_id: str, user_names: list[str]) -> dict[str, str]:
+    """Return a mapping of user_name → status ('online'/'offline'/'ignored').
+
+    Defaults to 'offline' for any user with no status key.
+    Uses a single pipeline round-trip regardless of user count.
+    """
+    if not user_names:
+        return {}
+    try:
+        client = _get_client()
+        pipe = client.pipeline(transaction=False)
+        for name in user_names:
+            pipe.get(_remote_user_status_key(session_id, name))
+        results = pipe.execute()
+    except Exception as exc:  # noqa: BLE001
+        raise SessionCoordinationError("Unable to get remote user statuses.") from exc
+
+    return {name: (raw or "offline") for name, raw in zip(user_names, results)}
+
+
+def set_remote_user_online(session_id: str, user_name: str) -> None:
+    """Mark a remote user as online and publish an update event."""
+    try:
+        client = _get_client()
+        client.set(_remote_user_status_key(session_id, user_name), "online",
+                   ex=_remote_user_token_ttl())
+    except Exception as exc:  # noqa: BLE001
+        raise SessionCoordinationError("Unable to set remote user online.") from exc
+
+    _publish_remote_user_event(session_id, {
+        "type": "update",
+        "user_name": user_name,
+        "status": "online",
+    })
+    logger.info(
+        "agents.remote_user.online",
+        extra={"session_id": session_id, "user_name": user_name},
+    )
+
+
+def set_remote_user_ignored(session_id: str, user_name: str) -> None:
+    """Mark a remote user as ignored (host un-checked) and publish an update."""
+    try:
+        client = _get_client()
+        client.set(_remote_user_status_key(session_id, user_name), "ignored",
+                   ex=_remote_user_token_ttl())
+    except Exception as exc:  # noqa: BLE001
+        raise SessionCoordinationError("Unable to set remote user ignored.") from exc
+
+    _publish_remote_user_event(session_id, {
+        "type": "update",
+        "user_name": user_name,
+        "status": "ignored",
+    })
+
+
+def set_remote_user_offline(session_id: str, user_name: str) -> None:
+    """Mark a remote user as offline (WebSocket closed)."""
+    try:
+        client = _get_client()
+        client.delete(_remote_user_status_key(session_id, user_name))
+    except Exception as exc:  # noqa: BLE001
+        raise SessionCoordinationError("Unable to set remote user offline.") from exc
+
+
+def init_remote_user_readiness(
+    session_id: str, online_count: int, required_count: int
+) -> None:
+    """Store the initial readiness snapshot so the WS consumer can send initial state."""
+    import json as _json
+
+    payload = _json.dumps({"online_count": online_count, "required_count": required_count})
+    try:
+        _get_client().set(_remote_user_readiness_key(session_id), payload,
+                          ex=_remote_user_token_ttl())
+    except Exception as exc:  # noqa: BLE001
+        raise SessionCoordinationError("Unable to init remote user readiness.") from exc
+
+
+def get_remote_user_readiness(session_id: str) -> dict:
+    """Return {online_count, required_count} snapshot, defaulting to zeros."""
+    import json as _json
+
+    try:
+        raw = _get_client().get(_remote_user_readiness_key(session_id))
+        return _json.loads(raw) if raw else {"online_count": 0, "required_count": 0}
+    except Exception as exc:  # noqa: BLE001
+        raise SessionCoordinationError("Unable to get remote user readiness.") from exc
+
+
+def _publish_remote_user_event(session_id: str, payload: dict) -> None:
+    """Internal: publish a JSON event to the remote-user pub/sub channel."""
+    import json as _json
+
+    try:
+        _get_client().publish(
+            _remote_user_pubsub_channel(session_id),
+            _json.dumps(payload),
+        )
+    except Exception:  # noqa: BLE001
+        pass  # pub/sub failure is non-fatal
+
+
+def publish_remote_user_event(session_id: str, payload: dict) -> None:
+    """Publish a remote-user readiness event (public wrapper for external callers)."""
+    _publish_remote_user_event(session_id, payload)
+
+
+def purge_remote_user_session_keys(session_id: str, user_names: list[str]) -> None:
+    """Delete all token, status, and readiness keys for a session's remote users."""
+    keys: list[str] = [_remote_user_readiness_key(session_id)]
+    try:
+        client = _get_client()
+        # Collect tokens so we can delete reverse keys too.
+        pipe = client.pipeline(transaction=False)
+        for name in user_names:
+            pipe.get(_remote_user_token_key(session_id, name))
+        tokens = pipe.execute()
+
+        for name, token in zip(user_names, tokens):
+            keys.append(_remote_user_token_key(session_id, name))
+            keys.append(_remote_user_status_key(session_id, name))
+            if token:
+                keys.append(_remote_user_token_reverse_key(token))
+        client.delete(*keys)
+    except Exception as exc:  # noqa: BLE001
+        raise SessionCoordinationError("Unable to purge remote user session keys.") from exc
+
+
+def publish_session_message(session_id: str, message: dict) -> None:
+    """Publish a chat message event to the session message channel.
+
+    Remote-user WebSocket consumers subscribe to this channel to receive
+    live agent messages without polling.
+    """
+    import json as _json
+
+    try:
+        _get_client().publish(
+            _session_message_channel(session_id),
+            _json.dumps(message),
+        )
+    except Exception:  # noqa: BLE001
+        pass  # pub/sub failure is non-fatal
+
+
 __all__ = [
     "SessionCoordinationError",
     "acquire_run_lease",
@@ -725,6 +974,7 @@ __all__ = [
     "clear_run_traceparent",
     "delete_mcp_oauth_readiness",
     "ensure_redis_available",
+    "generate_remote_user_token",
     "get_gate_response",
     "get_heartbeat_interval_seconds",
     "get_instance_id",
@@ -733,18 +983,30 @@ __all__ = [
     "get_mcp_oauth_token",
     "get_and_delete_mcp_oauth_state",
     "get_redis_client",
+    "get_remote_user_readiness",
+    "get_remote_user_statuses",
+    "get_remote_user_token",
+    "get_remote_user_token_data",
     "get_run_traceparent",
     "init_mcp_oauth_readiness",
+    "init_remote_user_readiness",
     "is_cancel_signaled",
     "list_authorized_oauth_servers",
     "pop_pending_task",
     "publish_oauth_server_authorized",
+    "publish_remote_user_event",
+    "publish_session_message",
     "purge_mcp_oauth_tokens",
+    "purge_remote_user_session_keys",
     "release_run_lease",
     "renew_run_lease",
+    "revoke_remote_user_token",
     "set_mcp_oauth_state",
     "set_mcp_oauth_test_status",
     "set_mcp_oauth_token",
+    "set_remote_user_ignored",
+    "set_remote_user_offline",
+    "set_remote_user_online",
     "signal_cancel",
     "store_gate_response",
     "store_pending_task",
