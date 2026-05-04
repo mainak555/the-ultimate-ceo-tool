@@ -159,6 +159,10 @@ Model runtime notes:
 {
   "project_name": "string (unique)",
   "objective": "string",
+  "version": 1.0,
+  "// version": "float — server-managed; 1.0 on create, +0.1 per save, floor+1 on clone. Never set from user input.",
+  "created_at": "datetime (UTC BSON Date)",
+  "updated_at": "datetime (UTC BSON Date)",
   "agents": [
     {
       "name": "string",
@@ -193,6 +197,8 @@ Model runtime notes:
 ```json
 {
   "project_id": "<project_id>",
+  "project_version": 1.0,
+  "// project_version": "float — snapshot of project.version at session creation time; never updated after insert",
   "description": "...",
   "discussions": [],
   "status": "idle | running | awaiting_input | completed | stopped",

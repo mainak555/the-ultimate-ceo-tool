@@ -42,6 +42,20 @@ config.html                        ← Full HTML document, loaded once
     └── partials/config_readonly.html  ← Read-only mode
 ```
 
+## Project Version Badge
+
+Every project entry in the sidebar and both the edit and readonly config views display the server-managed project version alongside the project name.
+
+| Surface | Template | CSS class |
+|---------|----------|-----------|
+| Sidebar item | `partials/sidebar.html` | `.sidebar__version` |
+| Edit form header | `partials/config_form.html` | `.config-form__version` |
+| Readonly view header | `partials/config_readonly.html` | `.config-readonly__version` |
+
+All three render `v{{ project.version|floatformat:1 }}` inside a `<small>` tag styled with `$font-size-sm`, `font-weight: 400`, and `$color-text-muted`. The sidebar variant adds `display: block` and a small `margin-top` so it appears on its own line below the project name; the form and readonly variants use `margin-left: $space-xs; vertical-align: middle` so the version sits inline with the `<h2>`.
+
+Version values are **server-managed only** — never expose `version` as a form field or accept it from user input.
+
 ## CSS Class Conventions
 
 - **BEM-like**: `.block__element` (e.g., `.header__title`, `.agent-card__header`)

@@ -224,6 +224,27 @@ persisted AutoGen team resume state (`chat_sessions.agent_state`).
 
 ---
 
+## Project Versioning
+
+Every project carries a server-managed `version` float displayed as **v1.0**, **v1.1**, etc.
+alongside the project name in the sidebar, the edit form header, and the readonly view.
+
+| Action | Version rule | Example |
+|---|---|---|
+| Create new project | Starts at `1.0` | → `v1.0` |
+| Save / update | Increments by `0.1` | `v1.0 → v1.1 → v1.2` |
+| Clone | Bumps to next whole number | `v1.x → v2.0`, `v2.x → v3.0` |
+
+The version is **set by the server only** — it is never exposed as an editable form field
+and is never accepted from user input. Legacy projects (created before this feature)
+display as `v1.0` without any migration step required.
+
+When you clone a project, the clone starts at the next whole-number version so you can
+immediately tell which generation of a configuration a chat session was created against
+(each session snapshot the project version at creation time).
+
+---
+
 ## Docker
 
 The repository ships three deployment topologies under `deployments/`:

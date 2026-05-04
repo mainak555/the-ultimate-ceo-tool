@@ -2089,6 +2089,32 @@ select.input {
 }
 
 // ---------------------------------------------------------------------------
+// Version-mismatch blocked-resume panel (chat_session_history.html)
+// ---------------------------------------------------------------------------
+.chat-version-mismatch-panel {
+  margin: $space-md;
+  padding: $space-md;
+  background: #fffbeb;
+  border: 1px solid #fcd34d;
+  border-left: 4px solid $color-warning;
+  border-radius: $radius;
+
+  &__title {
+    font-size: $font-size-base;
+    font-weight: 700;
+    color: $color-warning;
+    margin-bottom: $space-xs;
+  }
+
+  &__hint {
+    font-size: $font-size-sm;
+    color: $color-text;
+    line-height: 1.5;
+    margin: 0;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // MCP OAuth in-history authorization panel (chat_session_history.html)
 // Mirrors .chat-restart-panel rhythm; tokens only.
 // ---------------------------------------------------------------------------

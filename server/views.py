@@ -629,7 +629,7 @@ def chat_session_list(request):
     export_meta = _build_export_meta(project)
     list_html = render_to_string(
         "server/partials/chat_session_list.html",
-        {"sessions": sessions, "project_id": project_id},
+        {"sessions": sessions, "project_id": project_id, "project": project},
         request=request,
     )
     context_html = render_to_string(
@@ -669,7 +669,7 @@ def chat_session_create(request):
     export_meta = _build_export_meta(project)
     list_html = render_to_string(
         "server/partials/chat_session_list.html",
-        {"sessions": sessions, "project_id": project_id, "active_session_id": session["session_id"]},
+        {"sessions": sessions, "project_id": project_id, "active_session_id": session["session_id"], "project": project},
         request=request,
     )
     history_html = render_to_string(
@@ -746,10 +746,11 @@ def chat_session_update(request, session_id):
 
     # Re-render the session list so the sidebar reflects the updated description.
     project_id = session.get("project_id", "")
+    project = services.get_project(project_id)
     sessions = services.list_chat_sessions(project_id)
     list_html = render_to_string(
         "server/partials/chat_session_list.html",
-        {"sessions": sessions, "project_id": project_id, "active_session_id": session["session_id"]},
+        {"sessions": sessions, "project_id": project_id, "active_session_id": session["session_id"], "project": project},
         request=request,
     )
     oob_list = f'<div id="chat-history-list" hx-swap-oob="innerHTML">{list_html}</div>'
@@ -1618,6 +1619,19 @@ def chat_session_restart(request, session_id):
     session = services.get_chat_session(session_id)
     if session is None:
         return util.json_error("Session not found", 404)
+
+    # Block resume when the project configuration has changed since this session was created
+    project = services.get_project(session.get("project_id", ""))
+    if project:
+        session_ver = round(float(session.get("project_version") or 1.0), 1)
+        project_ver = round(float(project.get("version") or 1.0), 1)
+        if session_ver != project_ver:
+            return util.json_error(
+                f"Cannot resume: project configuration changed from "
+                f"v{session_ver:.1f} to v{project_ver:.1f}. "
+                "Start a new session to use the current configuration.",
+                409,
+            )
 
     if session.get("status") not in ("completed", "stopped"):
         return util.json_error(f"Session cannot be restarted from status '{session.get('status')}'.", 409)

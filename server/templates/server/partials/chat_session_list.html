@@ -37,10 +37,13 @@
       </div>
       <div class="chat-session-item__row2">
         {% if session.has_agent_state %}
+          {% if project and session.project_version != project.version %}
+          {% else %}
           <span class="chat-session-item__badge"
                 title="This chat can resume from last saved state.">
             Restartable
           </span>
+          {% endif %}
         {% endif %}
         <span class="chat-session-item__date"><time class="local-time" data-utc="{{ session.created_at }}">{{ session.created_at }}</time></span>
       </div>

@@ -130,6 +130,18 @@
 
 {% if session.has_agent_state %}
 {% if session.status == "completed" or session.status == "stopped" %}
+{% if project and session.project_version != project.version %}
+  <div class="chat-version-mismatch-panel">
+    <div class="chat-version-mismatch-panel__title">&#x26A0; Cannot resume &mdash; configuration changed</div>
+    <p class="chat-version-mismatch-panel__hint">
+      This session was started with project version
+      <strong>v{{ session.project_version|floatformat:1 }}</strong>, but the project
+      is now at <strong>v{{ project.version|floatformat:1 }}</strong>.
+      Resuming from a different configuration version is not supported.
+      Start a new session to continue with the current configuration.
+    </p>
+  </div>
+{% else %}
   <div class="chat-restart-panel" data-session-id="{{ session.session_id }}">
     <div class="chat-restart-panel__title">Restart from saved agent state</div>
     <p class="chat-restart-panel__hint">
@@ -154,6 +166,7 @@
       </div>
     </div>
   </div>
+{% endif %}
 {% endif %}
 {% endif %}
 
