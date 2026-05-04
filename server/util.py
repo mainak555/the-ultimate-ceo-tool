@@ -11,6 +11,19 @@ import re
 from django.http import HttpResponse
 
 
+# ---------------------------------------------------------------------------
+# Quorum options — single source of truth shared by config_form and home gate
+# ---------------------------------------------------------------------------
+# Order and labels must match config_form.html and the home.js gate panel.
+QUORUM_OPTIONS = [
+    {"value": "all",         "label": "Wait for all remote users to reply"},
+    {"value": "first_win",   "label": "First user response continues the run"},
+    {"value": "team_choice", "label": "Let the agent planner decide who must reply"},
+]
+
+VALID_QUORUM_VALUES = {opt["value"] for opt in QUORUM_OPTIONS}
+
+
 def sanitize_identifier(raw_name: str, label: str) -> str:
     """Sanitize a raw string to a valid Python identifier.
 

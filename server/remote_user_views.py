@@ -45,6 +45,7 @@ from agents.session_coordination import (
     SessionCoordinationError,
 )
 from . import services, util
+from .util import VALID_QUORUM_VALUES
 from .views import _has_valid_secret
 
 logger = logging.getLogger(__name__)
@@ -237,15 +238,17 @@ def remote_user_mark_online(request, token):
 def set_session_quorum_view(request, session_id):
     """Override the quorum mode for this session's remote-user gate.
 
-    Accepts ``quorum`` in POST body (values: ``all`` or ``first_win``).
+    Accepts ``quorum`` in POST body (values: ``all``, ``first_win``, or ``team_choice``).
     Stores the override in Redis so the next run (after auto-continue) picks it up.
     """
     if not _has_valid_secret(request):
         return util.json_error("Unauthorized", 403)
 
     quorum = request.POST.get("quorum", "").strip()
-    if quorum not in ("all", "first_win"):
-        return util.json_error("Invalid quorum value. Expected 'all' or 'first_win'.", 400)
+    if quorum not in VALID_QUORUM_VALUES:
+        return util.json_error(
+            f"Invalid quorum value. Expected one of: {', '.join(sorted(VALID_QUORUM_VALUES))}.", 400
+        )
 
     try:
         set_session_quorum(session_id, quorum)

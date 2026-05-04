@@ -978,23 +978,40 @@ document.addEventListener("DOMContentLoaded", function () {
   }
 
   function _renderQuorumDropdown(panel, quorum) {
-    // No dropdown for team_choice (all participants are mandatory).
-    if (!quorum || quorum === "team_choice") return;
     var footer = panel.querySelector(".chat-remote-panel__footer");
     if (!footer) return;
-    // Idempotent: only inject once.
-    if (footer.querySelector(".remote-panel-quorum-select")) {
-      footer.querySelector(".remote-panel-quorum-select").value = quorum !== "na" ? quorum : "all";
+
+    // Normalise: treat missing/legacy 'na' as 'all'.
+    var effectiveQuorum = (!quorum || quorum === "na") ? "all" : quorum;
+    var isTeamChoice = effectiveQuorum === "team_choice";
+
+    // Idempotent: if dropdown already exists, update value and disabled state.
+    var existingSel = footer.querySelector(".remote-panel-quorum-select");
+    if (existingSel) {
+      existingSel.value = effectiveQuorum;
+      existingSel.disabled = isTeamChoice;
       return;
     }
+
+    // Build options from the single-source list injected by the server.
+    var options = window._quorumOptions || [
+      {value: "all",         label: "Wait for all remote users to reply"},
+      {value: "first_win",   label: "First user response continues the run"},
+      {value: "team_choice", label: "Let the agent planner decide who must reply"},
+    ];
+
     var sessionId = panel.dataset.sessionId || (activeSessionIdInput ? activeSessionIdInput.value.trim() : "");
-    var selectedAll = (quorum === "all" || quorum === "na") ? " selected" : "";
-    var selectedFirst = (quorum === "first_win") ? " selected" : "";
+    var optionsHtml = options.map(function (opt) {
+      return '<option value="' + escapeHtml(opt.value) + '"'
+        + (opt.value === effectiveQuorum ? " selected" : "") + ">"
+        + escapeHtml(opt.label) + "</option>";
+    }).join("");
+
     var html = '<label class="remote-panel-quorum-label">Quorum:'
-      + '<select class="remote-panel-quorum-select" data-session-id="' + escapeHtml(sessionId) + '">'
-      + '<option value="all"' + selectedAll + '>Wait for all remote users to reply</option>'
-      + '<option value="first_win"' + selectedFirst + '>First user response continues the run</option>'
-      + '</select></label>';
+      + '<select class="remote-panel-quorum-select" data-session-id="' + escapeHtml(sessionId) + '"'
+      + (isTeamChoice ? " disabled" : "") + ">"
+      + optionsHtml
+      + "</select></label>";
     footer.insertAdjacentHTML("afterbegin", html);
   }
 

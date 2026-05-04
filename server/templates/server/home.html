@@ -156,6 +156,9 @@
   <input type="hidden" id="active-session-id" value="">
   <input type="hidden" id="csrf-token-value" value="{{ csrf_token }}">
 
+  <script>
+    window._quorumOptions = {{ quorum_options_json|safe }};
+  </script>
   <script src="{% static 'server/js/app.js' %}"></script>
   <script src="{% static 'server/js/provider_registry.js' %}"></script>
   <script src="{% static 'server/js/markdown_viewer.js' %}"></script>

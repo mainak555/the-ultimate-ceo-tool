@@ -931,11 +931,11 @@ def publish_remote_user_event(session_id: str, payload: dict) -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _remote_user_quorum_key(session_id: str) -> str:
-    return f"{_namespace()}:remote_user:{session_id}:quorum"
+    return f"{_namespace()}:quorum:{session_id}"
 
 
 def set_session_quorum(session_id: str, quorum: str) -> None:
-    """Store a per-session quorum override (all | first_win) with token TTL."""
+    """Store a per-session quorum override (all | first_win | team_choice) with token TTL."""
     try:
         _get_client().set(_remote_user_quorum_key(session_id), quorum,
                           ex=_remote_user_token_ttl())

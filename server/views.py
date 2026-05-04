@@ -9,6 +9,7 @@ Each view:
 
 import asyncio
 import io
+import json
 import logging
 from urllib.parse import quote
 from datetime import datetime, timezone
@@ -23,6 +24,7 @@ from django.views.decorators.http import require_GET, require_POST, require_http
 from . import services
 from . import attachment_service
 from . import util
+from .util import QUORUM_OPTIONS
 from .logging_utils import bind_request_id, clear_request_id, get_request_id
 from core.tracing import context_from_traceparent, start_root_span
 
@@ -66,6 +68,7 @@ def _get_form_context(project=None, mode="create", success=None):
             "service_desk": services.get_jira_export_prompt_hint("service_desk"),
             "business": services.get_jira_export_prompt_hint("business"),
         },
+        "quorum_options": QUORUM_OPTIONS,
     }
     if success:
         context["success"] = success
@@ -449,6 +452,7 @@ def _render_shell(request, projects=None, auto_open_create=False):
         "default_system_prompt": services.get_system_prompt_template(),
         "selector_prompt_hint": services.get_selector_prompt_hint(),
         "trello_export_prompt_hint": services.get_trello_export_prompt_hint(),
+        "quorum_options": QUORUM_OPTIONS,
     })
 
 
@@ -456,7 +460,10 @@ def _render_shell(request, projects=None, auto_open_create=False):
 def index(request):
     """Render the chat home page."""
     projects = services.list_projects()
-    return render(request, "server/home.html", {"projects": projects})
+    return render(request, "server/home.html", {
+        "projects": projects,
+        "quorum_options_json": json.dumps(QUORUM_OPTIONS),
+    })
 
 
 @require_GET

@@ -105,9 +105,11 @@
         <div class="form-group">
           <label for="human_gate_quorum">Quorum</label>
           <select id="human_gate_quorum" name="human_gate[quorum]" class="input input--sm">
-            <option value="all" {% if project.human_gate.quorum == 'all' or not project.human_gate.quorum or project.human_gate.quorum == 'na' %}selected{% endif %}>Wait for all remote users to reply</option>
-            <option value="first_win" {% if project.human_gate.quorum == 'first_win' %}selected{% endif %}>First user response continues the run</option>
-            <option value="team_choice" {% if project.human_gate.quorum == 'team_choice' %}selected{% endif %}>Let the agent planner decide who must reply</option>
+            {% for opt in quorum_options %}
+            <option value="{{ opt.value }}"
+              {% if project.human_gate.quorum == opt.value or opt.value == 'all' and not project.human_gate.quorum or opt.value == 'all' and project.human_gate.quorum == 'na' %}selected{% endif %}
+            >{{ opt.label }}</option>
+            {% endfor %}
           </select>
           <small class="form-hint" style="font-style:italic;">Applies only when at least one remote user is configured.</small>
         </div>
