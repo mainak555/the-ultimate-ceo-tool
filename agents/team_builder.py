@@ -11,6 +11,8 @@ if TYPE_CHECKING:
 from autogen_agentchat.base import TerminationCondition
 from autogen_agentchat.messages import BaseChatMessage as _BaseChatMessage, StopMessage
 
+from server.util import sanitize_identifier
+
 from .factory import build_model_client
 from .mcp_tools import build_mcp_workbenches, resolve_mcp_servers_for_agent
 from .prompt_builder import resolve_system_prompt
@@ -133,8 +135,6 @@ def build_team(project: dict, session_id: str | None = None, remote_users: list 
         ExternalTermination instance is stashed in project["_runtime"]["external_termination"]
         so runtime.py can call .set() on it when stop is requested.
     """
-    import re
-
     from autogen_agentchat.agents import AssistantAgent
 
     objective = project.get("objective", "")
@@ -149,11 +149,9 @@ def build_team(project: dict, session_id: str | None = None, remote_users: list 
             agent_cfg, project=project, objective=objective, session_id=session_id
         )
         # Ensure name is a valid Python identifier (safety net for legacy docs)
-        safe_name = re.sub(r"[\s\-]+", "_", spec["name"])
-        safe_name = re.sub(r"[^\w]", "", safe_name)
-        if safe_name and safe_name[0].isdigit():
-            safe_name = "_" + safe_name
-        if not safe_name:
+        try:
+            safe_name = sanitize_identifier(spec["name"], "Agent name")
+        except ValueError:
             safe_name = f"agent_{len(agents)}"
         agent_kwargs = {
             "name": safe_name,
@@ -193,11 +191,9 @@ def build_team(project: dict, session_id: str | None = None, remote_users: list 
 
         for ru in remote_users:
             raw_name = ru.get("name") or ""
-            safe_proxy_name = re.sub(r"[\s\-]+", "_", raw_name)
-            safe_proxy_name = re.sub(r"[^\w]", "", safe_proxy_name)
-            if safe_proxy_name and safe_proxy_name[0].isdigit():
-                safe_proxy_name = "_" + safe_proxy_name
-            if not safe_proxy_name:
+            try:
+                safe_proxy_name = sanitize_identifier(raw_name, "Remote user name")
+            except ValueError:
                 safe_proxy_name = f"remote_user_{proxy_count}"
             agents.append(
                 UserProxyAgent(
