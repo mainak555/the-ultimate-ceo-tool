@@ -31,12 +31,11 @@ Required reading before:
 
 ## Key invariants
 
-1. **`quorum` is not stored in `chat_sessions`** — always read from `project["human_gate"]["quorum"]` at runtime.
-2. **`remote_users` is stored in `chat_sessions`** — session snapshot written at creation time. Used as the composition lock for all team rebuilds. Never re-read from the live project.
-3. **`expected_names` ordering is fixed**: gate user first, then remote users in project config order. This order governs both discussion entry insertion and the composed task.
-4. **Discussion entries are inserted atomically by the winner** — only after `claim_gate_winner()` returns True.
-5. **`pop_pending_task()` is the handoff from respond-view to event_stream** — it is called once at run start and consumed atomically. A second call returns None.
-6. **Phase 1 auto-complete must be removed in Phase 2** — the `all`-quorum auto-complete block in `chat_session_respond` is a temporary stand-in for real remote user responses.
+1. **`quorum` and `remote_users` are not stored in `chat_sessions`** — always read both from `project["human_gate"]` at runtime. Team config changes (add/remove remote users, change quorum mode) take effect on the next run without creating a new session.
+2. **`expected_names` ordering is fixed**: gate user first, then remote users in project config order. This order governs both discussion entry insertion and the composed task.
+3. **Discussion entries are inserted atomically by the winner** — only after `claim_gate_winner()` returns True.
+4. **`pop_pending_task()` is the handoff from respond-view to event_stream** — it is called once at run start and consumed atomically. A second call returns None.
+5. **Phase 1 auto-complete must be removed in Phase 2** — the `all`-quorum auto-complete block in `chat_session_respond` is a temporary stand-in for real remote user responses.
 
 ---
 
@@ -44,29 +43,28 @@ Required reading before:
 
 ### `server/views.py` — `chat_session_create`
 
-Before calling `services.create_chat_session`, load the project and extract the remote users:
+The project is loaded for the 404 check only. No remote_users extraction or passing:
 
 ```python
 project = services.get_project(project_id)
-remote_users = (project.get("human_gate") or {}).get("remote_users") or []
-session = services.create_chat_session(project_id, description, remote_users=remote_users)
+if project is None:
+    return HttpResponse(..., status=404)
+session = services.create_chat_session(project_id, description)
 ```
 
 ### `server/services.py` — `create_chat_session`
 
 ```python
-def create_chat_session(project_id, description, remote_users=None):
+def create_chat_session(project_id, description):
     doc = {
         ...
-        "remote_users": list(remote_users) if remote_users else [],
+        # no remote_users field
     }
 ```
 
 ### `server/services.py` — `normalize_chat_session`
 
-```python
-"remote_users": doc.get("remote_users") or [],
-```
+Does not return `remote_users` — callers read from project.
 
 ---
 
@@ -140,7 +138,7 @@ subsequent calls for the same session always return None.
 ```python
 project = services.get_project(session["project_id"])      # fresh project read
 quorum = (project.get("human_gate") or {}).get("quorum") or "na"
-remote_users = session.get("remote_users") or []           # session snapshot
+remote_users = (project.get("human_gate") or {}).get("remote_users") or []  # from live project
 gate_name = (project.get("human_gate") or {}).get("name") or "You"
 expected_names = [gate_name] + [ru["name"] for ru in remote_users]
 ```

@@ -192,23 +192,6 @@ Cross-references: [docs/API.md](API.md) (form fields + HTTP schema), [AGENTS.md]
       }
     }
   ],
-  // ── Remote users snapshot ────────────────────────────────────────────────
-  // Copied from project["human_gate"]["remote_users"] at session creation time.
-  // This is the composition lock: team building on resume always uses the
-  // session snapshot, never the current project config (which may have changed).
-  // Empty list when the project has no remote users or human gate is disabled.
-  //
-  // NOTE — what is NOT stored here:
-  //   "quorum"          — always read from project["human_gate"]["quorum"] at runtime.
-  //   "gate_responses"  — accumulated in Redis per-user keys, never in MongoDB.
-  //                       Discussions are written to discussions[] when quorum is met.
-  "remote_users": [
-    {
-      "name":        "string",  // valid Python identifier; matches project config
-      "description": "string"
-    }
-  ],
-
   "status": "idle | running | awaiting_input | completed | stopped",
   "current_round": 0,
   "agent_state": {

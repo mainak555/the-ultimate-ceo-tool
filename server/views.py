@@ -9,7 +9,6 @@ Each view:
 
 import asyncio
 import io
-import json
 import logging
 from urllib.parse import quote
 from datetime import datetime, timezone
@@ -659,8 +658,7 @@ def chat_session_create(request):
         project = services.get_project(project_id)
         if project is None:
             return HttpResponse('<div class="alert alert-error">Project not found.</div>', status=404)
-        remote_users = (project.get("human_gate") or {}).get("remote_users") or [] # will be changed (tmp)
-        session = services.create_chat_session(project_id, description, remote_users=remote_users)
+        session = services.create_chat_session(project_id, description)
     except ValueError as e:
         return HttpResponse(f'<div class="alert alert-error">{e}</div>', status=400)
 
@@ -909,7 +907,7 @@ async def chat_session_run(request, session_id):
     is_single_assistant_chat_mode = (
         project.get("human_gate", {}).get("enabled", False)
         and len(project.get("agents") or []) == 1
-        and not session.get("remote_users")
+        and not (project.get("human_gate") or {}).get("remote_users")
     )
     if is_single_assistant_chat_mode and not is_first_run and not task:
         return util.json_error("A message is required to continue.", 400)
@@ -1073,7 +1071,11 @@ async def chat_session_run(request, session_id):
                     return
 
         try:
-            team, _, cache_miss = get_or_build_team(session_id, project)
+            team, _, cache_miss = get_or_build_team(
+                session_id,
+                project,
+                remote_users=(project.get("human_gate") or {}).get("remote_users") or [],
+            )
             if cache_miss:
                 saved_state = await asyncio.to_thread(services.get_agent_state, session_id)
                 if saved_state:
@@ -1467,7 +1469,7 @@ def chat_session_respond(request, session_id):
     if action == "continue":
         project = services.get_project(session["project_id"])
         quorum = (project.get("human_gate") or {}).get("quorum") or "na" if project else "na"
-        remote_users = session.get("remote_users") or []
+        remote_users = (project.get("human_gate") or {}).get("remote_users") or []
         gate_name = (project.get("human_gate") or {}).get("name") or "You" if project else "You"
 
         if quorum in ("na", "team_choice") or not remote_users:

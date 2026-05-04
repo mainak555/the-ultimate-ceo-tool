@@ -102,11 +102,11 @@ POSTs transitions the session to `idle`. The 24 h TTL is a safety net for abnorm
 
 #### `chat_session_respond` — quorum-aware `continue` path
 
-`quorum` is read from the **project** (never from the session). `remote_users` is read from
-the **session snapshot** (`session["remote_users"]`).
+`quorum` and `remote_users` are **both** read from the live **project** (never from the session).
 
 ```python
-expected_names = [gate_name] + [ru["name"] for ru in session["remote_users"]]
+remote_users = (project.get("human_gate") or {}).get("remote_users") or []
+expected_names = [gate_name] + [ru["name"] for ru in remote_users]
 ```
 
 **`quorum == "na"` or `"team_choice"`** (no remote users or proxied via UserProxyAgent):
@@ -174,8 +174,7 @@ so the run is never blocked. The SSE event is a breadcrumb for future WebSocket 
 - Storing `AssistantAgent`, team objects, or MCP workbenches in Redis.
 - Releasing leases without ownership checks.
 - Updating session status to `running` with an unconditional update.
-- Reading `quorum` from `session` doc — it is not stored there; always read from `project["human_gate"]["quorum"]`.
-- Reading `remote_users` from the live project inside a running session — use `session["remote_users"]` (snapshot). Project config may have changed since session create.
+- Reading `quorum` or `remote_users` from `session` doc — neither is stored there; always read both from `project["human_gate"]`.
 - Using `HSET` on a shared gate response hash — per-user `SET` on distinct keys avoids write contention.
 - Inserting discussion entries into `discussions[]` before `claim_gate_winner()` returns True — the winner claim is the concurrency mutex.
 - Inserting a human discussion entry in `event_stream` when `pop_pending_task()` returns a value — quorum path already inserted ordered entries.

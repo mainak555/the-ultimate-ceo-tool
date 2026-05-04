@@ -86,7 +86,9 @@ A project can define `human_gate.remote_users` — additional human participants
 
 ### Session Snapshot Contract
 
-`chat_sessions.remote_users` is **always** the snapshot from `project["human_gate"]["remote_users"]` written at session creation time. It is the composition lock: team building on resume uses the session copy, never the live project config. `quorum` is **never** stored in the session — it is always read from the project at runtime.
+`remote_users` and `quorum` are **always** read from the live `project["human_gate"]` at runtime. Neither is stored in `chat_sessions`. This means:
+- Team config changes (adding/removing remote users, changing quorum mode) take effect on the next run without creating a new session.
+- `event_stream` and `chat_session_respond` always load the project and read `remote_users` from it.
 
 ### `quorum == "team_choice"` — UserProxyAgent Wiring
 
