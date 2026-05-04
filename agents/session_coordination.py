@@ -926,9 +926,41 @@ def publish_remote_user_event(session_id: str, payload: dict) -> None:
     _publish_remote_user_event(session_id, payload)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Per-session quorum override (host may change quorum in the waiting panel)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _remote_user_quorum_key(session_id: str) -> str:
+    return f"{_namespace()}:remote_user:{session_id}:quorum"
+
+
+def set_session_quorum(session_id: str, quorum: str) -> None:
+    """Store a per-session quorum override (all | first_win) with token TTL."""
+    try:
+        _get_client().set(_remote_user_quorum_key(session_id), quorum,
+                          ex=_remote_user_token_ttl())
+    except Exception as exc:  # noqa: BLE001
+        raise SessionCoordinationError("Unable to set session quorum.") from exc
+    logger.info(
+        "agents.remote_user.quorum_set",
+        extra={"session_id": session_id, "quorum": quorum},
+    )
+
+
+def get_session_quorum(session_id: str) -> str | None:
+    """Return the per-session quorum override, or None if not set."""
+    try:
+        return _get_client().get(_remote_user_quorum_key(session_id))
+    except Exception as exc:  # noqa: BLE001
+        raise SessionCoordinationError("Unable to get session quorum.") from exc
+
+
 def purge_remote_user_session_keys(session_id: str, user_names: list[str]) -> None:
-    """Delete all token, status, and readiness keys for a session's remote users."""
-    keys: list[str] = [_remote_user_readiness_key(session_id)]
+    """Delete all token, status, readiness, and quorum keys for a session's remote users."""
+    keys: list[str] = [
+        _remote_user_readiness_key(session_id),
+        _remote_user_quorum_key(session_id),
+    ]
     try:
         client = _get_client()
         # Collect tokens so we can delete reverse keys too.
@@ -1007,6 +1039,8 @@ __all__ = [
     "set_remote_user_ignored",
     "set_remote_user_offline",
     "set_remote_user_online",
+    "set_session_quorum",
+    "get_session_quorum",
     "signal_cancel",
     "store_gate_response",
     "store_pending_task",

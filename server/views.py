@@ -967,6 +967,7 @@ async def chat_session_run(request, session_id):
             all_names = [r["name"] for r in remote_users_cfg if isinstance(r, dict) and r.get("name")]
             from agents.session_coordination import (
                 get_remote_user_statuses,
+                get_session_quorum,
                 init_remote_user_readiness,
             )
             statuses = await asyncio.to_thread(get_remote_user_statuses, session_id, all_names)
@@ -977,6 +978,8 @@ async def chat_session_run(request, session_id):
                 init_remote_user_readiness, session_id, online_count, required_count
             )
             await asyncio.to_thread(services.set_session_awaiting_remote_users, session_id)
+            project_quorum = (project.get("human_gate") or {}).get("quorum", "na")
+            effective_quorum = await asyncio.to_thread(get_session_quorum, session_id) or project_quorum
             logger.info(
                 "agents.remote_user.gate_blocked",
                 extra={
@@ -993,7 +996,7 @@ async def chat_session_run(request, session_id):
                     ],
                     "required_count": required_count,
                     "online_count": online_count,
-                    "quorum": (project.get("human_gate") or {}).get("quorum", "na"),
+                    "quorum": effective_quorum,
                 },
                 status=409,
             )
@@ -1005,10 +1008,20 @@ async def chat_session_run(request, session_id):
         ensure_redis_available,
         get_heartbeat_interval_seconds,
         get_instance_id,
+        get_session_quorum,
         is_cancel_signaled,
         release_run_lease,
         renew_run_lease,
     )
+
+    # Apply per-session quorum override (set via dropdown in the waiting panel).
+    _quorum_override = await asyncio.to_thread(get_session_quorum, session_id)
+    if _quorum_override and (project.get("human_gate") or {}).get("remote_users"):
+        import copy as _copy
+        project = _copy.deepcopy(project)
+        if project.get("human_gate") is None:
+            project["human_gate"] = {}
+        project["human_gate"]["quorum"] = _quorum_override
 
     owner_id = get_instance_id()
 

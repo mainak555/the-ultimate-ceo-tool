@@ -931,9 +931,7 @@ document.addEventListener("DOMContentLoaded", function () {
       + '<div class="chat-remote-panel__title">&#x1F465; Waiting for remote participants</div>'
       + '<p class="chat-remote-panel__hint">Share the invite link with each participant; the run will resume automatically once all required users are online.</p>'
       + '<div class="chat-remote-panel__rows"><p class="chat-remote-panel__loading">Connecting\u2026</p></div>'
-      + '<div class="chat-remote-panel__footer">'
-      + '<button type="button" class="btn btn--sm btn--secondary remote-panel-cancel-btn">Cancel</button>'
-      + '</div>'
+      + '<div class="chat-remote-panel__footer"></div>'
       + '</div>'
     );
 
@@ -954,26 +952,50 @@ document.addEventListener("DOMContentLoaded", function () {
     if (loading) loading.remove();
 
     var sessionId = panel.dataset.sessionId || (activeSessionIdInput ? activeSessionIdInput.value.trim() : "");
-    var isTeamChoice = (quorum || panel.dataset.quorum || "na") === "team_choice";
+    var effectiveQuorum = quorum || panel.dataset.quorum || "na";
+    var isTeamChoice = effectiveQuorum === "team_choice";
 
     (users || []).forEach(function (u) {
       var name = typeof u === "string" ? u : (u.name || "");
       var status = typeof u === "object" ? (u.status || "offline") : "offline";
+
       if (rowsContainer.querySelector('[data-remote-user-name="' + name.replace(/"/g, '\\"') + '"]')) return;
 
       var safe = escapeHtml(name);
       var statusClass = "remote-user-status--" + (status === "online" ? "online" : status === "ignored" ? "ignored" : "offline");
       var statusLabel = status === "online" ? "Online \u2713" : status === "ignored" ? "Ignored" : "Offline";
-      var checkboxDisabled = isTeamChoice ? " disabled checked" : (status === "online" ? " checked" : "");
+      var cbDisabled = isTeamChoice ? " disabled" : "";
+      var copyDisabled = (status === "ignored") ? " disabled" : "";
 
       var rowHtml = '<div class="remote-user-row" data-remote-user-name="' + safe + '" data-status="' + escapeHtml(status) + '">'
-        + '<input type="checkbox" class="remote-user-row__checkbox" title="Require this user"' + checkboxDisabled + '>'
+        + '<input type="checkbox" class="remote-user-row__checkbox" title="Require this user" checked' + cbDisabled + '>'
         + '<span class="remote-user-row__name">' + safe + '</span>'
         + '<span class="remote-user-row__status ' + statusClass + '">' + statusLabel + '</span>'
-        + '<button type="button" class="btn btn--sm btn--secondary remote-user-copy-btn" data-session-id="' + escapeHtml(sessionId) + '" data-user-name="' + safe + '" title="Copy invite link">Copy Link</button>'
+        + '<button type="button" class="btn btn--sm btn--secondary remote-user-copy-btn" data-session-id="' + escapeHtml(sessionId) + '" data-user-name="' + safe + '" title="Copy invite link"' + copyDisabled + '>Copy Link</button>'
         + '</div>';
       rowsContainer.insertAdjacentHTML("beforeend", rowHtml);
     });
+  }
+
+  function _renderQuorumDropdown(panel, quorum) {
+    // No dropdown for team_choice (all participants are mandatory).
+    if (!quorum || quorum === "team_choice") return;
+    var footer = panel.querySelector(".chat-remote-panel__footer");
+    if (!footer) return;
+    // Idempotent: only inject once.
+    if (footer.querySelector(".remote-panel-quorum-select")) {
+      footer.querySelector(".remote-panel-quorum-select").value = quorum !== "na" ? quorum : "all";
+      return;
+    }
+    var sessionId = panel.dataset.sessionId || (activeSessionIdInput ? activeSessionIdInput.value.trim() : "");
+    var selectedAll = (quorum === "all" || quorum === "na") ? " selected" : "";
+    var selectedFirst = (quorum === "first_win") ? " selected" : "";
+    var html = '<label class="remote-panel-quorum-label">Quorum:'
+      + '<select class="remote-panel-quorum-select" data-session-id="' + escapeHtml(sessionId) + '">'
+      + '<option value="all"' + selectedAll + '>Wait for all remote users to reply</option>'
+      + '<option value="first_win"' + selectedFirst + '>First user response continues the run</option>'
+      + '</select></label>';
+    footer.insertAdjacentHTML("afterbegin", html);
   }
 
   function _updateRemoteUserRow(panel, userName, status) {
@@ -985,6 +1007,12 @@ document.addEventListener("DOMContentLoaded", function () {
       statusEl.className = "remote-user-row__status remote-user-status--" + (status === "online" ? "online" : status === "ignored" ? "ignored" : "offline");
       statusEl.textContent = status === "online" ? "Online \u2713" : status === "ignored" ? "Ignored" : "Offline";
     }
+    // Copy link button: disabled when ignored so the token has been revoked.
+    var copyBtn = row.querySelector(".remote-user-copy-btn");
+    if (copyBtn) {
+      copyBtn.disabled = (status === "ignored");
+    }
+    // Checkbox: sync visual state but respect disabled (team_choice) rows.
     var cb = row.querySelector(".remote-user-row__checkbox");
     if (cb && !cb.disabled) {
       cb.checked = (status !== "ignored");
@@ -1016,15 +1044,24 @@ document.addEventListener("DOMContentLoaded", function () {
         try { msg = JSON.parse(event.data); } catch (_) { return; }
         if (!document.body.contains(panel)) { _teardownRemoteUserGate(); return; }
 
-        var quorum = panel.dataset.quorum || "na";
+        var quorum = msg.quorum || panel.dataset.quorum || "na";
         if (msg.type === "state") {
+          // Update panel quorum from server (may reflect Redis override).
+          panel.dataset.quorum = quorum;
           _renderRemoteUserRows(panel, msg.users || [], quorum, secretKey);
+          _renderQuorumDropdown(panel, quorum);
           panel._users = msg.users || [];
         } else if (msg.type === "update") {
           if (panel._users && !panel._users.some(function (u) { return u.name === msg.user_name; })) {
             panel._users.push({name: msg.user_name, status: msg.status});
             _renderRemoteUserRows(panel, [{name: msg.user_name, status: msg.status}], quorum, secretKey);
           } else {
+            // Update user_type on existing entry too.
+            if (panel._users) {
+              panel._users.forEach(function (u) {
+                if (u.name === msg.user_name) { u.status = msg.status; }
+              });
+            }
             _updateRemoteUserRow(panel, msg.user_name, msg.status);
           }
         } else if (msg.type === "count_update" || msg.type === "complete") {
@@ -1045,7 +1082,7 @@ document.addEventListener("DOMContentLoaded", function () {
   // Delegated: Copy invite link button
   document.addEventListener("click", function (event) {
     var btn = event.target && event.target.closest ? event.target.closest(".remote-user-copy-btn") : null;
-    if (!btn) return;
+    if (!btn || btn.disabled) return;
     var sessionId = btn.dataset.sessionId || (activeSessionIdInput ? activeSessionIdInput.value.trim() : "");
     var userName = btn.dataset.userName;
     var secretKey = getSecretKey();
@@ -1079,6 +1116,10 @@ document.addEventListener("DOMContentLoaded", function () {
     var secretKey = getSecretKey();
     if (!sessionId || !userName || !secretKey) return;
 
+    // Sync copy link button state immediately for responsive UI.
+    var copyBtn = row.querySelector(".remote-user-copy-btn");
+    if (copyBtn) copyBtn.disabled = !cb.checked;
+
     var endpoint = cb.checked ? "unignore" : "ignore";
     fetch("/chat/sessions/" + sessionId + "/remote-users/" + encodeURIComponent(userName) + "/" + endpoint + "/", {
       method: "POST",
@@ -1086,23 +1127,20 @@ document.addEventListener("DOMContentLoaded", function () {
     }).catch(function () { /* non-fatal */ });
   });
 
-  // Delegated: Cancel button on remote panel
-  document.addEventListener("click", function (event) {
-    var btn = event.target && event.target.closest ? event.target.closest(".remote-panel-cancel-btn") : null;
-    if (!btn) return;
-    var panel = btn.closest(".chat-remote-panel");
-    if (!panel) return;
-    var sessionId = panel.dataset.sessionId || (activeSessionIdInput ? activeSessionIdInput.value.trim() : "");
+  // Delegated: Quorum dropdown change
+  document.addEventListener("change", function (event) {
+    var sel = event.target && event.target.classList && event.target.classList.contains("remote-panel-quorum-select") ? event.target : null;
+    if (!sel) return;
+    var sessionId = sel.dataset.sessionId || (activeSessionIdInput ? activeSessionIdInput.value.trim() : "");
     var secretKey = getSecretKey();
-    _teardownRemoteUserGate();
-    panel.remove();
-    setRunningState(false);
-    if (sessionId && secretKey) {
-      fetch("/chat/sessions/" + sessionId + "/stop/", {
-        method: "POST",
-        headers: {"X-App-Secret-Key": secretKey, "X-CSRFToken": csrfToken},
-      }).catch(function () {});
-    }
+    if (!sessionId || !secretKey) return;
+    var quorum = sel.value;
+    var body = new URLSearchParams({quorum: quorum});
+    fetch("/chat/sessions/" + sessionId + "/remote-users/quorum/", {
+      method: "POST",
+      headers: {"X-App-Secret-Key": secretKey, "X-CSRFToken": csrfToken, "Content-Type": "application/x-www-form-urlencoded"},
+      body: body.toString(),
+    }).catch(function () { /* non-fatal */ });
   });
 
   function restartSession(panel, mode, text) {

@@ -41,6 +41,7 @@ from agents.session_coordination import (
     set_remote_user_ignored,
     set_remote_user_offline,
     set_remote_user_online,
+    set_session_quorum,
     SessionCoordinationError,
 )
 from . import services, util
@@ -68,7 +69,7 @@ def generate_invite_link(request, session_id, user_name):
     if project is None:
         return util.json_error("Project not found", 404)
 
-    # Verify user_name is a configured remote user for this project.
+    # Verify user_name is a configured remote user.
     remote_users_cfg = (project.get("human_gate") or {}).get("remote_users") or []
     configured_names = [r["name"] for r in remote_users_cfg if isinstance(r, dict) and r.get("name")]
     if user_name not in configured_names:
@@ -230,6 +231,32 @@ def remote_user_mark_online(request, token):
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+
+@require_POST
+def set_session_quorum_view(request, session_id):
+    """Override the quorum mode for this session's remote-user gate.
+
+    Accepts ``quorum`` in POST body (values: ``all`` or ``first_win``).
+    Stores the override in Redis so the next run (after auto-continue) picks it up.
+    """
+    if not _has_valid_secret(request):
+        return util.json_error("Unauthorized", 403)
+
+    quorum = request.POST.get("quorum", "").strip()
+    if quorum not in ("all", "first_win"):
+        return util.json_error("Invalid quorum value. Expected 'all' or 'first_win'.", 400)
+
+    try:
+        set_session_quorum(session_id, quorum)
+    except SessionCoordinationError as exc:
+        logger.error(
+            "agents.remote_user.quorum_set_error",
+            extra={"session_id": session_id, "quorum": quorum, "error": str(exc)},
+        )
+        return util.json_error("Unable to update session quorum.", 503)
+
+    return util.json_response({"ok": True, "quorum": quorum})
 
 
 def _validate_token(token: str) -> dict | None:

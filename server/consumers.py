@@ -358,7 +358,7 @@ class RemoteUserReadinessConsumer:
 
         session_id = self._session_id
 
-        session, project, all_names = await _asyncio.to_thread(
+        session, project, participant_names, project_quorum = await _asyncio.to_thread(
             self._load_session_data, session_id
         )
         if session is None:
@@ -368,29 +368,35 @@ class RemoteUserReadinessConsumer:
             await self._send_json({"type": "error", "message": "Project not found."})
             return
 
-        if not all_names:
-            await self._send_json({"type": "complete"})
-            return
+        # Effective quorum: per-session Redis override takes precedence.
+        from agents.session_coordination import get_remote_user_statuses, get_session_quorum
+        effective_quorum = await _asyncio.to_thread(get_session_quorum, session_id) or project_quorum
 
-        from agents.session_coordination import get_remote_user_statuses
-        statuses = await _asyncio.to_thread(get_remote_user_statuses, session_id, all_names)
-        online_count = sum(1 for s in statuses.values() if s == "online")
-        ignored_count = sum(1 for s in statuses.values() if s == "ignored")
-        required_count = len(all_names) - ignored_count
+        statuses = await _asyncio.to_thread(get_remote_user_statuses, session_id, participant_names)
+
+        participant_ignored = sum(1 for n in participant_names if statuses.get(n) == "ignored")
+        online_count = sum(1 for n in participant_names if statuses.get(n) == "online")
+        required_count = len(participant_names) - participant_ignored
+
+        users_state = [
+            {"name": n, "status": statuses.get(n, "offline")}
+            for n in participant_names
+        ]
 
         await self._send_json({
             "type": "state",
-            "users": [{"name": n, "status": statuses.get(n, "offline")} for n in all_names],
+            "users": users_state,
             "online_count": online_count,
             "required_count": required_count,
+            "quorum": effective_quorum,
         })
 
-        if online_count >= required_count:
+        if not participant_names or online_count >= required_count:
             await self._send_json({"type": "complete"})
             return
 
         self._listen_task = _asyncio.ensure_future(
-            self._listen_redis(session_id, all_names)
+            self._listen_redis(session_id, participant_names)
         )
 
         try:
@@ -403,7 +409,8 @@ class RemoteUserReadinessConsumer:
             if self._listen_task and not self._listen_task.done():
                 self._listen_task.cancel()
 
-    async def _listen_redis(self, session_id: str, all_names: list):
+    async def _listen_redis(self, session_id: str, participant_names: list):
+        """Listen for remote-user pub/sub events and forward state to the WebSocket."""
         import redis.asyncio as aioredis
         from agents.session_coordination import _remote_user_pubsub_channel  # type: ignore[attr-defined]
 
@@ -430,23 +437,24 @@ class RemoteUserReadinessConsumer:
 
                         event_type = payload.get("type")
                         if event_type == "update":
-                            # Recompute counts for the updated snapshot.
-                            from agents.session_coordination import get_remote_user_statuses
+                            updated_name = payload.get("user_name", "")
                             import asyncio as _asyncio
+                            from agents.session_coordination import get_remote_user_statuses
                             statuses = await _asyncio.to_thread(
-                                get_remote_user_statuses, session_id, all_names
+                                get_remote_user_statuses, session_id, participant_names
                             )
+                            participant_ignored = sum(1 for s in statuses.values() if s == "ignored")
                             online_count = sum(1 for s in statuses.values() if s == "online")
-                            ignored_count = sum(1 for s in statuses.values() if s == "ignored")
-                            required_count = len(all_names) - ignored_count
+                            required_count = len(participant_names) - participant_ignored
                             await self._send_json({
                                 "type": "update",
-                                "user_name": payload.get("user_name", ""),
+                                "user_name": updated_name,
                                 "status": payload.get("status", "offline"),
                                 "online_count": online_count,
                                 "required_count": required_count,
                             })
-                            if online_count >= required_count and required_count >= 0:
+                            # Only complete when participant quorum is satisfied.
+                            if required_count >= 0 and online_count >= required_count:
                                 await self._send_json({"type": "complete"})
                                 break
                         elif event_type == "count_update":
@@ -477,13 +485,14 @@ class RemoteUserReadinessConsumer:
         from server import services
         session = services.get_chat_session(session_id)
         if session is None:
-            return None, None, []
+            return None, None, [], "na"
         project = services.get_project(session.get("project_id", ""))
         if project is None:
-            return session, None, []
+            return session, None, [], "na"
         remote_users_cfg = (project.get("human_gate") or {}).get("remote_users") or []
-        all_names = [r["name"] for r in remote_users_cfg if isinstance(r, dict) and r.get("name")]
-        return session, project, all_names
+        participant_names = [r["name"] for r in remote_users_cfg if isinstance(r, dict) and r.get("name")]
+        project_quorum = (project.get("human_gate") or {}).get("quorum", "na")
+        return session, project, participant_names, project_quorum
 
 
 # ---------------------------------------------------------------------------

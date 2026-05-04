@@ -23,6 +23,12 @@ urlpatterns = [
         remote_user_views.unignore_remote_user,
         name="remote_user_unignore",
     ),
+    # Override session quorum mode (all | first_win)
+    path(
+        "<str:session_id>/remote-users/quorum/",
+        remote_user_views.set_session_quorum_view,
+        name="remote_user_quorum",
+    ),
 ]
 
 # Public join routes — included under /remote/ in config/urls.py

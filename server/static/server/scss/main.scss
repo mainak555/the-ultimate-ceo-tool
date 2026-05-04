@@ -2302,6 +2302,31 @@ select.input {
   border: 1px solid $color-border;
 }
 
+// Quorum override dropdown rendered at the bottom-right of the panel footer.
+.remote-panel-quorum-label {
+  display: flex;
+  align-items: center;
+  gap: $space-xs;
+  font-size: $font-size-sm;
+  color: $color-text-muted;
+  margin-left: auto;
+}
+
+.remote-panel-quorum-select {
+  font-size: $font-size-sm;
+  padding: 2px $space-xs;
+  border: 1px solid $color-border;
+  border-radius: $radius;
+  background: $color-surface;
+  color: $color-text;
+  cursor: pointer;
+
+  &:focus {
+    outline: none;
+    border-color: $color-primary;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Standalone remote-user page (remote_user.html)
 // ---------------------------------------------------------------------------
@@ -2345,33 +2370,14 @@ select.input {
     overflow: hidden;
   }
 
-  &__messages {
-    flex: 1;
-    overflow-y: auto;
-    padding: $space-md;
-    display: flex;
-    flex-direction: column;
-    gap: $space-sm;
-  }
+  // .chat-messages, .chat-input-panel, and .chat-input-row are reused from
+  // the shared home panel; no page-specific scroll container or input bar needed.
 
   &__waiting {
     text-align: center;
     color: $color-text-muted;
     font-size: $font-size-sm;
     margin: auto;
-  }
-
-  &__input-bar {
-    border-top: 1px solid $color-border;
-    padding: $space-sm $space-md;
-    background: $color-surface;
-    flex-shrink: 0;
-  }
-
-  &__input-hint {
-    font-size: $font-size-sm;
-    color: $color-text-muted;
-    margin: 0;
   }
 
   &__error {
