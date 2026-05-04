@@ -665,6 +665,8 @@ db.project_settings.updateMany({ version: { $exists: false } }, { $set: { versio
 
 ## Export Schema Contract (Trello)
 
+> **Note:** This section is the admin-facing quick reference (required by AGENTS rule 47). The developer-facing canonical is [docs/trello_integration.md](docs/trello_integration.md) — update both in the same change when the schema changes.
+
 The Trello export popup supports project-specific extraction prompts, but the extracted JSON must always follow the same schema contract so the exporter can parse and push cards reliably.
 
 ### Why this matters
@@ -737,6 +739,8 @@ For implementation details, endpoint flow, and mapping behavior, see [docs/trell
 ---
 
 ## Export Schema Contract (Jira Software)
+
+> **Note:** This section is the admin-facing quick reference (required by AGENTS rule 47). The developer-facing canonical is [docs/jira_integration.md](docs/jira_integration.md) — update both in the same change when the schema changes.
 
 Jira Software export supports hierarchical issue trees. The extracted or edited payload must follow a stable schema so parent linking (`temp_id` / `parent_temp_id`) and push correlation remain deterministic.
 

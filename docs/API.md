@@ -150,67 +150,25 @@ Model runtime notes:
 - Azure models additionally require `AZURE_API_URL`.
 - For Azure entries, model keys are deployment names.
 
-## MongoDB Collection
+## Data Model Reference
 
-**Collection**: `project_settings`
+For the complete MongoDB collection schemas (`project_settings`, `chat_sessions`, `chat_attachments`) — including all field names, types, nesting, and enforcement layers — see [docs/db_schema.md](db_schema.md).
 
-**Schema**:
-```json
-{
-  "project_name": "string (unique)",
-  "objective": "string",
-  "version": 1.0,
-  "// version": "float — server-managed; 1.0 on create, +0.1 per save, floor+1 on clone. Never set from user input.",
-  "created_at": "datetime (UTC BSON Date)",
-  "updated_at": "datetime (UTC BSON Date)",
-  "agents": [
-    {
-      "name": "string",
-      "model": "string",
-      "system_prompt": "string",
-      "temperature": 0.7
-    }
-  ],
-  "human_gate": {
-    "enabled": true,
-    "name": "Architect",
-    "quorum": "all",
-    "remote_users": [
-      { "name": "product_owner", "description": "Reviews output for business alignment" }
-    ]
-  },
-  "team": {
-    "type": "round_robin | selector",
-    "max_iterations": 5,
-    "model": "string (selector only)",
-    "system_prompt": "string (selector only)",
-    "temperature": 0.0,
-    "allow_repeated_speaker": true
-  }
-}
-```
+`db_schema.md` is the **single source of truth** for field names. This file (API.md) documents HTTP request/response contracts only.
 
 ## Chat Session State Persistence
 
-`chat_sessions` documents may include persisted AutoGen state:
+Chat sessions carry a `status` field that governs which endpoints are valid:
 
-```json
-{
-  "project_id": "<project_id>",
-  "project_version": 1.0,
-  "// project_version": "float — snapshot of project.version at session creation time; never updated after insert",
-  "description": "...",
-  "discussions": [],
-  "status": "idle | running | awaiting_input | completed | stopped",
-  "current_round": 0,
-  "agent_state": {
-    "source": "autogen_team_state",
-    "version": "1.0.0",
-    "saved_at": "2026-04-20T11:22:33.000000+00:00",
-    "state": { "type": "TeamState", "...": "AutoGen payload" }
-  }
-}
-```
+| `status` | Meaning | Valid next actions |
+|---|---|---|
+| `idle` | No active run | `run`, `restart`, `delete` |
+| `running` | SSE stream active | `stop` |
+| `awaiting_input` | Human gate paused | `respond` |
+| `completed` | Finished by iteration limit | `restart`, `delete` |
+| `stopped` | Terminated by human | `restart`, `delete` |
+
+The `agent_state` embedded object (`source`, `version`, `saved_at`, `state`) is written by AutoGen at the end of each run. For the full document schema see [docs/db_schema.md](db_schema.md#collection-chat_sessions).
 
 Restart endpoint contract:
 
