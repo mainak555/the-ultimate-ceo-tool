@@ -909,6 +909,32 @@ def chat_session_delete(request, session_id):
             '<div class="alert alert-error">Unauthorized.</div>',
             status=403,
         )
+
+    # Best-effort cleanup for ephemeral Redis coordination keys.
+    session = services.get_chat_session(session_id)
+    if session:
+        try:
+            from agents.session_coordination import (
+                purge_remote_user_session_keys,
+                revoke_guest_token,
+            )
+
+            project = services.get_project(session.get("project_id", ""))
+            remote_users_cfg = ((project or {}).get("human_gate") or {}).get("remote_users") or []
+            remote_names = [
+                r.get("name")
+                for r in remote_users_cfg
+                if isinstance(r, dict) and r.get("name")
+            ]
+            if remote_names:
+                purge_remote_user_session_keys(session_id, remote_names)
+            revoke_guest_token(session_id)
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "agents.session.redis_cleanup_failed",
+                extra={"session_id": session_id, "phase": "delete"},
+            )
+
     try:
         services.delete_chat_session(session_id)
     except ValueError as e:

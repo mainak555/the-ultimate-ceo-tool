@@ -1106,7 +1106,14 @@ select.input {
 .chat-input-panel__toolbar {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: $space-sm;
+}
+
+.chat-guest-share-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
 }
 
 // Projects dropdown in chat panel — opens upward
@@ -2382,6 +2389,115 @@ select.input {
 
   // .chat-messages, .chat-input-panel, and .chat-input-row are reused from
   // the shared home panel; no page-specific scroll container or input bar needed.
+
+  &__waiting {
+    text-align: center;
+    color: $color-text-muted;
+    font-size: $font-size-sm;
+    margin: auto;
+  }
+
+  &__error {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    flex: 1;
+    padding: $space-md;
+    text-align: center;
+  }
+
+  &__error-icon {
+    font-size: 2.5rem;
+    margin-bottom: $space-sm;
+  }
+
+  &__error-text {
+    font-size: $font-size-base;
+    color: $color-error;
+  }
+
+  &__evict-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.7);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 9999;
+  }
+
+  &__evict-card {
+    background: $color-surface;
+    border-radius: $radius;
+    padding: $space-md * 2;
+    text-align: center;
+    max-width: 360px;
+    width: 90%;
+  }
+
+  &__evict-icon {
+    font-size: 3rem;
+    margin-bottom: $space-sm;
+  }
+
+  &__evict-title {
+    font-size: $font-size-lg;
+    font-weight: 700;
+    margin-bottom: $space-xs;
+    color: $color-error;
+  }
+
+  &__evict-hint {
+    font-size: $font-size-sm;
+    color: $color-text-muted;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Standalone guest-user page (guest_user.html)
+// ---------------------------------------------------------------------------
+.guest-user-page {
+  margin: 0;
+  min-height: 100vh;
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: $color-bg;
+  color: $color-text;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+
+  &__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: $space-sm $space-md;
+    background: $color-surface;
+    border-bottom: 1px solid $color-border;
+    flex-shrink: 0;
+  }
+
+  &__title {
+    font-size: $font-size-base;
+    font-weight: 700;
+    color: $color-text;
+  }
+
+  &__badge {
+    font-size: $font-size-sm;
+    padding: 2px $space-xs;
+    background: $color-primary;
+    color: #fff;
+    border-radius: $radius;
+  }
+
+  &__main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
 
   &__waiting {
     text-align: center;

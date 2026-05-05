@@ -1,0 +1,105 @@
+{% load compress static md_extras %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% if project_name %}{{ project_name }} — {% endif %}Guest Session</title>
+  <meta name="robots" content="noindex,nofollow">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E🤖%3C/text%3E%3C/svg%3E">
+  {% compress css %}
+  <link rel="stylesheet" type="text/x-scss" href="{% static 'server/scss/main.scss' %}">
+  {% endcompress %}
+  <script src="https://cdn.jsdelivr.net/npm/marked@15/marked.min.js"></script>
+</head>
+<body class="guest-user-page">
+
+  <header class="guest-user-page__header">
+    <div class="guest-user-page__title">{{ session_title|default:"Session" }}</div>
+    <div class="guest-user-page__badge">Guest</div>
+  </header>
+
+  {% if error %}
+  <main class="guest-user-page__error">
+    <div class="guest-user-page__error-icon">&#x26A0;</div>
+    <p class="guest-user-page__error-text">{{ error }}</p>
+  </main>
+  {% else %}
+
+  <main class="guest-user-page__main" id="guest-chat-main" data-session-status="{{ session_status|default:'idle' }}">
+    <div class="chat-messages" id="guest-chat-messages">
+      {% if discussions %}
+        {% for d in discussions %}
+          {% if d.role == 'user' %}
+            <div class="chat-bubble chat-bubble--human" data-raw-content="{{ d.content }}">
+              <div class="chat-bubble__meta">
+                <span class="chat-bubble__name">{{ d.agent_name|default:"User" }}</span>
+                {% if d.timestamp %}<span class="chat-bubble__time"><time class="local-time" data-utc="{{ d.timestamp }}">{{ d.timestamp }}</time></span>{% endif %}
+              </div>
+              <div class="chat-bubble__content">{{ d.content|markdownify }}</div>
+              {% if d.attachments %}
+                <div class="chat-message-attachments">
+                  {% for att in d.attachments %}
+                    <a class="chat-message-attachment" href="{{ att.content_url }}" target="_blank" rel="noopener noreferrer">
+                      {% if att.thumbnail_url %}
+                        <img class="chat-message-attachment__thumb{% if not att.is_image %} chat-message-attachment__thumb--icon{% endif %}" src="{{ att.thumbnail_url }}" alt="{{ att.filename }}">
+                      {% endif %}
+                      <span class="chat-message-attachment__name">{{ att.filename }}</span>
+                    </a>
+                  {% endfor %}
+                </div>
+              {% endif %}
+            </div>
+          {% else %}
+            <div class="chat-bubble chat-bubble--ai" data-raw-content="{{ d.content }}">
+              <div class="chat-bubble__avatar">{{ d.agent_name|slice:":1"|upper }}</div>
+              <div class="chat-bubble__body">
+                <div class="chat-bubble__meta">
+                  <span class="chat-bubble__name">{{ d.agent_name|default:"Agent" }}</span>
+                  {% if d.timestamp %}<span class="chat-bubble__time"><time class="local-time" data-utc="{{ d.timestamp }}">{{ d.timestamp }}</time></span>{% endif %}
+                </div>
+                <div class="chat-bubble__content">{{ d.content|markdownify }}</div>
+                {% if d.attachments %}
+                  <div class="chat-message-attachments">
+                    {% for att in d.attachments %}
+                      <a class="chat-message-attachment" href="{{ att.content_url }}" target="_blank" rel="noopener noreferrer">
+                        {% if att.thumbnail_url %}
+                          <img class="chat-message-attachment__thumb{% if not att.is_image %} chat-message-attachment__thumb--icon{% endif %}" src="{{ att.thumbnail_url }}" alt="{{ att.filename }}">
+                        {% endif %}
+                        <span class="chat-message-attachment__name">{{ att.filename }}</span>
+                      </a>
+                    {% endfor %}
+                  </div>
+                {% endif %}
+              </div>
+            </div>
+          {% endif %}
+        {% endfor %}
+      {% else %}
+        <div class="guest-user-page__waiting">
+          <p>Waiting for the session to start&hellip;</p>
+        </div>
+      {% endif %}
+
+      {% if session_status == "running" %}
+        <div class="chat-status-badge chat-status-badge--running">&#x2699; Agents at work</div>
+      {% elif session_status == "stopped" %}
+        <div class="chat-status-badge chat-status-badge--stopped">Run stopped</div>
+      {% elif session_status == "completed" %}
+        <div class="chat-status-badge chat-status-badge--completed">Run completed</div>
+      {% endif %}
+    </div>
+  </main>
+
+  <script>
+    window._guestToken = "{{ token }}";
+    window._guestSessionId = "{{ session_id }}";
+  </script>
+  {% compress js %}
+  <script src="{% static 'server/js/guest_user.js' %}"></script>
+  {% endcompress %}
+
+  {% endif %}
+
+</body>
+</html>
