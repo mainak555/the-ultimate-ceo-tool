@@ -70,6 +70,13 @@ document.addEventListener("DOMContentLoaded", function () {
   var composePendingFiles = [];
   var composeUploaded = [];
 
+  function _scrollChatToBottom() {
+    if (!chatMessages) return;
+    window.requestAnimationFrame(function () {
+      chatMessages.scrollTop = chatMessages.scrollHeight;
+    });
+  }
+
   function escapeHtml(text) {
     return String(text || "")
       .replace(/&/g, "&amp;")
@@ -1327,15 +1334,16 @@ document.addEventListener("DOMContentLoaded", function () {
       if ((mode || "") === "continue_with_context" && text) {
         appendHumanBubble(text);
       }
-      startRun(data.task || "");
+      if (activeSessionIdInput) activeSessionIdInput.value = sessionId;
+      startRun(data.task || "", [], sessionId);
     }).catch(function (err) {
       setRunningState(false);
       appendBubble('<div class="chat-bubble chat-bubble--error">Error: ' + err.message + '</div>');
     });
   }
 
-  function startRun(task, attachmentIds) {
-    var sessionId = activeSessionIdInput ? activeSessionIdInput.value.trim() : "";
+  function startRun(task, attachmentIds, forceSessionId) {
+    var sessionId = (forceSessionId || (activeSessionIdInput ? activeSessionIdInput.value.trim() : "")).trim();
     if (!sessionId) { return; }
 
     var secretKey = getSecretKey();
@@ -1792,6 +1800,7 @@ document.addEventListener("DOMContentLoaded", function () {
     } else {
       _teardownHostSessionWs();
     }
+    _scrollChatToBottom();
   });
 
   document.body.addEventListener("input", function (e) {
@@ -1889,4 +1898,5 @@ document.addEventListener("DOMContentLoaded", function () {
   if (initSid && initSecret) {
     _connectHostSessionWs(initSid, initSecret);
   }
+  _scrollChatToBottom();
 });
