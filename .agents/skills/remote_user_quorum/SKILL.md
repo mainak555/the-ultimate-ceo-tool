@@ -73,15 +73,24 @@ Does not return `remote_users` — callers read from project.
 All keys use the namespace prefix `{NS}` = `f"{REDIS_NAMESPACE}:{env}"` where `REDIS_NAMESPACE`
 defaults to `"chat_agent"` and `env` = `settings.ENVIRONMENT`.
 
+**Gate keys** (cleared together by `clear_gate_responses` once quorum is met):
+
 | Key | Value | TTL |
 |-----|-------|-----|
 | `{NS}:gate_response:{session_id}:{name}` | JSON `{"text": str, "attachment_ids": list}` | 6 h |
 | `{NS}:gate_winner:{session_id}` | claimer name string | 6 h |
 | `{NS}:pending_task:{session_id}` | JSON `{"task": str, "attachment_ids": list}` | 5 min |
+
+**Remote user readiness keys** (cleared by `purge_remote_user_session_keys`):
+
+| Key | Value | TTL |
+|-----|-------|-----|
+| `{NS}:remote_user:{session_id}:{user_name}:status` | `"online"` or `"ignored"` (absent = offline) | token TTL (24 h) |
+| `{NS}:remote_user:{session_id}:{user_name}:token` | UUID invite token string | token TTL (24 h) |
+| `{NS}:remote_user:token:{token}` | JSON `{"session_id", "user_name", "project_id"}` | token TTL (24 h) |
 | `{NS}:quorum:{session_id}` | string `all \| first_win \| team_choice` | token TTL (24 h) |
 
-All three key groups are cleared together by `clear_gate_responses(session_id, expected_names)`
-immediately after quorum is met and the session is set to `idle`. The TTLs are safety nets only.
+Gate TTLs are safety nets only — gate keys are cleared explicitly on quorum completion.
 
 ---
 
@@ -89,6 +98,24 @@ immediately after quorum is met and the session is set to `idle`. The TTLs are s
 
 All helpers live in `agents/session_coordination.py`. They use the single shared Redis client
 `_get_client()`. Server-layer code must import them from there — never create a second Redis pool.
+
+### Remote user status helpers
+
+All three status setters follow the same pub/sub contract: write (or delete) the status key, then
+publish `{"type": "update", "user_name": ..., "status": <new_status>}` to the session's readiness
+channel.  `RemoteUserReadinessConsumer._listen_redis` reacts to this event by re-fetching all
+statuses, recalculating `online_count`/`required_count`, and forwarding the enriched update to the
+host WebSocket.
+
+| Helper | Redis write | Published status |
+|--------|-------------|------------------|
+| `set_remote_user_online(session_id, user_name)` | `SET status_key "online"` | `"online"` |
+| `set_remote_user_ignored(session_id, user_name)` | `SET status_key "ignored"` | `"ignored"` |
+| `set_remote_user_offline(session_id, user_name)` | `DEL status_key` | `"offline"` |
+
+`set_remote_user_offline` is called by `unignore_remote_user` in `server/remote_user_views.py`
+(host re-checks the participant checkbox) **and** by the WebSocket disconnect handler when a
+remote user's connection closes.  Both paths must publish so the host panel stays current.
 
 ### `store_gate_response(session_id, responder_name, text, attachment_ids)`
 

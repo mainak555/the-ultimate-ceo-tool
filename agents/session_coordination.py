@@ -747,10 +747,6 @@ def _remote_user_status_key(session_id: str, user_name: str) -> str:
     return f"{_namespace()}:remote_user:{session_id}:{user_name}:status"
 
 
-def _remote_user_readiness_key(session_id: str) -> str:
-    return f"{_namespace()}:remote_user:{session_id}:readiness"
-
-
 def _remote_user_pubsub_channel(session_id: str) -> str:
     return f"{_namespace()}:remote_user:readiness:{session_id}"
 
@@ -882,30 +878,11 @@ def set_remote_user_offline(session_id: str, user_name: str) -> None:
     except Exception as exc:  # noqa: BLE001
         raise SessionCoordinationError("Unable to set remote user offline.") from exc
 
-
-def init_remote_user_readiness(
-    session_id: str, online_count: int, required_count: int
-) -> None:
-    """Store the initial readiness snapshot so the WS consumer can send initial state."""
-    import json as _json
-
-    payload = _json.dumps({"online_count": online_count, "required_count": required_count})
-    try:
-        _get_client().set(_remote_user_readiness_key(session_id), payload,
-                          ex=_remote_user_token_ttl())
-    except Exception as exc:  # noqa: BLE001
-        raise SessionCoordinationError("Unable to init remote user readiness.") from exc
-
-
-def get_remote_user_readiness(session_id: str) -> dict:
-    """Return {online_count, required_count} snapshot, defaulting to zeros."""
-    import json as _json
-
-    try:
-        raw = _get_client().get(_remote_user_readiness_key(session_id))
-        return _json.loads(raw) if raw else {"online_count": 0, "required_count": 0}
-    except Exception as exc:  # noqa: BLE001
-        raise SessionCoordinationError("Unable to get remote user readiness.") from exc
+    _publish_remote_user_event(session_id, {
+        "type": "update",
+        "user_name": user_name,
+        "status": "offline",
+    })
 
 
 def _publish_remote_user_event(session_id: str, payload: dict) -> None:
@@ -956,9 +933,8 @@ def get_session_quorum(session_id: str) -> str | None:
 
 
 def purge_remote_user_session_keys(session_id: str, user_names: list[str]) -> None:
-    """Delete all token, status, readiness, and quorum keys for a session's remote users."""
+    """Delete all token, status, and quorum keys for a session's remote users."""
     keys: list[str] = [
-        _remote_user_readiness_key(session_id),
         _remote_user_quorum_key(session_id),
     ]
     try:
@@ -1015,13 +991,11 @@ __all__ = [
     "get_mcp_oauth_token",
     "get_and_delete_mcp_oauth_state",
     "get_redis_client",
-    "get_remote_user_readiness",
     "get_remote_user_statuses",
     "get_remote_user_token",
     "get_remote_user_token_data",
     "get_run_traceparent",
     "init_mcp_oauth_readiness",
-    "init_remote_user_readiness",
     "is_cancel_signaled",
     "list_authorized_oauth_servers",
     "pop_pending_task",

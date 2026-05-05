@@ -963,7 +963,7 @@ document.addEventListener("DOMContentLoaded", function () {
 
       var safe = escapeHtml(name);
       var statusClass = "remote-user-status--" + (status === "online" ? "online" : status === "ignored" ? "ignored" : "offline");
-      var statusLabel = status === "online" ? "Online \u2713" : status === "ignored" ? "Ignored" : "Offline";
+      var statusLabel = status === "online" ? "Online \u2713" : status === "ignored" ? "Ignore" : "Offline";
       var cbDisabled = isTeamChoice ? " disabled" : "";
       var copyDisabled = (status === "ignored") ? " disabled" : "";
 
@@ -1030,7 +1030,7 @@ document.addEventListener("DOMContentLoaded", function () {
     var statusEl = row.querySelector(".remote-user-row__status");
     if (statusEl) {
       statusEl.className = "remote-user-row__status remote-user-status--" + (status === "online" ? "online" : status === "ignored" ? "ignored" : "offline");
-      statusEl.textContent = status === "online" ? "Online \u2713" : status === "ignored" ? "Ignored" : "Offline";
+      statusEl.textContent = status === "online" ? "Online \u2713" : status === "ignored" ? "Ignore" : "Offline";
     }
     // Copy link button: disabled when ignored so the token has been revoked.
     var copyBtn = row.querySelector(".remote-user-copy-btn");

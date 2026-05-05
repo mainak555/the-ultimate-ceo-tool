@@ -990,15 +990,11 @@ async def chat_session_run(request, session_id):
             from agents.session_coordination import (
                 get_remote_user_statuses,
                 get_session_quorum,
-                init_remote_user_readiness,
             )
             statuses = await asyncio.to_thread(get_remote_user_statuses, session_id, all_names)
             online_count = sum(1 for s in statuses.values() if s == "online")
             ignored_count = sum(1 for s in statuses.values() if s == "ignored")
             required_count = len(all_names) - ignored_count
-            await asyncio.to_thread(
-                init_remote_user_readiness, session_id, online_count, required_count
-            )
             await asyncio.to_thread(services.set_session_awaiting_remote_users, session_id)
             project_quorum = (project.get("human_gate") or {}).get("quorum", "na")
             effective_quorum = await asyncio.to_thread(get_session_quorum, session_id) or project_quorum
