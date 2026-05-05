@@ -1060,9 +1060,7 @@ document.addEventListener("DOMContentLoaded", function () {
 
       if (msg.type === "quorum_committed" && _gateData) {
         var isFirstWin = msg.quorum === "first_win";
-        var localGateName = _gateData.human_name || "";
-        var winnerName = msg.winner || "";
-        var shouldAutoStart = isFirstWin && winnerName && winnerName !== localGateName;
+        var shouldAutoStart = isFirstWin;
         _gateData.awaiting_host_final = false;
         _evalSendBtn();
         if (shouldAutoStart) {
@@ -1546,6 +1544,10 @@ document.addEventListener("DOMContentLoaded", function () {
       if (!text && !hasAttachments) return;
 
       function runWithSession(sessionId) {
+        var skey = getSecretKey();
+        if (sessionId && skey) {
+          _connectHostSessionWs(sessionId, skey);
+        }
         // Disable Send immediately to prevent double-submit during the async upload.
         // chatInput stays enabled so the user can keep typing.
         chatSendBtn.disabled = true;
@@ -1622,6 +1624,9 @@ document.addEventListener("DOMContentLoaded", function () {
             chatMessages.innerHTML = '<div class="chat-history" id="chat-history-msgs"></div>';
           }
           var sid = activeSessionIdInput ? activeSessionIdInput.value.trim() : "";
+          if (sid && secretKey) {
+            _connectHostSessionWs(sid, secretKey);
+          }
           return runWithSession(sid);
         }).catch(function (err) {
           appendBubble('<div class="chat-bubble chat-bubble--error">Error: ' + err.message + '</div>');
