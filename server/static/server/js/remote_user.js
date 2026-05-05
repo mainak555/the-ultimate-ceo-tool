@@ -16,12 +16,14 @@
 (function () {
   "use strict";
 
-  var token    = window._remoteUserToken || "";
-  var userName = window._remoteUserName  || "You";
-
-  if (!token) return; // Error page â€” nothing to do.
+  var token = window._remoteUserToken || "";
+  var userName = window._remoteUserName || "You";
+  if (!token) return;
 
   var _ws = null;
+  var _seenMessageIds = Object.create(null);
+  var composePendingFiles = [];
+  var composeUploaded = [];
 
   // --------------------------------------------------------------------------
   // Helpers
@@ -65,7 +67,7 @@
    * Build an agent bubble matching .chat-bubble--ai in chat_session_history.html.
    * @param {object} msg  {agent_name, content, timestamp}
    */
-  function buildAgentBubble(msg) {
+  function buildAssistantBubble(msg) {
     var agentName = msg.agent_name || "Agent";
     var content   = msg.content   || "";
     var ts        = msg.timestamp || "";
@@ -87,6 +89,7 @@
       +     timeHtml
       +   "</div>"
       +   '<div class="chat-bubble__content"></div>'
+      +   renderMessageAttachments(msg.attachments || [])
       + "</div>";
 
     el.querySelector(".chat-bubble__content").innerHTML = renderMd(content);
@@ -97,18 +100,59 @@
    * Build a user bubble matching .chat-bubble--human in chat_session_history.html.
    * @param {string} text  Raw message text.
    */
-  function buildUserBubble(text) {
+  function buildUserBubble(msg) {
+    var displayName = msg.agent_name || userName;
+    var content = msg.content || "";
+    var ts = msg.timestamp || "";
+    var timeHtml = ts
+      ? '<span class="chat-bubble__time"><time class="local-time" data-utc="' + escapeHtml(ts) + '"></time></span>'
+      : "";
     var el = document.createElement("div");
     el.className = "chat-bubble chat-bubble--human";
-    el.dataset.rawContent = text;
+    el.dataset.rawContent = content;
     el.innerHTML =
       '<div class="chat-bubble__meta">'
-      +   '<span class="chat-bubble__name">' + escapeHtml(userName) + "</span>"
+      +   '<span class="chat-bubble__name">' + escapeHtml(displayName) + "</span>"
+      +   timeHtml
       + "</div>"
-      + '<div class="chat-bubble__content"></div>';
+      + '<div class="chat-bubble__content"></div>'
+      + renderMessageAttachments(msg.attachments || []);
 
-    el.querySelector(".chat-bubble__content").innerHTML = renderMd(text);
+    el.querySelector(".chat-bubble__content").innerHTML = renderMd(content);
     return el;
+  }
+
+  function _iconUrlForFile(filename) {
+    var ext = (filename || "").split(".").pop().toLowerCase();
+    var known = {
+      pdf: 1, doc: 1, docx: 1, xls: 1, xlsx: 1, ppt: 1, pptx: 1,
+      csv: 1, txt: 1, json: 1, xml: 1, md: 1,
+    };
+    var name = known[ext] ? ext : "document";
+    return "/static/server/assets/icons/file-" + name + ".svg";
+  }
+
+  function renderMessageAttachments(attachments) {
+    var list = attachments || [];
+    if (!list.length) return "";
+    var html = '<div class="chat-message-attachments">';
+    list.forEach(function (att) {
+      var name = escapeHtml(att.filename || "file");
+      var url = att.content_url || "";
+      var thumbUrl = att.thumbnail_url || (att.is_image ? url : _iconUrlForFile(att.filename || ""));
+      var iconCls = att.is_image
+        ? "chat-message-attachment__thumb"
+        : "chat-message-attachment__thumb chat-message-attachment__thumb--icon";
+      var thumb = thumbUrl
+        ? '<img class="' + iconCls + '" src="' + thumbUrl + '" alt="' + name + '">'
+        : "";
+      html += '<a class="chat-message-attachment" href="' + url + '" target="_blank" rel="noopener noreferrer">'
+        + thumb
+        + '<span class="chat-message-attachment__name">' + name + "</span>"
+        + "</a>";
+    });
+    html += "</div>";
+    return html;
   }
 
   /** Append a pre-built bubble element into the messages container. */
@@ -129,16 +173,117 @@
     var input = document.getElementById("remote-chat-input");
     if (!input) return;
     var text = input.value.trim();
+    var hasAttachments = composePendingFiles.length > 0 || composeUploaded.length > 0;
+    if (!text && !hasAttachments) return;
+
+    var sendBtn = document.getElementById("remote-send-btn");
+    if (sendBtn) sendBtn.disabled = true;
+
+    ensureComposeAttachmentsUploaded()
+      .then(function (attachmentIds) {
+        var body = new URLSearchParams();
+        body.append("text", text);
+        (attachmentIds || []).forEach(function (id) {
+          if (id) body.append("attachment_ids", id);
+        });
+        return fetch("/remote/join/" + encodeURIComponent(token) + "/respond/", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: body.toString(),
+        });
+      })
+      .then(function (r) {
+        return r.json().then(function (data) {
+          if (!r.ok && r.status !== 202) throw new Error(data.error || data.message || "Failed to send response");
+          if (data.status === "locked") throw new Error(data.message || "Another participant already continued this run.");
+          input.value = "";
+          input.style.height = "";
+          clearComposeAttachments();
+          renderStatusNote(data.status === "waiting_host"
+            ? "All participant inputs received. Waiting for host to continue."
+            : "Response submitted.");
+          return data;
+        });
+      })
+      .catch(function (err) {
+        renderStatusNote(err.message || "Failed to send response.");
+      })
+      .finally(function () {
+        if (sendBtn) sendBtn.disabled = false;
+      });
+  }
+
+  function renderStatusNote(text) {
     if (!text) return;
+    var c = document.getElementById("remote-chat-messages");
+    if (!c) return;
+    var el = document.createElement("div");
+    el.className = "chat-status-badge chat-status-badge--remote-users";
+    el.textContent = text;
+    c.appendChild(el);
+    scrollToBottom();
+  }
 
-    appendBubble(buildUserBubble(text));
-    input.value = "";
-    input.style.height = "";
+  function toUploadRecord(file) {
+    var isImg = /^image\//i.test(file.type || "");
+    return {
+      id: "",
+      filename: file.name,
+      mime_type: file.type || "application/octet-stream",
+      size_bytes: file.size || 0,
+      is_image: isImg,
+      thumbnail_url: isImg ? "" : _iconUrlForFile(file.name),
+      content_url: "",
+      _file: file,
+    };
+  }
 
-    // Forward to backend via WebSocket so it can be processed when ready.
-    if (_ws && _ws.readyState === WebSocket.OPEN) {
-      try { _ws.send(JSON.stringify({ type: "message", content: text })); } catch (_) {}
+  function renderComposeAttachments() {
+    var attachList = document.getElementById("remote-compose-attachments");
+    if (!attachList) return;
+    var all = composeUploaded.concat(composePendingFiles);
+    if (!all.length) {
+      attachList.innerHTML = "";
+      attachList.hidden = true;
+      return;
     }
+    attachList.hidden = false;
+    attachList.innerHTML = all.map(function (att) {
+      return '<span class="chat-attachment-chip">' + escapeHtml(att.filename || "file") + "</span>";
+    }).join("");
+  }
+
+  function ensureComposeAttachmentsUploaded() {
+    if (!composePendingFiles.length) {
+      return Promise.resolve(composeUploaded.map(function (x) { return x.id; }));
+    }
+    var pending = composePendingFiles.slice();
+    composePendingFiles = [];
+    var form = new FormData();
+    pending.forEach(function (rec) {
+      if (rec && rec._file) form.append("files", rec._file);
+    });
+    return fetch("/remote/join/" + encodeURIComponent(token) + "/attachments/", {
+      method: "POST",
+      body: form,
+    }).then(function (r) {
+      return r.json().then(function (data) {
+        if (!r.ok) throw new Error(data.error || "Attachment upload failed");
+        composeUploaded = composeUploaded.concat(data.attachments || []);
+        renderComposeAttachments();
+        return composeUploaded.map(function (x) { return x.id; });
+      });
+    }).catch(function (err) {
+      composePendingFiles = pending.concat(composePendingFiles);
+      renderComposeAttachments();
+      throw err;
+    });
+  }
+
+  function clearComposeAttachments() {
+    composePendingFiles = [];
+    composeUploaded = [];
+    renderComposeAttachments();
   }
 
   // --------------------------------------------------------------------------
@@ -178,16 +323,11 @@
     attachBtn.addEventListener("click", function () { attachInput.click(); });
 
     attachInput.addEventListener("change", function () {
-      if (!attachList) return;
-      attachList.innerHTML = "";
-      if (!attachInput.files.length) { attachList.hidden = true; return; }
-      attachList.hidden = false;
-      Array.from(attachInput.files).forEach(function (f) {
-        var chip = document.createElement("span");
-        chip.className = "chat-attachment-chip";
-        chip.textContent = f.name;
-        attachList.appendChild(chip);
+      Array.from(attachInput.files || []).forEach(function (file) {
+        composePendingFiles.push(toUploadRecord(file));
       });
+      attachInput.value = "";
+      renderComposeAttachments();
     });
   }
 
@@ -233,14 +373,22 @@
         var container = document.getElementById("remote-chat-messages");
         if (container && container.querySelector(".remote-user-page__waiting")) {
           (msg.messages || []).forEach(function (m) {
-            appendBubble(
-              m.role === "user" ? buildUserBubble(m.content || "") : buildAgentBubble(m)
-            );
+            if (!m || !m.id || _seenMessageIds[m.id]) return;
+            _seenMessageIds[m.id] = 1;
+            appendBubble(m.role === "user" ? buildUserBubble(m) : buildAssistantBubble(m));
           });
         }
       } else if (msg.type === "message") {
         var m = msg.message || msg;
-        if (m.role !== "user") appendBubble(buildAgentBubble(m));
+        if (m && m.id && _seenMessageIds[m.id]) return;
+        if (m && m.id) _seenMessageIds[m.id] = 1;
+        appendBubble(m.role === "user" ? buildUserBubble(m) : buildAssistantBubble(m));
+      } else if (msg.type === "quorum_progress") {
+        if (msg.awaiting_host_final) {
+          renderStatusNote("All participant inputs received. Waiting for host to continue.");
+        }
+      } else if (msg.type === "quorum_committed") {
+        renderStatusNote("Run resumed by " + (msg.winner || "host") + ".");
       } else if (msg.type === "evict") {
         _ws.close();
         showEvictionOverlay();

@@ -347,6 +347,19 @@ def _get_attachment_docs_for_session(session_id: str, attachment_ids: Iterable[s
     return [index[aid] for aid in wanted if aid in index]
 
 
+@traced_function("service.attachments.get_descriptors")
+def get_attachment_descriptors(*, session_id: str, attachment_ids: Iterable[str]) -> list[dict]:
+    """Return session-scoped attachment descriptors in the same order as attachment_ids."""
+    docs = _get_attachment_docs_for_session(session_id, attachment_ids)
+    return [
+        {
+            **_attachment_descriptor(d),
+            "content_url": f"/chat/sessions/{session_id}/attachments/{d.get('attachment_id', '')}/content/",
+        }
+        for d in docs
+    ]
+
+
 @traced_function("service.attachments.bind_to_message")
 def bind_attachments_to_message(*, session_id: str, message_id: str, attachment_ids: Iterable[str]) -> list[dict]:
     docs = _get_attachment_docs_for_session(session_id, attachment_ids)
@@ -360,18 +373,10 @@ def bind_attachments_to_message(*, session_id: str, message_id: str, attachment_
         {"$set": {"message_id": message_id, "bound_at": util.utc_now()}},
     )
 
-    return [
-        {
-            "id": d.get("attachment_id", ""),
-            "filename": d.get("filename", ""),
-            "mime_type": d.get("mime_type", "application/octet-stream"),
-            "size_bytes": int(d.get("size_bytes") or 0),
-            "is_image": bool(d.get("is_image", False)),
-            "extension": d.get("extension", ""),
-            "content_url": f"/chat/sessions/{session_id}/attachments/{d.get('attachment_id', '')}/content/",
-        }
-        for d in docs
-    ]
+    return get_attachment_descriptors(
+        session_id=session_id,
+        attachment_ids=attachment_ids_clean,
+    )
 
 
 def build_attachment_context_block(*, session_id: str, attachment_ids: Iterable[str]) -> str:

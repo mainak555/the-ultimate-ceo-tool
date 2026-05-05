@@ -2,7 +2,12 @@
 
 from django.urls import path
 
-from server.consumers import OAuthReadinessConsumer, RemoteChatConsumer, RemoteUserReadinessConsumer
+from server.consumers import (
+    HostSessionConsumer,
+    OAuthReadinessConsumer,
+    RemoteChatConsumer,
+    RemoteUserReadinessConsumer,
+)
 
 websocket_urlpatterns = [
     path(
@@ -13,6 +18,11 @@ websocket_urlpatterns = [
     path(
         "ws/remote-users/<str:session_id>/",
         RemoteUserReadinessConsumer.as_asgi(),
+    ),
+    # Host-facing realtime session feed (agent + remote user messages + quorum updates)
+    path(
+        "ws/session/<str:session_id>/",
+        HostSessionConsumer.as_asgi(),
     ),
     # Remote-user-facing: receive live agent messages (public, token-gated)
     path(

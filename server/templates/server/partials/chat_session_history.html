@@ -104,7 +104,7 @@
 {% if session.status == "awaiting_input" %}
 {% if project %}
   <div class="chat-status-badge chat-status-badge--gate"
-       data-gate-context='{"round": {{ session.current_round }}, "max_rounds": {{ project.team.max_iterations|default:0 }}, "chat_mode": "{% if project.agents|length == 1 %}single_assistant{% endif %}"}'>
+      data-gate-context='{"round": {{ session.current_round }}, "max_rounds": {{ project.team.max_iterations|default:0 }}, "chat_mode": "{% if project.agents|length == 1 %}single_assistant{% endif %}", "quorum": "{{ session_quorum|default:project.human_gate.quorum|default:'na' }}"}'>
     &#x23F8; Round {{ session.current_round }}{% if project.agents|length != 1 %}/{{ project.team.max_iterations }}{% endif %} &mdash; response is required
   </div>
 {% endif %}

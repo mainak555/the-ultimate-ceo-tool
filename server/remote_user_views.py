@@ -33,6 +33,10 @@ from django.views.decorators.http import require_GET, require_POST
 from django.views.decorators.csrf import csrf_exempt
 
 from agents.session_coordination import (
+    check_all_gate_responses,
+    claim_gate_winner,
+    clear_gate_responses,
+    get_gate_response,
     generate_remote_user_token,
     get_remote_user_statuses,
     get_remote_user_token_data,
@@ -42,11 +46,20 @@ from agents.session_coordination import (
     set_remote_user_offline,
     set_remote_user_online,
     set_session_quorum,
+    store_gate_response,
+    store_pending_task,
     SessionCoordinationError,
 )
-from . import services, util
+from . import services, util, attachment_service
 from .util import VALID_QUORUM_VALUES
-from .views import _has_valid_secret
+from .views import (
+    _append_user_message_and_publish,
+    _build_quorum_composed_payload,
+    _enrich_attachments_for_display,
+    _has_valid_secret,
+    _parse_attachment_ids,
+    _resolve_gate_expected_names,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -227,6 +240,158 @@ def remote_user_mark_online(request, token):
     _maybe_publish_complete(project, session_id)
 
     return util.json_response({"status": "online", "user_name": user_name, "session_id": session_id})
+
+
+@csrf_exempt
+@require_POST
+def remote_user_upload_attachments(request, token):
+    """Upload one or more files for a remote user (token-gated)."""
+    token_data = _validate_token(token)
+    if token_data is None:
+        return util.json_error("Invalid or expired invitation token.", 403)
+
+    session_id = token_data["session_id"]
+    session = services.get_chat_session(session_id)
+    if session is None:
+        return util.json_error("Session not found.", 404)
+
+    files = list(request.FILES.getlist("files"))
+    try:
+        uploaded = attachment_service.upload_session_attachments(session=session, files=files)
+    except ValueError as exc:
+        return util.json_error(str(exc), 400)
+    except Exception:
+        logger.exception("attachments.remote_upload_failed", extra={"session_id": session_id})
+        return util.json_error("Attachment upload failed.", 500)
+
+    return util.json_response({
+        "status": "ok",
+        "attachments": _enrich_attachments_for_display(session_id, uploaded),
+    })
+
+
+@csrf_exempt
+@require_POST
+def remote_user_respond(request, token):
+    """Remote-user gate response endpoint (token-gated).
+
+    Supports quorum modes:
+    - first_win: first responder (host or any remote) wins immediately.
+    - all: stores remote response and waits for all responders + host final continue.
+    """
+    token_data = _validate_token(token)
+    if token_data is None:
+        return util.json_error("Invalid or expired invitation token.", 403)
+
+    session_id = token_data["session_id"]
+    responder_name = token_data["user_name"]
+
+    session = services.get_chat_session(session_id)
+    if session is None:
+        return util.json_error("Session not found.", 404)
+    if session.get("status") != "awaiting_input":
+        return util.json_error(f"Session is not awaiting input (status: {session.get('status')}).", 409)
+
+    project = services.get_project(session.get("project_id", ""))
+    if project is None:
+        return util.json_error("Project not found.", 404)
+
+    quorum = (project.get("human_gate") or {}).get("quorum") or "na"
+    gate_name = (project.get("human_gate") or {}).get("name") or "You"
+    round_number = int(session.get("current_round") or 1)
+
+    text = (request.POST.get("text", "") or "").strip()
+    attachment_ids = _parse_attachment_ids(request.POST)
+
+    # In all mode remote users can submit attachments/text; host must finalize.
+    if not text and not attachment_ids:
+        return util.json_error("A message or attachment is required.", 400)
+
+    expected_names = _resolve_gate_expected_names(project, session_id, gate_name)
+    if responder_name not in expected_names:
+        return util.json_error("You are not an active responder for this round.", 409)
+
+    if quorum == "first_win":
+        claimed = claim_gate_winner(session_id, responder_name, round_number=round_number)
+        if not claimed:
+            return util.json_response({
+                "status": "locked",
+                "message": "Another participant already continued this run.",
+            }, status=409)
+
+        store_gate_response(
+            session_id,
+            responder_name,
+            text,
+            attachment_ids,
+            round_number=round_number,
+        )
+        _append_user_message_and_publish(
+            session_id=session_id,
+            agent_name=responder_name,
+            text=text,
+            attachment_ids=attachment_ids,
+            origin="remote",
+        )
+        composed_task, merged_attachment_ids = _build_quorum_composed_payload(
+            session_id,
+            project,
+            expected_names,
+            {responder_name: {"text": text, "attachment_ids": attachment_ids}},
+            gate_name,
+            winner_name=responder_name,
+        )
+        if composed_task or merged_attachment_ids:
+            store_pending_task(session_id, composed_task, merged_attachment_ids)
+        clear_gate_responses(session_id, expected_names, round_number=round_number)
+        services.set_session_status(session_id, "idle")
+        publish_remote_user_event(session_id, {
+            "type": "quorum_committed",
+            "round": round_number,
+            "quorum": "first_win",
+            "winner": responder_name,
+        })
+        return util.json_response({"status": "ok"})
+
+    if quorum == "all":
+        existing = get_gate_response(session_id, responder_name, round_number=round_number)
+        if existing is None:
+            _append_user_message_and_publish(
+                session_id=session_id,
+                agent_name=responder_name,
+                text=text,
+                attachment_ids=attachment_ids,
+                origin="remote",
+            )
+            store_gate_response(
+                session_id,
+                responder_name,
+                text,
+                attachment_ids,
+                round_number=round_number,
+            )
+        all_present, responses = check_all_gate_responses(
+            session_id,
+            expected_names,
+            round_number=round_number,
+        )
+        publish_remote_user_event(session_id, {
+            "type": "quorum_progress",
+            "round": round_number,
+            "quorum": "all",
+            "expected": expected_names,
+            "received": list(responses.keys()),
+            "all_present": all_present,
+            "awaiting_host_final": all_present,
+        })
+        return util.json_response({
+            "status": "waiting_host" if all_present else "waiting",
+            "all_present": all_present,
+            "received": len(responses),
+            "expected": len(expected_names),
+        }, status=202)
+
+    return util.json_error("Remote responses are not enabled for this quorum mode.", 409)
 
 
 # ---------------------------------------------------------------------------

@@ -36,10 +36,22 @@
           {% if d.role == 'user' %}
             <div class="chat-bubble chat-bubble--human" data-raw-content="{{ d.content }}">
               <div class="chat-bubble__meta">
-                <span class="chat-bubble__name">{{ user_name|default:"You" }}</span>
+                <span class="chat-bubble__name">{{ d.agent_name|default:user_name|default:"You" }}</span>
                 {% if d.timestamp %}<span class="chat-bubble__time"><time class="local-time" data-utc="{{ d.timestamp }}">{{ d.timestamp }}</time></span>{% endif %}
               </div>
               <div class="chat-bubble__content">{{ d.content|markdownify }}</div>
+              {% if d.attachments %}
+                <div class="chat-message-attachments">
+                  {% for att in d.attachments %}
+                    <a class="chat-message-attachment" href="{{ att.content_url }}" target="_blank" rel="noopener noreferrer">
+                      {% if att.thumbnail_url %}
+                        <img class="chat-message-attachment__thumb{% if not att.is_image %} chat-message-attachment__thumb--icon{% endif %}" src="{{ att.thumbnail_url }}" alt="{{ att.filename }}">
+                      {% endif %}
+                      <span class="chat-message-attachment__name">{{ att.filename }}</span>
+                    </a>
+                  {% endfor %}
+                </div>
+              {% endif %}
             </div>
           {% else %}
             <div class="chat-bubble chat-bubble--ai" data-raw-content="{{ d.content }}">
@@ -50,6 +62,18 @@
                   {% if d.timestamp %}<span class="chat-bubble__time"><time class="local-time" data-utc="{{ d.timestamp }}">{{ d.timestamp }}</time></span>{% endif %}
                 </div>
                 <div class="chat-bubble__content">{{ d.content|markdownify }}</div>
+                {% if d.attachments %}
+                  <div class="chat-message-attachments">
+                    {% for att in d.attachments %}
+                      <a class="chat-message-attachment" href="{{ att.content_url }}" target="_blank" rel="noopener noreferrer">
+                        {% if att.thumbnail_url %}
+                          <img class="chat-message-attachment__thumb{% if not att.is_image %} chat-message-attachment__thumb--icon{% endif %}" src="{{ att.thumbnail_url }}" alt="{{ att.filename }}">
+                        {% endif %}
+                        <span class="chat-message-attachment__name">{{ att.filename }}</span>
+                      </a>
+                    {% endfor %}
+                  </div>
+                {% endif %}
               </div>
             </div>
           {% endif %}
