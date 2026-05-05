@@ -98,6 +98,7 @@
     window._guestSessionId = "{{ session_id }}";
   </script>
   {% compress js %}
+  <script src="{% static 'server/js/chat_copy_utils.js' %}"></script>
   <script src="{% static 'server/js/guest_user.js' %}"></script>
   {% endcompress %}
 

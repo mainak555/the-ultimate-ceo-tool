@@ -641,75 +641,11 @@ document.addEventListener("DOMContentLoaded", function () {
     chatMessages.scrollTop = chatMessages.scrollHeight;
   }
 
-  var _COPY_ICON = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>';
-  var _CHECK_ICON = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>';
-
   function _buildCopyBtn() {
-    return '<button type="button" class="chat-bubble__copy-btn" title="Copy message" aria-label="Copy message">' + _COPY_ICON + '</button>';
+    return window.ChatCopyUtils.buildCopyBtnHtml();
   }
 
-  function _getCopyText(bubbleEl) {
-    var md = bubbleEl.dataset.rawContent || "";
-    var attachmentNames = bubbleEl.querySelectorAll(".chat-message-attachment__name");
-    if (attachmentNames.length) {
-      md += "\n\n**Attachments:**\n";
-      attachmentNames.forEach(function (span) {
-        md += "- " + span.textContent.trim() + "\n";
-      });
-    }
-    return md.trim();
-  }
-
-  function _showCopiedFeedback(btn) {
-    btn.innerHTML = _CHECK_ICON;
-    btn.classList.add("chat-bubble__copy-btn--copied");
-    btn.title = "Copied!";
-    setTimeout(function () {
-      btn.innerHTML = _COPY_ICON;
-      btn.classList.remove("chat-bubble__copy-btn--copied");
-      btn.title = "Copy message";
-    }, 2000);
-  }
-
-  function _fallbackCopyText(text, btn) {
-    var ta = document.createElement("textarea");
-    ta.value = text;
-    ta.style.cssText = "position:fixed;top:-9999px;left:-9999px;opacity:0";
-    document.body.appendChild(ta);
-    ta.focus();
-    ta.select();
-    try { document.execCommand("copy"); _showCopiedFeedback(btn); } catch (e) { /* silent */ }
-    document.body.removeChild(ta);
-  }
-
-  function _copyTextToClipboard(text, btn) {
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      return navigator.clipboard.writeText(text).then(function () {
-        if (btn) _showCopiedFeedback(btn);
-      }).catch(function () {
-        _fallbackCopyText(text, btn || document.createElement("button"));
-      });
-    }
-    _fallbackCopyText(text, btn || document.createElement("button"));
-    return Promise.resolve();
-  }
-
-  document.body.addEventListener("click", function (e) {
-    var btn = e.target.closest(".chat-bubble__copy-btn");
-    if (!btn) return;
-    var bubble = btn.closest(".chat-bubble");
-    if (!bubble) return;
-    var text = _getCopyText(bubble);
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(text).then(function () {
-        _showCopiedFeedback(btn);
-      }).catch(function () {
-        _fallbackCopyText(text, btn);
-      });
-    } else {
-      _fallbackCopyText(text, btn);
-    }
-  });
+  window.ChatCopyUtils.bindBubbleCopyHandler(document.body);
 
   function appendHumanBubble(text, attachments) {
     var ts = new Date().toISOString();

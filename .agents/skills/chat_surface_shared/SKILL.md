@@ -59,7 +59,8 @@ Required behavior:
 - Copy source is `data-raw-content` (raw markdown), never rendered HTML.
 - If attachments exist, append this exact markdown block:
 	- `**Attachments:**`
-	- one `- filename` line per `.chat-message-attachment__name` in display order
+	- one `- [filename](absolute_url)` line per `.chat-message-attachment` anchor in display order
+	- escape `[` and `]` in filename text; if `href` is missing, fallback to `- filename`
 - Clipboard flow uses `navigator.clipboard.writeText()` with textarea +
 	`document.execCommand("copy")` fallback.
 - On success, `.chat-bubble__copy-btn` toggles to

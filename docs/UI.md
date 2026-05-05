@@ -163,13 +163,13 @@ Implementation and parity checklist live in
 
 - Clicking the button copies the message content to the clipboard.
 - **Text format**: the raw markdown source from `discussions[].content` is used — never the rendered HTML — so the recipient receives clean markdown.
-- **Attachments**: if the bubble has attachment chips (`.chat-message-attachment__name`), filenames are appended below the message text as a markdown list:
+- **Attachments**: if the bubble has attachment links (`.chat-message-attachment`), files are appended below the message text as markdown links with absolute URLs:
   ```
   **Attachments:**
-  - invoice.pdf
-  - photo.png
+  - [invoice.pdf](https://example.com/chat/sessions/abc/attachments/1/content/)
+  - [photo.png](https://example.com/chat/sessions/abc/attachments/2/content/)
   ```
-- **Image messages**: image content is not separately base64-encoded; the attachment filename is appended as above.
+- **Image messages**: image content is not separately base64-encoded; the attachment markdown link is appended as above.
 - After a successful copy the icon changes to a check mark (`.chat-bubble__copy-btn--copied`, green `$color-success`) for 2 seconds, then reverts.
 - Uses `navigator.clipboard.writeText()` with an `execCommand("copy")` textarea fallback for older browsers.
 

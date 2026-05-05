@@ -123,6 +123,7 @@
     window._remoteGateContext = {% if gate_context %}{"round": {{ gate_context.round }}, "max_rounds": {{ gate_context.max_rounds }}, "chat_mode": "{{ gate_context.chat_mode }}", "quorum": "{{ gate_context.quorum }}"}{% else %}null{% endif %};
   </script>
   {% compress js %}
+  <script src="{% static 'server/js/chat_copy_utils.js' %}"></script>
   <script src="{% static 'server/js/remote_user.js' %}"></script>
   {% endcompress %}
 

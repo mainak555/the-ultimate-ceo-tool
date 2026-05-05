@@ -9,6 +9,7 @@ The goal is to prevent `app.js` from becoming a catch-all file.
 |---|---|---|---|
 | `server/static/server/js/app.js` | Shared SPA shell behavior across pages | HTMX secret-key header injection, shared helpers, generic cross-page hooks | Feature-specific config/chat/integration workflows |
 | `server/static/server/js/markdown_viewer.js` | Shared markdown rendering utility | Common markdown-to-HTML rendering for Home and export reference panes | Feature-specific modal/session workflows |
+| `server/static/server/js/chat_copy_utils.js` | Shared chat utility for Home/Remote/Guest | Chat bubble copy button HTML, raw-markdown copy payload with attachments, clipboard fallback, copied-state feedback, delegated copy binding | Page-specific chat/session workflow logic |
 | `server/static/server/js/provider_registry.js` | Shared provider capability registry | Register and resolve provider capabilities (`openExportModal`, `syncConfigState`) | Provider-specific UI behavior |
 | `server/static/server/js/project_config.js` | Config page only (`config_form.html`) | Project-config form state sync, agent-card manipulation, config-page secret-gated controls | Home chat runtime behavior |
 | `server/static/server/js/mcp_json_editor.js` | Config page only (`config_form.html`) | MCP JSON code-editor mount/lifecycle, format/validate controls, textarea sync for submit | MCP schema business validation, server-side transport logic |
