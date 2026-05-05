@@ -37,6 +37,7 @@ from agents.session_coordination import (
     claim_gate_winner,
     clear_gate_responses,
     get_gate_response,
+    get_session_quorum,
     generate_remote_user_token,
     get_remote_user_statuses,
     get_remote_user_token_data,
@@ -185,6 +186,28 @@ def remote_user_join(request, token):
 
     project = services.get_project(project_id)
     project_name = project.get("project_name", "") if project else ""
+    gate = (project or {}).get("human_gate") or {}
+    team = (project or {}).get("team") or {}
+    agents = (project or {}).get("agents") or []
+    is_single_assistant = len(agents) == 1
+
+    session_quorum = gate.get("quorum") or "na"
+    try:
+        quorum_override = get_session_quorum(session_id)
+        if quorum_override:
+            session_quorum = quorum_override
+    except SessionCoordinationError:
+        pass
+
+    session_status = str(session.get("status") or "idle")
+    gate_context = None
+    if session_status == "awaiting_input":
+        gate_context = {
+            "round": int(session.get("current_round") or 1),
+            "max_rounds": int(team.get("max_iterations") or 0),
+            "chat_mode": "single_assistant" if is_single_assistant else "team",
+            "quorum": session_quorum,
+        }
 
     # Load existing discussions for initial render.
     discussions = [
@@ -198,6 +221,8 @@ def remote_user_join(request, token):
         "user_name": user_name,
         "project_name": project_name,
         "discussions": discussions,
+        "session_status": session_status,
+        "gate_context": gate_context,
         "error": None,
     })
 
@@ -268,6 +293,43 @@ def remote_user_upload_attachments(request, token):
         "status": "ok",
         "attachments": _enrich_attachments_for_display(session_id, uploaded),
     })
+
+
+@csrf_exempt
+@require_POST
+def remote_user_delete_attachment(request, token, attachment_id):
+    """Delete one staged remote-user attachment (token-gated)."""
+    token_data = _validate_token(token)
+    if token_data is None:
+        return util.json_error("Invalid or expired invitation token.", 403)
+
+    session_id = token_data["session_id"]
+    session = services.get_chat_session(session_id)
+    if session is None:
+        return util.json_error("Session not found.", 404)
+
+    try:
+        deleted = attachment_service.delete_staged_attachment(
+            session_id=session_id,
+            attachment_id=attachment_id,
+        )
+    except ValueError:
+        logger.exception(
+            "attachments.remote_delete_failed",
+            extra={"session_id": session_id, "attachment_id": attachment_id},
+        )
+        return util.json_error("Failed to delete attachment.", 500)
+    except Exception:
+        logger.exception(
+            "attachments.remote_delete_unexpected",
+            extra={"session_id": session_id, "attachment_id": attachment_id},
+        )
+        return util.json_error("Failed to delete attachment.", 500)
+
+    if not deleted:
+        return util.json_error("Attachment not found or already bound to a message.", 404)
+
+    return util.json_response({"status": "deleted", "attachment_id": attachment_id})
 
 
 @csrf_exempt

@@ -593,6 +593,7 @@ document.addEventListener("DOMContentLoaded", function () {
     document.querySelectorAll(".chat-restart-panel__textarea").forEach(function (ta) {
       ta.disabled = running;
     });
+    setAgentsWorkingBadge(running);
   }
 
   function appendBubble(html) {
@@ -702,9 +703,25 @@ document.addEventListener("DOMContentLoaded", function () {
 
   function appendStatusBadge(type) {
     var label = type === "completed" ? "Run completed" : "Run stopped";
+    setAgentsWorkingBadge(false);
     chatMessages.insertAdjacentHTML(
       "beforeend",
       '<div class="chat-status-badge chat-status-badge--' + type + '">' + label + '</div>'
+    );
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+  }
+
+  function setAgentsWorkingBadge(show) {
+    if (!chatMessages) return;
+    var existing = chatMessages.querySelector(".chat-status-badge--running");
+    if (!show) {
+      if (existing) existing.remove();
+      return;
+    }
+    if (existing) return;
+    chatMessages.insertAdjacentHTML(
+      "beforeend",
+      '<div class="chat-status-badge chat-status-badge--running">\u2699 Agents at work</div>'
     );
     chatMessages.scrollTop = chatMessages.scrollHeight;
   }

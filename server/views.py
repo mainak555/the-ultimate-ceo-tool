@@ -975,6 +975,22 @@ def _publish_session_message_safe(session_id: str, sse_record: dict) -> None:
         pass
 
 
+def _publish_session_event_safe(session_id: str, event_name: str, payload: dict | None = None) -> None:
+    """Publish a non-message session event for remote user live UI sync.
+
+    Event publishing is best-effort and must never block the host run stream.
+    """
+    try:
+        from agents.session_coordination import publish_session_message
+        publish_session_message(session_id, {
+            "type": "run_status",
+            "event": event_name,
+            **(payload or {}),
+        })
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _friendly_run_error(exc: Exception) -> str:
     """Return a user-readable error string for agent run failures.
 
@@ -1236,6 +1252,7 @@ async def chat_session_run(request, session_id):
                     extra={"session_id": session_id, "phase": "release_conflict"},
                 )
             return util.json_error("Session status changed before run start.", 409)
+        _publish_session_event_safe(session_id, "running", {"status": "running"})
         # Clean up the OAuth readiness counter — it is no longer needed once running.
         from agents.session_coordination import delete_mcp_oauth_readiness
         await asyncio.to_thread(delete_mcp_oauth_readiness, session_id)
@@ -1336,6 +1353,7 @@ async def chat_session_run(request, session_id):
                     except Exception:
                         evict_team(session_id)
                         await asyncio.to_thread(services.set_session_status, session_id, "stopped")
+                        _publish_session_event_safe(session_id, "stopped", {"status": "stopped"})
                         yield _sse("error", {"message": "Unable to restart: state version mismatch."})
                         return
         except Exception as exc:
@@ -1359,6 +1377,11 @@ async def chat_session_run(request, session_id):
                 await asyncio.to_thread(
                     services.set_session_awaiting_oauth, session_id, pending_oauth_mid
                 )
+                _publish_session_event_safe(
+                    session_id,
+                    "awaiting_mcp_oauth",
+                    {"status": "awaiting_mcp_oauth"},
+                )
                 logger.info(
                     "agents.mcp.oauth_gate_blocked_midrun",
                     extra={
@@ -1370,6 +1393,7 @@ async def chat_session_run(request, session_id):
                 yield _sse("awaiting_mcp_oauth", {"servers": pending_oauth_mid})
                 return
             await asyncio.to_thread(services.set_session_status, session_id, "idle")
+            _publish_session_event_safe(session_id, "idle", {"status": "idle"})
             yield _sse("error", {"message": str(exc)})
             return
         
@@ -1524,9 +1548,21 @@ async def chat_session_run(request, session_id):
                             }
                             if export_meta:
                                 gate_data["export"] = export_meta
+                            _publish_session_event_safe(
+                                session_id,
+                                "awaiting_input",
+                                {
+                                    "status": "awaiting_input",
+                                    "round": gate_data["round"],
+                                    "max_rounds": gate_data["max_rounds"] or 0,
+                                    "chat_mode": gate_data["chat_mode"],
+                                    "quorum": gate_data.get("quorum") or "na",
+                                },
+                            )
                             yield _sse("gate", gate_data)
                         else:
                             await asyncio.to_thread(services.set_session_status, session_id, "completed")
+                            _publish_session_event_safe(session_id, "completed", {"status": "completed"})
                             evict_team(session_id)
                             done_data = {"status": "completed", "round": current_round}
                             if export_meta:
@@ -1596,6 +1632,7 @@ async def chat_session_run(request, session_id):
                     # Stop should still succeed even if persistence fails here.
                     pass
                 await asyncio.to_thread(services.set_session_status, session_id, "stopped")
+                _publish_session_event_safe(session_id, "stopped", {"status": "stopped"})
                 evict_team(session_id)
                 if lease_lost:
                     yield _sse("error", {"message": "Run lease lost; session stopped."})
@@ -1628,6 +1665,7 @@ async def chat_session_run(request, session_id):
                         extra={"session_id": session_id},
                     )
                 await asyncio.to_thread(services.set_session_status, session_id, "idle")
+                _publish_session_event_safe(session_id, "idle", {"status": "idle"})
                 evict_team(session_id)
                 # AutoGen's BaseGroupChat wraps exceptions as:
                 #   raise RuntimeError(str(message.error))

@@ -27,7 +27,7 @@
   </main>
   {% else %}
 
-  <main class="remote-user-page__main" id="remote-chat-main">
+  <main class="remote-user-page__main" id="remote-chat-main" data-session-status="{{ session_status|default:'idle' }}">
 
     {# Reuse the home chat-messages scroll container — all bubble styles are shared #}
     <div class="chat-messages" id="remote-chat-messages">
@@ -79,9 +79,15 @@
           {% endif %}
         {% endfor %}
       {% else %}
+        {% if session_status != 'awaiting_input' and session_status != 'running' %}
         <div class="remote-user-page__waiting">
           <p>Waiting for the session to start&hellip;</p>
         </div>
+        {% endif %}
+      {% endif %}
+
+      {% if session_status == "running" %}
+        <div class="chat-status-badge chat-status-badge--running">&#x2699; Agents at work</div>
       {% endif %}
     </div>
 
@@ -108,6 +114,7 @@
     window._remoteUserToken = "{{ token }}";
     window._remoteUserName  = "{{ user_name }}";
     window._remoteSessionId = "{{ session_id }}";
+    window._remoteGateContext = {% if gate_context %}{"round": {{ gate_context.round }}, "max_rounds": {{ gate_context.max_rounds }}, "chat_mode": "{{ gate_context.chat_mode }}", "quorum": "{{ gate_context.quorum }}"}{% else %}null{% endif %};
   </script>
   {% compress js %}
   <script src="{% static 'server/js/remote_user.js' %}"></script>
