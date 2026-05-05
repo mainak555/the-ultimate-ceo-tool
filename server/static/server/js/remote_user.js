@@ -320,8 +320,20 @@
       })
       .then(function (r) {
         return r.json().then(function (data) {
-          if (!r.ok && r.status !== 202) throw new Error(data.error || data.message || "Failed to send response");
-          if (data.status === "locked") throw new Error(data.message || "Another participant already continued this run.");
+          if (!r.ok) {
+            var isGracefulConflict = r.status === 409 && (data.status === "locked" || data.status === "stale");
+            if (!isGracefulConflict && r.status !== 202) {
+              throw new Error(data.error || data.message || "Failed to send response");
+            }
+          }
+          if (data.status === "locked" || data.status === "stale") {
+            input.value = "";
+            input.style.height = "";
+            clearComposeAttachments();
+            _setWaitingTurn();
+            renderStatusNote(data.message || "Another participant already continued this run.");
+            return data;
+          }
           input.value = "";
           input.style.height = "";
           clearComposeAttachments();

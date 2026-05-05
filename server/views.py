@@ -1763,6 +1763,12 @@ def chat_session_respond(request, session_id):
         return util.json_error("Session not found", 404)
 
     if session["status"] != "awaiting_input":
+        current_status = str(session.get("status") or "")
+        if current_status == "idle":
+            return util.json_response({
+                "status": "stale",
+                "message": "This gate round is already committed. Waiting for run to resume.",
+            }, status=409)
         return util.json_error(f"Session is not awaiting input (status: {session['status']})", 409)
 
     action = request.POST.get("action", "").strip()
@@ -1782,6 +1788,7 @@ def chat_session_respond(request, session_id):
         gate_name = (project.get("human_gate") or {}).get("name") or "You" if project else "You"
         round_number = int(session.get("current_round") or 1)
 
+        # No-remote mode: standard gate continue with immediate run resume.
         if quorum in ("na", "team_choice") or not remote_users:
             # No quorum — standard gate: gate user responds, run resumes immediately.
             services.set_session_status(session_id, "idle")
@@ -1804,15 +1811,15 @@ def chat_session_respond(request, session_id):
 
         expected_names = _resolve_gate_expected_names(project, session_id, gate_name)
 
+        # first_win mode: first accepted response commits the round immediately.
         if quorum == "first_win":
             # Atomic winner claim: only the first POST proceeds.
             claimed = claim_gate_winner(session_id, gate_name, round_number=round_number)
             if not claimed:
-                return HttpResponse(
-                    util.json_dumps({"error": "Another response has already continued this session."}),
-                    status=409,
-                    content_type="application/json",
-                )
+                return util.json_response({
+                    "status": "locked",
+                    "message": "Another participant already continued this run.",
+                }, status=409)
             store_gate_response(
                 session_id,
                 gate_name,
@@ -1846,92 +1853,101 @@ def chat_session_respond(request, session_id):
                 "winner": gate_name,
             })
             return HttpResponse(
-                util.json_dumps({"status": "ok", "task": "", "attachment_ids": []}),
+                util.json_dumps({
+                    "status": "ok",
+                    "task": "",
+                    "attachment_ids": [],
+                    "pending_task_ready": True,
+                }),
                 content_type="application/json",
             )
 
-        # quorum == "all"
-        existing_gate = get_gate_response(session_id, gate_name, round_number=round_number) or {}
-        if not existing_gate:
-            store_gate_response(
+        # all mode: collect every responder, then host explicitly finalizes continue.
+        if quorum == "all":
+            existing_gate = get_gate_response(session_id, gate_name, round_number=round_number) or {}
+            if not existing_gate:
+                store_gate_response(
+                    session_id,
+                    gate_name,
+                    text,
+                    attachment_ids,
+                    round_number=round_number,
+                )
+                if text or attachment_ids:
+                    _append_user_message_and_publish(
+                        session_id=session_id,
+                        agent_name=gate_name,
+                        text=text,
+                        attachment_ids=attachment_ids,
+                        origin="host",
+                    )
+            all_present, responses = check_all_gate_responses(
                 session_id,
-                gate_name,
-                text,
-                attachment_ids,
+                expected_names,
                 round_number=round_number,
             )
-            if text or attachment_ids:
-                _append_user_message_and_publish(
-                    session_id=session_id,
-                    agent_name=gate_name,
-                    text=text,
-                    attachment_ids=attachment_ids,
-                    origin="host",
-                )
-        all_present, responses = check_all_gate_responses(
-            session_id,
-            expected_names,
-            round_number=round_number,
-        )
-        publish_remote_user_event(session_id, {
-            "type": "quorum_progress",
-            "round": round_number,
-            "quorum": "all",
-            "expected": expected_names,
-            "received": list(responses.keys()),
-            "all_present": all_present,
-        })
-        if not all_present:
-            return HttpResponse(
-                util.json_dumps({"status": "waiting", "received": len(responses), "expected": len(expected_names)}),
-                status=202,
-                content_type="application/json",
-            )
-        # Quorum met: require host's explicit final continue click.
-        # Since this endpoint is host-only, reaching this point means host confirmed.
-        # Atomic winner claim prevents double-resume when two responses race to
-        # complete the quorum simultaneously.
-        claimed = claim_gate_winner(session_id, gate_name, round_number=round_number)
-        if not claimed:
-            return HttpResponse(
-                util.json_dumps({"status": "waiting"}),
-                status=202,
-                content_type="application/json",
-            )
-        # Insert ordered discussion entries: gate user first, then remote users
-        # in project config order (matches expected_names order).
-        composed_task, combined_attachment_ids = _build_quorum_composed_payload(
-            session_id,
-            project,
-            expected_names,
-            responses,
-            gate_name,
-        )
-        logger.info(
-            "agents.session.quorum_composed",
-            extra={
-                "session_id": session_id,
+            publish_remote_user_event(session_id, {
+                "type": "quorum_progress",
                 "round": round_number,
                 "quorum": "all",
-                "participants": len(expected_names),
-                "text_segments": composed_task.count("### "),
-                "attachment_count": len(combined_attachment_ids),
-            },
-        )
-        if composed_task or combined_attachment_ids:
-            store_pending_task(session_id, composed_task, combined_attachment_ids)
-        clear_gate_responses(session_id, expected_names, round_number=round_number)
-        services.set_session_status(session_id, "idle")
-        publish_remote_user_event(session_id, {
-            "type": "quorum_committed",
-            "round": round_number,
-            "quorum": "all",
-            "winner": gate_name,
-        })
-        return HttpResponse(
-            util.json_dumps({"status": "ok", "task": "", "attachment_ids": []}),
-            content_type="application/json",
-        )
+                "expected": expected_names,
+                "received": list(responses.keys()),
+                "all_present": all_present,
+            })
+            if not all_present:
+                return HttpResponse(
+                    util.json_dumps({"status": "waiting", "received": len(responses), "expected": len(expected_names)}),
+                    status=202,
+                    content_type="application/json",
+                )
+            # Quorum met and host confirmed final continue. Claim winner atomically
+            # to prevent duplicate run starts from racing submits.
+            claimed = claim_gate_winner(session_id, gate_name, round_number=round_number)
+            if not claimed:
+                return HttpResponse(
+                    util.json_dumps({"status": "waiting"}),
+                    status=202,
+                    content_type="application/json",
+                )
+            composed_task, combined_attachment_ids = _build_quorum_composed_payload(
+                session_id,
+                project,
+                expected_names,
+                responses,
+                gate_name,
+            )
+            logger.info(
+                "agents.session.quorum_composed",
+                extra={
+                    "session_id": session_id,
+                    "round": round_number,
+                    "quorum": "all",
+                    "participants": len(expected_names),
+                    "text_segments": composed_task.count("### "),
+                    "attachment_count": len(combined_attachment_ids),
+                },
+            )
+            if composed_task or combined_attachment_ids:
+                store_pending_task(session_id, composed_task, combined_attachment_ids)
+            clear_gate_responses(session_id, expected_names, round_number=round_number)
+            services.set_session_status(session_id, "idle")
+            publish_remote_user_event(session_id, {
+                "type": "quorum_committed",
+                "round": round_number,
+                "quorum": "all",
+                "winner": gate_name,
+            })
+            return HttpResponse(
+                util.json_dumps({
+                    "status": "ok",
+                    "task": "",
+                    "attachment_ids": [],
+                    "pending_task_ready": True,
+                }),
+                content_type="application/json",
+            )
+
+        return util.json_error("Unsupported quorum mode for gate continue.", 409)
 
     return HttpResponse(util.json_dumps({"error": "Invalid action"}), status=400,
                         content_type="application/json")

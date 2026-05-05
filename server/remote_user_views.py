@@ -40,7 +40,6 @@ from agents.session_coordination import (
     get_session_quorum,
     generate_remote_user_token,
     get_remote_user_statuses,
-    get_remote_user_token_data,
     publish_remote_user_event,
     revoke_remote_user_token,
     set_remote_user_ignored,
@@ -352,6 +351,12 @@ def remote_user_respond(request, token):
     if session is None:
         return util.json_error("Session not found.", 404)
     if session.get("status") != "awaiting_input":
+        current_status = str(session.get("status") or "")
+        if current_status == "idle":
+            return util.json_response({
+                "status": "stale",
+                "message": "This gate round is already committed. Waiting for run to resume.",
+            }, status=409)
         return util.json_error(f"Session is not awaiting input (status: {session.get('status')}).", 409)
 
     project = services.get_project(session.get("project_id", ""))
@@ -373,6 +378,7 @@ def remote_user_respond(request, token):
     if responder_name not in expected_names:
         return util.json_error("You are not an active responder for this round.", 409)
 
+    # first_win mode: first accepted response commits immediately.
     if quorum == "first_win":
         claimed = claim_gate_winner(session_id, responder_name, round_number=round_number)
         if not claimed:
@@ -413,8 +419,9 @@ def remote_user_respond(request, token):
             "quorum": "first_win",
             "winner": responder_name,
         })
-        return util.json_response({"status": "ok"})
+        return util.json_response({"status": "ok", "pending_task_ready": True})
 
+    # all mode: store remote response and wait for host final continue.
     if quorum == "all":
         existing = get_gate_response(session_id, responder_name, round_number=round_number)
         if existing is None:

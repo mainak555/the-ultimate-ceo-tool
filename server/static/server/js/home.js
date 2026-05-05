@@ -423,10 +423,24 @@ document.addEventListener("DOMContentLoaded", function () {
       body: body.toString(),
     }).then(function (r) {
       return r.json().then(function (data) {
-        if (!r.ok) throw new Error(data.error || "Action failed");
+        if (!r.ok) {
+          if (r.status === 409 && data && (data.status === "stale" || data.status === "locked")) {
+            return data;
+          }
+          throw new Error(data.error || data.message || "Action failed");
+        }
         return data;
       });
     });
+  }
+
+  function appendQuorumInfoBadge(text) {
+    if (!text) return;
+    chatMessages.insertAdjacentHTML(
+      "beforeend",
+      '<div class="chat-status-badge chat-status-badge--remote-users">' + escapeHtml(text) + '</div>'
+    );
+    chatMessages.scrollTop = chatMessages.scrollHeight;
   }
 
   // Re-evaluate Send button enabled state honouring gate mode rules.
@@ -534,7 +548,14 @@ document.addEventListener("DOMContentLoaded", function () {
       clearGateMode();
       return sendRespond(sessionId, "continue", text, attachmentIds);
     }).then(function (d) {
-      if (d && d.status === "ok") startRun(d.task || "", d.attachment_ids || []);
+      if (!d) return;
+      if (d.status === "ok") {
+        startRun(d.task || "", d.attachment_ids || []);
+        return;
+      }
+      if (d.status === "stale" || d.status === "locked") {
+        appendQuorumInfoBadge(d.message || "Another participant already continued this run.");
+      }
     }).catch(function (err) {
       if (!committed && chatSendBtn) chatSendBtn.disabled = false;
       appendBubble('<div class="chat-bubble chat-bubble--error">Error: ' + err.message + '</div>');
@@ -1038,7 +1059,10 @@ document.addEventListener("DOMContentLoaded", function () {
       }
 
       if (msg.type === "quorum_committed" && _gateData) {
-        var shouldAutoStart = msg.quorum === "first_win" && !_activeReader;
+        var isFirstWin = msg.quorum === "first_win";
+        var localGateName = _gateData.human_name || "";
+        var winnerName = msg.winner || "";
+        var shouldAutoStart = isFirstWin && winnerName && winnerName !== localGateName;
         _gateData.awaiting_host_final = false;
         _evalSendBtn();
         if (shouldAutoStart) {
