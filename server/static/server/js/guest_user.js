@@ -40,6 +40,10 @@
     if (c) c.scrollTop = c.scrollHeight;
   }
 
+  function buildCopyBtn() {
+    return window.ChatCopyUtils.buildCopyBtnHtml();
+  }
+
   function renderMessageAttachments(attachments) {
     var list = attachments || [];
     if (!list.length) return "";
@@ -76,6 +80,7 @@
         + '<div class="chat-bubble__meta">'
         + '<span class="chat-bubble__name">' + escapeHtml(msg.agent_name || "User") + '</span>'
         + '<span class="chat-bubble__time"><time class="local-time" data-utc="' + ts + '">' + ts + '</time></span>'
+        + buildCopyBtn()
         + '</div>'
         + '<div class="chat-bubble__content">' + contentHtml + '</div>'
         + attachmentsHtml
@@ -89,6 +94,7 @@
         + '<div class="chat-bubble__meta">'
         + '<span class="chat-bubble__name">' + escapeHtml(name) + '</span>'
         + '<span class="chat-bubble__time"><time class="local-time" data-utc="' + ts + '">' + ts + '</time></span>'
+        + buildCopyBtn()
         + '</div>'
         + '<div class="chat-bubble__content">' + contentHtml + '</div>'
         + attachmentsHtml
@@ -196,6 +202,8 @@
       ws = null;
     };
   }
+
+  window.ChatCopyUtils.bindBubbleCopyHandler(document.body);
 
   document.addEventListener("DOMContentLoaded", function () {
     renderLocalTimes();

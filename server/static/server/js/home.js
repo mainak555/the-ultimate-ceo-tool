@@ -641,75 +641,11 @@ document.addEventListener("DOMContentLoaded", function () {
     chatMessages.scrollTop = chatMessages.scrollHeight;
   }
 
-  var _COPY_ICON = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>';
-  var _CHECK_ICON = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>';
-
   function _buildCopyBtn() {
-    return '<button type="button" class="chat-bubble__copy-btn" title="Copy message" aria-label="Copy message">' + _COPY_ICON + '</button>';
+    return window.ChatCopyUtils.buildCopyBtnHtml();
   }
 
-  function _getCopyText(bubbleEl) {
-    var md = bubbleEl.dataset.rawContent || "";
-    var attachmentNames = bubbleEl.querySelectorAll(".chat-message-attachment__name");
-    if (attachmentNames.length) {
-      md += "\n\n**Attachments:**\n";
-      attachmentNames.forEach(function (span) {
-        md += "- " + span.textContent.trim() + "\n";
-      });
-    }
-    return md.trim();
-  }
-
-  function _showCopiedFeedback(btn) {
-    btn.innerHTML = _CHECK_ICON;
-    btn.classList.add("chat-bubble__copy-btn--copied");
-    btn.title = "Copied!";
-    setTimeout(function () {
-      btn.innerHTML = _COPY_ICON;
-      btn.classList.remove("chat-bubble__copy-btn--copied");
-      btn.title = "Copy message";
-    }, 2000);
-  }
-
-  function _fallbackCopyText(text, btn) {
-    var ta = document.createElement("textarea");
-    ta.value = text;
-    ta.style.cssText = "position:fixed;top:-9999px;left:-9999px;opacity:0";
-    document.body.appendChild(ta);
-    ta.focus();
-    ta.select();
-    try { document.execCommand("copy"); _showCopiedFeedback(btn); } catch (e) { /* silent */ }
-    document.body.removeChild(ta);
-  }
-
-  function _copyTextToClipboard(text, btn) {
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      return navigator.clipboard.writeText(text).then(function () {
-        if (btn) _showCopiedFeedback(btn);
-      }).catch(function () {
-        _fallbackCopyText(text, btn || document.createElement("button"));
-      });
-    }
-    _fallbackCopyText(text, btn || document.createElement("button"));
-    return Promise.resolve();
-  }
-
-  document.body.addEventListener("click", function (e) {
-    var btn = e.target.closest(".chat-bubble__copy-btn");
-    if (!btn) return;
-    var bubble = btn.closest(".chat-bubble");
-    if (!bubble) return;
-    var text = _getCopyText(bubble);
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(text).then(function () {
-        _showCopiedFeedback(btn);
-      }).catch(function () {
-        _fallbackCopyText(text, btn);
-      });
-    } else {
-      _fallbackCopyText(text, btn);
-    }
-  });
+  window.ChatCopyUtils.bindBubbleCopyHandler(document.body);
 
   function appendHumanBubble(text, attachments) {
     var ts = new Date().toISOString();
@@ -1038,6 +974,7 @@ document.addEventListener("DOMContentLoaded", function () {
     panel._replayTask = replayTask || "";
     panel._replayAttachmentIds = (replayAttachmentIds || []).slice();
     panel._users = (users || []).slice();
+    _renderRemoteQuorumDisplay(panel, quorum || "na");
     chatMessages.scrollTop = chatMessages.scrollHeight;
 
     _attachRemoteUserGateBehavior(panel, sessionId, secretKey);
@@ -1121,10 +1058,11 @@ document.addEventListener("DOMContentLoaded", function () {
       var statusClass = "remote-user-status--" + (status === "online" ? "online" : status === "ignored" ? "ignored" : "offline");
       var statusLabel = status === "online" ? "Online \u2713" : status === "ignored" ? "Ignore" : "Offline";
       var cbDisabled = isTeamChoice ? " disabled" : "";
+      var cbChecked = (status === "ignored") ? "" : " checked";
       var copyDisabled = (status === "ignored") ? " disabled" : "";
 
       var rowHtml = '<div class="remote-user-row" data-remote-user-name="' + safe + '" data-status="' + escapeHtml(status) + '">'
-        + '<input type="checkbox" class="remote-user-row__checkbox" title="Require this user" checked' + cbDisabled + '>'
+        + '<input type="checkbox" class="remote-user-row__checkbox" title="Require this user"' + cbChecked + cbDisabled + '>'
         + '<span class="remote-user-row__name">' + safe + '</span>'
         + '<span class="remote-user-row__status ' + statusClass + '">' + statusLabel + '</span>'
         + '<button type="button" class="btn btn--sm btn--secondary remote-user-copy-btn" data-session-id="' + escapeHtml(sessionId) + '" data-user-name="' + safe + '" title="Copy invite link"' + copyDisabled + '>Copy Link</button>'
@@ -1133,49 +1071,37 @@ document.addEventListener("DOMContentLoaded", function () {
     });
   }
 
-  function _renderQuorumDropdown(panel, quorum) {
+  function _humanizeQuorumValue(value) {
+    var normalized = (!value || value === "na") ? "all" : value;
+    return normalized.replace(/_/g, " ").replace(/\b\w/g, function (ch) { return ch.toUpperCase(); });
+  }
+
+  function _resolveQuorumLabel(quorum) {
+    var normalized = (!quorum || quorum === "na") ? "all" : quorum;
+    var allOptions = window._quorumOptions || [];
+    var matched = allOptions.find(function (opt) { return opt && opt.value === normalized; });
+    return matched && matched.label ? matched.label : _humanizeQuorumValue(normalized);
+  }
+
+  function _renderRemoteQuorumDisplay(panel, quorum) {
     var footer = panel.querySelector(".chat-remote-panel__footer");
     if (!footer) return;
 
-    // Normalise: treat missing/legacy 'na' as 'all'.
     var effectiveQuorum = (!quorum || quorum === "na") ? "all" : quorum;
-    var isTeamChoice = effectiveQuorum === "team_choice";
+    var quorumLabel = _resolveQuorumLabel(effectiveQuorum);
 
-    // Build options from the single-source list injected by the server (util.QUORUM_OPTIONS → window._quorumOptions).
-    var allOptions = window._quorumOptions;
-    if (!allOptions || !allOptions.length) return; // server should always inject this
-
-    // 'team_choice' is only selectable via Project Config; hide it from the live dropdown
-    // unless the project is already configured with that value.
-    var visibleOptions = isTeamChoice
-      ? allOptions
-      : allOptions.filter(function (o) { return o.value !== "team_choice"; });
-
-    // Idempotent: if dropdown already exists, update value, disabled state, and option set.
-    var existingSel = footer.querySelector(".remote-panel-quorum-select");
-    if (existingSel) {
-      // Remove team_choice option if it shouldn't be visible.
-      if (!isTeamChoice) {
-        var tcOpt = existingSel.querySelector('option[value="team_choice"]');
-        if (tcOpt) tcOpt.remove();
-      }
-      existingSel.value = effectiveQuorum;
-      existingSel.disabled = isTeamChoice;
+    var existingValue = footer.querySelector(".chat-remote-panel__quorum-value");
+    var existingDisplay = footer.querySelector(".chat-remote-panel__quorum-display");
+    if (existingValue && existingDisplay) {
+      existingDisplay.dataset.quorumValue = effectiveQuorum;
+      existingValue.textContent = quorumLabel;
       return;
     }
 
-    var sessionId = panel.dataset.sessionId || (activeSessionIdInput ? activeSessionIdInput.value.trim() : "");
-    var optionsHtml = visibleOptions.map(function (opt) {
-      return '<option value="' + escapeHtml(opt.value) + '"'
-        + (opt.value === effectiveQuorum ? " selected" : "") + ">"
-        + escapeHtml(opt.label) + "</option>";
-    }).join("");
-
-    var html = '<label class="remote-panel-quorum-label">Quorum:'
-      + '<select class="remote-panel-quorum-select" data-session-id="' + escapeHtml(sessionId) + '"'
-      + (isTeamChoice ? " disabled" : "") + ">"
-      + optionsHtml
-      + "</select></label>";
+    var html = '<div class="chat-remote-panel__quorum-display" data-quorum-value="' + escapeHtml(effectiveQuorum) + '">'
+      + '<img class="chat-remote-panel__quorum-icon" src="/static/server/assets/quorum.png" alt="Quorum">'
+      + '<span class="chat-remote-panel__quorum-value">' + escapeHtml(quorumLabel) + '</span>'
+      + '</div>';
     footer.insertAdjacentHTML("afterbegin", html);
   }
 
@@ -1230,7 +1156,7 @@ document.addEventListener("DOMContentLoaded", function () {
           // Update panel quorum from server (may reflect Redis override).
           panel.dataset.quorum = quorum;
           _renderRemoteUserRows(panel, msg.users || [], quorum, secretKey);
-          _renderQuorumDropdown(panel, quorum);
+          _renderRemoteQuorumDisplay(panel, quorum);
           panel._users = msg.users || [];
         } else if (msg.type === "update") {
           if (panel._users && !panel._users.some(function (u) { return u.name === msg.user_name; })) {
@@ -1305,22 +1231,6 @@ document.addEventListener("DOMContentLoaded", function () {
     fetch("/chat/sessions/" + sessionId + "/remote-users/" + encodeURIComponent(userName) + "/" + endpoint + "/", {
       method: "POST",
       headers: {"X-App-Secret-Key": secretKey, "X-CSRFToken": csrfToken},
-    }).catch(function () { /* non-fatal */ });
-  });
-
-  // Delegated: Quorum dropdown change
-  document.addEventListener("change", function (event) {
-    var sel = event.target && event.target.classList && event.target.classList.contains("remote-panel-quorum-select") ? event.target : null;
-    if (!sel) return;
-    var sessionId = sel.dataset.sessionId || (activeSessionIdInput ? activeSessionIdInput.value.trim() : "");
-    var secretKey = getSecretKey();
-    if (!sessionId || !secretKey) return;
-    var quorum = sel.value;
-    var body = new URLSearchParams({quorum: quorum});
-    fetch("/chat/sessions/" + sessionId + "/remote-users/quorum/", {
-      method: "POST",
-      headers: {"X-App-Secret-Key": secretKey, "X-CSRFToken": csrfToken, "Content-Type": "application/x-www-form-urlencoded"},
-      body: body.toString(),
     }).catch(function () { /* non-fatal */ });
   });
 
@@ -1796,7 +1706,7 @@ document.addEventListener("DOMContentLoaded", function () {
         return data;
       });
     }).then(function (data) {
-      return _copyTextToClipboard(data.join_url || "", btn).then(function () {
+      return window.ChatCopyUtils.copyTextToClipboard(data.join_url || "", btn).then(function () {
         appendBubble('<div class="chat-bubble chat-bubble--system">Guest link copied to clipboard.</div>');
       });
     }).catch(function (err) {
@@ -1845,9 +1755,9 @@ document.addEventListener("DOMContentLoaded", function () {
       var remotePanelSessionId = remotePanel.dataset.sessionId || (activeSessionIdInput ? activeSessionIdInput.value.trim() : "");
       var remotePanelSecretKey = getSecretKey();
       if (remotePanelSessionId && remotePanelSecretKey) {
-        // Render the quorum dropdown immediately from data-quorum (server-injected);
+        // Render quorum display immediately from data-quorum (server-injected);
         // the WS state message will update it once connected.
-        _renderQuorumDropdown(remotePanel, remotePanel.dataset.quorum || "na");
+        _renderRemoteQuorumDisplay(remotePanel, remotePanel.dataset.quorum || "na");
         _attachRemoteUserGateBehavior(remotePanel, remotePanelSessionId, remotePanelSecretKey);
       }
     }
@@ -1945,9 +1855,9 @@ document.addEventListener("DOMContentLoaded", function () {
     var initRemoteSessionId = initialRemotePanel.dataset.sessionId || (activeSessionIdInput ? activeSessionIdInput.value.trim() : "");
     var initRemoteSecretKey = getSecretKey();
     if (initRemoteSessionId && initRemoteSecretKey) {
-      // Render the quorum dropdown immediately from data-quorum (server-injected);
+      // Render quorum display immediately from data-quorum (server-injected);
       // the WS state message will update it once connected.
-      _renderQuorumDropdown(initialRemotePanel, initialRemotePanel.dataset.quorum || "na");
+      _renderRemoteQuorumDisplay(initialRemotePanel, initialRemotePanel.dataset.quorum || "na");
       _attachRemoteUserGateBehavior(initialRemotePanel, initRemoteSessionId, initRemoteSecretKey);
     }
   }

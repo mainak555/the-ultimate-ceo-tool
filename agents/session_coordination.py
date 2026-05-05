@@ -560,6 +560,12 @@ def _remote_user_token_ttl() -> int:
     return max(60, raw)
 
 
+def _remote_user_online_status_ttl() -> int:
+    """Return online status TTL from settings (default 5 min)."""
+    raw = int(getattr(settings, "REDIS_REMOTE_USER_ONLINE_STATUS_TTL_SECONDS", 300) or 300)
+    return max(60, raw)
+
+
 def _gate_response_key(session_id: str, responder_name: str, round_number: int | None = None) -> str:
     if round_number is None:
         return f"{_namespace()}:gate_response:{session_id}:{responder_name}"
@@ -920,7 +926,7 @@ def set_remote_user_online(session_id: str, user_name: str) -> None:
     try:
         client = _get_client()
         client.set(_remote_user_status_key(session_id, user_name), "online",
-                   ex=_remote_user_token_ttl())
+                   ex=_remote_user_online_status_ttl())
     except Exception as exc:  # noqa: BLE001
         raise SessionCoordinationError("Unable to set remote user online.") from exc
 
@@ -964,6 +970,50 @@ def set_remote_user_offline(session_id: str, user_name: str) -> None:
         "user_name": user_name,
         "status": "offline",
     })
+
+
+def set_remote_user_offline_if_online(session_id: str, user_name: str) -> bool:
+    """Delete status only when current value is 'online'.
+
+    This preserves durable 'ignored' status when the host explicitly un-checks
+    a remote participant and the browser then disconnects.
+    Returns True when the key changed from online to offline.
+    """
+    key = _remote_user_status_key(session_id, user_name)
+    try:
+        client = _get_client()
+        current = client.get(key)
+        if current != "online":
+            return False
+        client.delete(key)
+    except Exception as exc:  # noqa: BLE001
+        raise SessionCoordinationError("Unable to set remote user offline.") from exc
+
+    _publish_remote_user_event(session_id, {
+        "type": "update",
+        "user_name": user_name,
+        "status": "offline",
+    })
+    return True
+
+
+def touch_remote_user_online_status(session_id: str, user_name: str) -> bool:
+    """Refresh TTL for an online status key.
+
+    Returns True when TTL was refreshed for an "online" status key.
+    Returns False when status is absent or not "online".
+    """
+    key = _remote_user_status_key(session_id, user_name)
+    ttl = _remote_user_online_status_ttl()
+    try:
+        client = _get_client()
+        current = client.get(key)
+        if current != "online":
+            return False
+        client.expire(key, ttl)
+        return True
+    except Exception as exc:  # noqa: BLE001
+        raise SessionCoordinationError("Unable to refresh remote user status TTL.") from exc
 
 
 def _publish_remote_user_event(session_id: str, payload: dict) -> None:
@@ -1164,6 +1214,7 @@ __all__ = [
     "set_mcp_oauth_token",
     "set_remote_user_ignored",
     "set_remote_user_offline",
+    "set_remote_user_offline_if_online",
     "set_remote_user_online",
     "set_guest_online",
     "set_guest_offline",
@@ -1173,4 +1224,5 @@ __all__ = [
     "store_gate_response",
     "store_pending_task",
     "store_run_traceparent",
+    "touch_remote_user_online_status",
 ]

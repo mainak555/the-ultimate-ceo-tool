@@ -104,6 +104,7 @@ Canonical rules:
 2. Bubble DOM parity is mandatory between server-rendered history and JS-rendered live messages.
 3. Public pages (Remote and Guest) use the same header pattern: left title + right role badge.
 4. Compose/send/attachment interactions are shared between Home/HITL and Remote only; Guest remains readonly by design.
+5. Name-label semantics are surface-scoped: Home user-role bubbles render `You`; Remote renders `You` only for the currently joined participant's own user-role messages and renders actual sender names for other participants; Guest always renders sender names (no viewer-relative `You`).
 
 Detailed implementation checklists live in the two skills above; this section stays architecture-level and non-duplicative.
 
@@ -155,17 +156,21 @@ Detailed readiness-card contract (behavior strict, UI override allowed by use ca
 
 Every chat bubble (both user and agent) carries a copy icon button (`.chat-bubble__copy-btn`) in the top-right of its meta row.
 
+This behavior applies to all chat surfaces: Home/HITL, Remote, and Guest.
+Implementation and parity checklist live in
+[`.agents/skills/chat_surface_shared/SKILL.md`](../.agents/skills/chat_surface_shared/SKILL.md).
+
 ### Behaviour
 
 - Clicking the button copies the message content to the clipboard.
 - **Text format**: the raw markdown source from `discussions[].content` is used — never the rendered HTML — so the recipient receives clean markdown.
-- **Attachments**: if the bubble has attachment chips (`.chat-message-attachment__name`), filenames are appended below the message text as a markdown list:
+- **Attachments**: if the bubble has attachment links (`.chat-message-attachment`), files are appended below the message text as markdown links with absolute URLs:
   ```
   **Attachments:**
-  - invoice.pdf
-  - photo.png
+  - [invoice.pdf](https://example.com/chat/sessions/abc/attachments/1/content/)
+  - [photo.png](https://example.com/chat/sessions/abc/attachments/2/content/)
   ```
-- **Image messages**: image content is not separately base64-encoded; the attachment filename is appended as above.
+- **Image messages**: image content is not separately base64-encoded; the attachment markdown link is appended as above.
 - After a successful copy the icon changes to a check mark (`.chat-bubble__copy-btn--copied`, green `$color-success`) for 2 seconds, then reverts.
 - Uses `navigator.clipboard.writeText()` with an `execCommand("copy")` textarea fallback for older browsers.
 
@@ -178,9 +183,14 @@ Every chat bubble (both user and agent) carries a copy icon button (`.chat-bubbl
 | Click handler (delegated) | `document.body` listener in `home.js` — works for both server-rendered and live-streamed bubbles |
 | SCSS | `.chat-bubble__copy-btn` and `.chat-bubble__copy-btn--copied` in `main.scss` |
 
+Remote and Guest pages must implement the same copy contract and selectors in
+their own page modules so server-rendered history and live-appended bubbles stay
+in parity.
+
 ### Copy Button Visibility
 
-The copy button is visible in **non-readonly sessions only** (it is part of the normal chat bubble markup and not gated by the secret key). The button is intentionally always visible so users can copy agent responses without needing write access.
+The copy button is visible in both interactive and readonly chat surfaces
+(including Guest). It is not secret-gated.
 
 ## Chat Restart Discoverability
 

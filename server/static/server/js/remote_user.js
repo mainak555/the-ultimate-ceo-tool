@@ -61,6 +61,10 @@
     if (c) c.scrollTop = c.scrollHeight;
   }
 
+  function buildCopyBtn() {
+    return window.ChatCopyUtils.buildCopyBtnHtml();
+  }
+
   function _roundLabel(data) {
     var d = data || {};
     var isSingle = d.chat_mode === "single_assistant";
@@ -266,6 +270,7 @@
       +   '<div class="chat-bubble__meta">'
       +     '<span class="chat-bubble__name">' + escapeHtml(agentName) + "</span>"
       +     timeHtml
+      +     buildCopyBtn()
       +   "</div>"
       +   '<div class="chat-bubble__content"></div>'
       +   renderMessageAttachments(msg.attachments || [])
@@ -280,7 +285,8 @@
    * @param {string} text  Raw message text.
    */
   function buildUserBubble(msg) {
-    var displayName = msg.agent_name || userName;
+    var senderName = msg.agent_name || "";
+    var displayName = senderName && senderName === userName ? "You" : (senderName || userName);
     var content = msg.content || "";
     var ts = msg.timestamp || "";
     var timeHtml = ts
@@ -293,6 +299,7 @@
       '<div class="chat-bubble__meta">'
       +   '<span class="chat-bubble__name">' + escapeHtml(displayName) + "</span>"
       +   timeHtml
+      +   buildCopyBtn()
       + "</div>"
       + '<div class="chat-bubble__content"></div>'
       + renderMessageAttachments(msg.attachments || []);
@@ -591,7 +598,10 @@
     _syncSendEnabled();
   }
 
+  window.ChatCopyUtils.bindBubbleCopyHandler(document.body);
+
   document.body.addEventListener("click", function (e) {
+
     var removeBtn = e.target.closest(".chat-attachment-chip__remove");
     if (!removeBtn) return;
     if (_composerState === "sending") return;

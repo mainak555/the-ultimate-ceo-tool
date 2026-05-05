@@ -505,6 +505,8 @@ Full documentation: [docs/mcp_integration.md](docs/mcp_integration.md).
 | `REDIS_GATE_RESPONSE_TTL_SECONDS` | TTL for HITL gate response keys in Redis (seconds) | `21600` (6 h) |
 | `REDIS_PENDING_TASK_TTL_SECONDS` | TTL for quorum pending-task keys in Redis (seconds) | `300` |
 | `REDIS_REMOTE_USER_TOKEN_TTL_SECONDS` | TTL for remote-user invitation tokens in Redis (seconds) | `21600` (6 h) |
+| `REDIS_REMOTE_USER_ONLINE_STATUS_TTL_SECONDS` | TTL for remote-user online status keys in Redis (seconds). Applies to `online` only; `ignored` status stays durable until host action or session cleanup. | `300` (5 min) |
+| `REDIS_REMOTE_USER_TTL_REFRESH_INTERVAL_SECONDS` | Server-side refresh interval (seconds) for extending remote-user `online` status TTL while the remote chat WebSocket is alive. | `60` |
 | `MAX_AGENT_STATE_BYTES` | Maximum byte size of serialised AutoGen agent state stored in MongoDB. Raise for long sessions with many attachments or embedded images. MongoDB's document limit is 16 MB (shared with `discussions[]`). | `1000000` (1 MB) |
 | `DEBUG` | Django debug mode | `True` |
 | `ALLOWED_HOSTS` | Comma-separated allowed hosts | `localhost,127.0.0.1` |

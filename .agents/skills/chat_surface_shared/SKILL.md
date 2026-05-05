@@ -45,8 +45,29 @@ Required parity points:
 - Timestamps use `<time class="local-time" data-utc="...">`.
 - Agent bubbles keep avatar/body nesting used by home history rendering.
 - Attachment rows render under markdown content, not above it.
+- Every bubble includes a copy button in the meta row:
+	`<button type="button" class="chat-bubble__copy-btn" ...>`.
 
 When changing bubble markup in one surface, update other surfaces/builders in the same PR.
+
+## Message Copy Parity Contract
+
+Copy behavior is shared across Home, Remote, and Guest surfaces.
+
+Required behavior:
+
+- Copy source is `data-raw-content` (raw markdown), never rendered HTML.
+- If attachments exist, append this exact markdown block:
+	- `**Attachments:**`
+	- one `- [filename](absolute_url)` line per `.chat-message-attachment` anchor in display order
+	- escape `[` and `]` in filename text; if `href` is missing, fallback to `- filename`
+- Clipboard flow uses `navigator.clipboard.writeText()` with textarea +
+	`document.execCommand("copy")` fallback.
+- On success, `.chat-bubble__copy-btn` toggles to
+	`.chat-bubble__copy-btn--copied` for 2 seconds, then resets.
+
+Changing copy format/selectors/feedback in one surface requires matching updates
+to all surfaces in the same PR.
 
 ## Public Header Contract (Remote + Guest)
 
@@ -69,6 +90,27 @@ This keeps role identity explicit while preserving a unified public-page layout 
 - Home/HITL uses the main app shell and shared chat primitives.
 
 Do not add compose controls to guest page.
+
+## Display Name Contract
+
+Chat bubble name labels are viewer-scoped and must remain consistent across
+server-rendered history and JS-rendered live messages.
+
+Required behavior:
+
+- Home/HITL: user-role bubbles display `You`.
+- Remote page: display `You` only when the user-role message sender matches
+	the currently joined remote participant identity for that page.
+- Remote page: user-role messages from other participants display their sender
+	names (not `You`).
+- Guest page: all user-role messages display sender names; guest never gets a
+	viewer-relative `You` label.
+
+Implementation notes:
+
+- Apply the same rule in template history and live message builders.
+- Preserve `.chat-bubble__name` and existing bubble DOM structure.
+- Do not change copy behavior (`data-raw-content`) when adjusting labels.
 
 ## SCSS Ownership Boundary
 
