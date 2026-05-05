@@ -699,6 +699,7 @@ class RemoteChatConsumer:
         self._send = send
         self._token: str = ""
         self._listen_task: asyncio.Task | None = None
+        self._status_refresh_task: asyncio.Task | None = None
         self._closed = False
 
     @classmethod
@@ -730,6 +731,12 @@ class RemoteChatConsumer:
                     await self._listen_task
                 except (asyncio.CancelledError, Exception):
                     pass
+            if self._status_refresh_task and not self._status_refresh_task.done():
+                self._status_refresh_task.cancel()
+                try:
+                    await self._status_refresh_task
+                except (asyncio.CancelledError, Exception):
+                    pass
             if not self._closed:
                 self._closed = True
                 try:
@@ -739,6 +746,11 @@ class RemoteChatConsumer:
 
     async def _handle(self):
         import asyncio as _asyncio
+        from agents.session_coordination import (
+            SessionCoordinationError,
+            set_remote_user_offline_if_online,
+            touch_remote_user_online_status,
+        )
 
         token = self._token
         token_data = await _asyncio.to_thread(self._validate_token, token)
@@ -756,16 +768,50 @@ class RemoteChatConsumer:
         self._listen_task = _asyncio.ensure_future(
             self._listen_redis(session_id, user_name, token)
         )
+        self._status_refresh_task = _asyncio.ensure_future(
+            self._refresh_remote_status_ttl(session_id, user_name, touch_remote_user_online_status)
+        )
 
         try:
             while not self._closed:
                 msg = await self._receive()
                 if msg["type"] == "websocket.disconnect":
                     self._closed = True
+                    try:
+                        await _asyncio.to_thread(set_remote_user_offline_if_online, session_id, user_name)
+                    except SessionCoordinationError:
+                        logger.warning(
+                            "agents.remote_user.chat_ws_offline_set_failed",
+                            extra={"session_id": session_id, "user_name": user_name},
+                        )
                     break
         finally:
             if self._listen_task and not self._listen_task.done():
                 self._listen_task.cancel()
+            if self._status_refresh_task and not self._status_refresh_task.done():
+                self._status_refresh_task.cancel()
+
+    async def _refresh_remote_status_ttl(self, session_id: str, user_name: str, touch_fn):
+        """Periodically refresh remote online status TTL while this socket is alive."""
+        refresh_interval = int(
+            getattr(settings, "REDIS_REMOTE_USER_TTL_REFRESH_INTERVAL_SECONDS", 60) or 60
+        )
+        if refresh_interval <= 0:
+            return
+        try:
+            while not self._closed:
+                await asyncio.sleep(refresh_interval)
+                if self._closed:
+                    break
+                try:
+                    await asyncio.to_thread(touch_fn, session_id, user_name)
+                except Exception:
+                    logger.debug(
+                        "agents.remote_user.chat_ws_ttl_refresh_failed",
+                        extra={"session_id": session_id, "user_name": user_name},
+                    )
+        except asyncio.CancelledError:
+            pass
 
     async def _listen_redis(self, session_id: str, user_name: str, token: str):
         import redis.asyncio as aioredis

@@ -58,6 +58,14 @@ REDIS_GATE_RESPONSE_TTL_SECONDS = int(os.getenv("REDIS_GATE_RESPONSE_TTL_SECONDS
 REDIS_PENDING_TASK_TTL_SECONDS = int(os.getenv("REDIS_PENDING_TASK_TTL_SECONDS", "300"))
 # Remote user invitation token TTL (default 6 h; same window as gate response keys)
 REDIS_REMOTE_USER_TOKEN_TTL_SECONDS = int(os.getenv("REDIS_REMOTE_USER_TOKEN_TTL_SECONDS", "21600"))
+# Remote user online status TTL (default 5 min)
+REDIS_REMOTE_USER_ONLINE_STATUS_TTL_SECONDS = int(
+    os.getenv("REDIS_REMOTE_USER_ONLINE_STATUS_TTL_SECONDS", "300")
+)
+# How often remote chat websocket refreshes online status TTL (default 60 s)
+REDIS_REMOTE_USER_TTL_REFRESH_INTERVAL_SECONDS = int(
+    os.getenv("REDIS_REMOTE_USER_TTL_REFRESH_INTERVAL_SECONDS", "60")
+)
 # Maximum byte size of a serialized AutoGen agent state that can be persisted
 # inside the chat_sessions MongoDB document (16 MB limit shared with discussions[]).
 # Raise for long sessions with many attachments; lower to reduce document size.
