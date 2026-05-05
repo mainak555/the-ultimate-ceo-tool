@@ -91,6 +91,27 @@ This keeps role identity explicit while preserving a unified public-page layout 
 
 Do not add compose controls to guest page.
 
+## Display Name Contract
+
+Chat bubble name labels are viewer-scoped and must remain consistent across
+server-rendered history and JS-rendered live messages.
+
+Required behavior:
+
+- Home/HITL: user-role bubbles display `You`.
+- Remote page: display `You` only when the user-role message sender matches
+	the currently joined remote participant identity for that page.
+- Remote page: user-role messages from other participants display their sender
+	names (not `You`).
+- Guest page: all user-role messages display sender names; guest never gets a
+	viewer-relative `You` label.
+
+Implementation notes:
+
+- Apply the same rule in template history and live message builders.
+- Preserve `.chat-bubble__name` and existing bubble DOM structure.
+- Do not change copy behavior (`data-raw-content`) when adjusting labels.
+
 ## SCSS Ownership Boundary
 
 Only wrapper-specific chrome belongs to page wrapper blocks:

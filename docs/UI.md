@@ -104,6 +104,7 @@ Canonical rules:
 2. Bubble DOM parity is mandatory between server-rendered history and JS-rendered live messages.
 3. Public pages (Remote and Guest) use the same header pattern: left title + right role badge.
 4. Compose/send/attachment interactions are shared between Home/HITL and Remote only; Guest remains readonly by design.
+5. Name-label semantics are surface-scoped: Home user-role bubbles render `You`; Remote renders `You` only for the currently joined participant's own user-role messages and renders actual sender names for other participants; Guest always renders sender names (no viewer-relative `You`).
 
 Detailed implementation checklists live in the two skills above; this section stays architecture-level and non-duplicative.
 

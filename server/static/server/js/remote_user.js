@@ -285,7 +285,8 @@
    * @param {string} text  Raw message text.
    */
   function buildUserBubble(msg) {
-    var displayName = msg.agent_name || userName;
+    var senderName = msg.agent_name || "";
+    var displayName = senderName && senderName === userName ? "You" : (senderName || userName);
     var content = msg.content || "";
     var ts = msg.timestamp || "";
     var timeHtml = ts
