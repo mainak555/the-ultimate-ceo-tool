@@ -1057,10 +1057,11 @@ document.addEventListener("DOMContentLoaded", function () {
       var statusClass = "remote-user-status--" + (status === "online" ? "online" : status === "ignored" ? "ignored" : "offline");
       var statusLabel = status === "online" ? "Online \u2713" : status === "ignored" ? "Ignore" : "Offline";
       var cbDisabled = isTeamChoice ? " disabled" : "";
+      var cbChecked = (status === "ignored") ? "" : " checked";
       var copyDisabled = (status === "ignored") ? " disabled" : "";
 
       var rowHtml = '<div class="remote-user-row" data-remote-user-name="' + safe + '" data-status="' + escapeHtml(status) + '">'
-        + '<input type="checkbox" class="remote-user-row__checkbox" title="Require this user" checked' + cbDisabled + '>'
+        + '<input type="checkbox" class="remote-user-row__checkbox" title="Require this user"' + cbChecked + cbDisabled + '>'
         + '<span class="remote-user-row__name">' + safe + '</span>'
         + '<span class="remote-user-row__status ' + statusClass + '">' + statusLabel + '</span>'
         + '<button type="button" class="btn btn--sm btn--secondary remote-user-copy-btn" data-session-id="' + escapeHtml(sessionId) + '" data-user-name="' + safe + '" title="Copy invite link"' + copyDisabled + '>Copy Link</button>'
