@@ -45,8 +45,28 @@ Required parity points:
 - Timestamps use `<time class="local-time" data-utc="...">`.
 - Agent bubbles keep avatar/body nesting used by home history rendering.
 - Attachment rows render under markdown content, not above it.
+- Every bubble includes a copy button in the meta row:
+	`<button type="button" class="chat-bubble__copy-btn" ...>`.
 
 When changing bubble markup in one surface, update other surfaces/builders in the same PR.
+
+## Message Copy Parity Contract
+
+Copy behavior is shared across Home, Remote, and Guest surfaces.
+
+Required behavior:
+
+- Copy source is `data-raw-content` (raw markdown), never rendered HTML.
+- If attachments exist, append this exact markdown block:
+	- `**Attachments:**`
+	- one `- filename` line per `.chat-message-attachment__name` in display order
+- Clipboard flow uses `navigator.clipboard.writeText()` with textarea +
+	`document.execCommand("copy")` fallback.
+- On success, `.chat-bubble__copy-btn` toggles to
+	`.chat-bubble__copy-btn--copied` for 2 seconds, then resets.
+
+Changing copy format/selectors/feedback in one surface requires matching updates
+to all surfaces in the same PR.
 
 ## Public Header Contract (Remote + Guest)
 
