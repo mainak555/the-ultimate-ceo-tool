@@ -1624,9 +1624,6 @@ document.addEventListener("DOMContentLoaded", function () {
             chatMessages.innerHTML = '<div class="chat-history" id="chat-history-msgs"></div>';
           }
           var sid = activeSessionIdInput ? activeSessionIdInput.value.trim() : "";
-          if (sid && secretKey) {
-            _connectHostSessionWs(sid, secretKey);
-          }
           return runWithSession(sid);
         }).catch(function (err) {
           appendBubble('<div class="chat-bubble chat-bubble--error">Error: ' + err.message + '</div>');

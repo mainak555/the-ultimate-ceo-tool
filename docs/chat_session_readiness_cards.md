@@ -17,6 +17,7 @@ Current readiness surfaces:
 - Human gate badge (`.chat-status-badge--gate`)
 - MCP OAuth readiness panel (`.chat-oauth-panel`)
 - Restart readiness panel (`.chat-restart-panel`)
+- Remote participants panel (`.chat-remote-panel`)
 
 ## Core Pattern (mandatory)
 
@@ -72,7 +73,8 @@ Runtime mapping (`home.js`):
 ## Lifecycle Contract
 
 1. `startRun()` removes stale readiness surfaces (`.chat-status-badge`,
-   `.chat-restart-panel`, `.chat-oauth-panel`) before initiating a run.
+   `.chat-restart-panel`, `.chat-oauth-panel`, `.chat-remote-panel`) before
+   initiating a run.
 2. OAuth gate can be triggered from:
    - Pre-run HTTP 409: `{status:"awaiting_mcp_oauth", servers:[...]}`
    - Mid-run SSE event `awaiting_mcp_oauth`
@@ -80,7 +82,12 @@ Runtime mapping (`home.js`):
    - WS push (`state` / `update` / `complete`)
    - Popup postMessage fallback
 4. On full authorization, the run is replayed automatically.
-5. On `DOMContentLoaded` and `htmx:afterSwap`, readiness state is restored by
+5. Quorum replay behavior is mode-specific:
+    - `first_win`: host receives `quorum_committed` and auto-replays the run via
+       `startRun("", [])` (pending task is popped server-side).
+    - `all`: host receives `quorum_progress` updates until all expected responses
+       are present, then host final Continue commits and resumes.
+6. On `DOMContentLoaded` and `htmx:afterSwap`, readiness state is restored by
    scanning server-rendered cards in history.
 
 ## UI Override Policy (allowed)
@@ -117,3 +124,4 @@ Do not change without full contract migration:
 - `docs/mcp_integration.md`
 - `.agents/skills/active_session_coordination/SKILL.md`
 - `.agents/skills/mcp_tool_integration/SKILL.md`
+- `.agents/skills/remote_user_quorum/SKILL.md`

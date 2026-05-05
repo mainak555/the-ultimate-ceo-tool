@@ -26,6 +26,15 @@ All routes are under the `server` app namespace.
 | `GET` | `/chat/sessions/<session_id>/` | `chat_session_detail` | Load chat history panel for one session |
 | `POST` | `/chat/sessions/<session_id>/delete/` | `chat_session_delete` | Delete a chat session |
 | `POST` | `/chat/sessions/<session_id>/update/` | `chat_session_update` | Update chat session description |
+| `POST` | `/chat/sessions/<session_id>/remote-users/<user_name>/invite/` | `generate_invite_link` | Generate/refresh a public join link for one remote user |
+| `POST` | `/chat/sessions/<session_id>/remote-users/<user_name>/ignore/` | `ignore_remote_user` | Mark a remote user ignored for the current run readiness/quorum |
+| `POST` | `/chat/sessions/<session_id>/remote-users/<user_name>/unignore/` | `unignore_remote_user` | Re-enable a previously ignored remote user |
+| `POST` | `/chat/sessions/<session_id>/remote-users/quorum/` | `set_session_quorum_view` | Override live session quorum (`all` or `first_win`) |
+| `GET` | `/remote/join/<token>/` | `remote_user_join` | Public remote-user page for a tokenized invite |
+| `POST` | `/remote/join/<token>/online/` | `remote_user_mark_online` | Mark invite holder online and publish readiness update |
+| `POST` | `/remote/join/<token>/attachments/` | `remote_user_upload_attachments` | Upload remote-user attachments for the active gate response |
+| `POST` | `/remote/join/<token>/attachments/<attachment_id>/delete/` | `remote_user_delete_attachment` | Delete a remote-user attachment before submit |
+| `POST` | `/remote/join/<token>/respond/` | `remote_user_respond` | Submit remote-user quorum response (text/attachments) |
 | `GET` | `/trello/<session_id>/token-status/` | `trello_token_status` | Check token validity |
 | `GET` | `/trello/<session_id>/workspaces/` | `trello_workspaces` | List Trello workspaces |
 | `GET` | `/trello/<session_id>/boards/` | `trello_boards` | List boards (opt. `?workspace=`) |
@@ -80,6 +89,14 @@ See [docs/jira_integration.md](jira_integration.md) for full Jira integration de
 | `GET` | `/mcp/oauth/start/` | `mcp_oauth_start` | Single OAuth start endpoint (`?flow=test|run`) that generates PKCE state and redirects to provider `auth_url` |
 | `GET` | `/mcp/oauth/callback/` | `mcp_oauth_callback` | OAuth callback that exchanges code for token and renders shared `oauth_flow.html` |
 | `WS` | `/ws/mcp/oauth/<session_id>/?skey=<APP_SECRET_KEY>` | `OAuthReadinessConsumer` | WebSocket readiness stream (`state` / `update` / `complete`) backed by Redis pub/sub; no polling endpoint |
+
+## Session/Remote WebSocket Endpoints
+
+| Method | Path | Consumer | Description |
+|--------|------|----------|-------------|
+| `WS` | `/ws/session/<session_id>/?skey=<APP_SECRET_KEY>` | `HostSessionConsumer` | Host realtime feed for chat messages plus quorum progress/commit events |
+| `WS` | `/ws/remote-users/<session_id>/?skey=<APP_SECRET_KEY>` | `RemoteUserReadinessConsumer` | Host realtime readiness panel updates for remote online/ignored status |
+| `WS` | `/ws/remote/chat/<token>/` | `RemoteChatConsumer` | Remote-user realtime feed for agent messages and status updates |
 
 ## Generic Export Popup Endpoint Pattern
 
@@ -189,7 +206,9 @@ Human gate response endpoint contract:
   - `text`: optional note/context (used when `action=continue`)
   - `attachment_ids`: optional repeated values bound to the next resumed user message
 - Behavior:
-  - `continue`: sets session status to `idle` and returns `{status:"ok", task:"<text>", attachment_ids:[...]}`
+  - `continue` with no remote quorum (`quorum=na|team_choice` or no remote users): sets session status to `idle` and returns `{status:"ok", task:"<text>", attachment_ids:[...]}` for direct `/run/` replay.
+  - `continue` with quorum `first_win` or `all`: stores the composed payload in Redis pending-task handoff and returns `{status:"ok", task:"", attachment_ids:[], pending_task_ready:true}`. The frontend replays `/run/` with an empty task; the backend pops the pending task atomically.
+  - Race-complete conflicts return `409` with non-fatal payloads `{status:"stale"}` or `{status:"locked"}` when another responder has already committed the quorum round.
   - `stop`: sets session status to `stopped`, evicts the runtime team, returns `{status:"stopped"}`
 
 Run endpoint attachment contract:
