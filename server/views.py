@@ -500,9 +500,9 @@ def _build_quorum_composed_payload(
             continue
 
         if responder == gate_name:
-            header = f"### Gate user {responder}:"
+            header = f"### {responder}:"
         else:
-            header = f"### Remote User {responder}:"
+            header = f"### {responder}:"
 
         lines = [header]
         if text:
