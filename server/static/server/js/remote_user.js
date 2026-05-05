@@ -77,14 +77,44 @@
     if (badge) badge.remove();
   }
 
+  function _clearTerminalStatusBadges() {
+    var c = document.getElementById("remote-chat-messages");
+    if (!c) return;
+    c.querySelectorAll(".chat-status-badge--stopped, .chat-status-badge--completed").forEach(function (el) {
+      el.remove();
+    });
+  }
+
+  function _appendTerminalStatusBadge(type) {
+    var c = document.getElementById("remote-chat-messages");
+    if (!c) return;
+
+    var label = type === "completed" ? "Run completed" : "Run stopped";
+    _setAgentsWorkingBadge(false);
+    _clearTerminalStatusBadges();
+    c.insertAdjacentHTML(
+      "beforeend",
+      '<div class="chat-status-badge chat-status-badge--' + type + '">' + label + "</div>"
+    );
+    scrollToBottom();
+  }
+
   function _setAgentsWorkingBadge(show) {
     var c = document.getElementById("remote-chat-messages");
     if (!c) return;
-    var badge = c.querySelector(".chat-status-badge--running");
+
+    var runningBadges = c.querySelectorAll(".chat-status-badge--running");
+    var badge = runningBadges.length ? runningBadges[0] : null;
+    if (runningBadges.length > 1) {
+      Array.prototype.slice.call(runningBadges, 1).forEach(function (el) { el.remove(); });
+    }
+
     if (!show) {
       if (badge) badge.remove();
       return;
     }
+
+    _clearTerminalStatusBadges();
     if (badge) return;
     c.insertAdjacentHTML("beforeend", '<div class="chat-status-badge chat-status-badge--running">\u2699 Agents at work</div>');
     scrollToBottom();
@@ -146,6 +176,7 @@
 
   function _setAwaitingTurn(data) {
     _setAgentsWorkingBadge(false);
+    _clearTerminalStatusBadges();
     _setComposerState("active_turn", data);
   }
 
@@ -163,10 +194,30 @@
       _setWaitingTurn();
       return;
     }
+
     if (status === "awaiting_input") {
       _setAwaitingTurn(msg);
       return;
     }
+
+    if (status === "stopped") {
+      _setWaitingTurn();
+      _appendTerminalStatusBadge("stopped");
+      return;
+    }
+
+    if (status === "completed") {
+      _setWaitingTurn();
+      _appendTerminalStatusBadge("completed");
+      return;
+    }
+
+    if (status === "idle") {
+      _setAgentsWorkingBadge(false);
+      _setWaitingTurn();
+      return;
+    }
+
     _setAgentsWorkingBadge(false);
     _setWaitingTurn();
   }
@@ -183,6 +234,7 @@
     if (status === "running") {
       _setAgentsWorkingBadge(true);
     }
+
     _setWaitingTurn();
   }
 

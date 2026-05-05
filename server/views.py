@@ -1778,6 +1778,7 @@ def chat_session_respond(request, session_id):
     if action == "stop":
         from agents.runtime import evict_team
         services.set_session_status(session_id, "stopped")
+        _publish_session_event_safe(session_id, "stopped", {"status": "stopped"})
         evict_team(session_id)
         return HttpResponse(util.json_dumps({"status": "stopped"}), content_type="application/json")
 

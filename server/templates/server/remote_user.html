@@ -79,7 +79,7 @@
           {% endif %}
         {% endfor %}
       {% else %}
-        {% if session_status != 'awaiting_input' and session_status != 'running' %}
+        {% if session_status != 'awaiting_input' and session_status != 'running' and session_status != 'stopped' and session_status != 'completed' %}
         <div class="remote-user-page__waiting">
           <p>Waiting for the session to start&hellip;</p>
         </div>
@@ -88,6 +88,10 @@
 
       {% if session_status == "running" %}
         <div class="chat-status-badge chat-status-badge--running">&#x2699; Agents at work</div>
+      {% elif session_status == "stopped" %}
+        <div class="chat-status-badge chat-status-badge--stopped">Run stopped</div>
+      {% elif session_status == "completed" %}
+        <div class="chat-status-badge chat-status-badge--completed">Run completed</div>
       {% endif %}
     </div>
 
