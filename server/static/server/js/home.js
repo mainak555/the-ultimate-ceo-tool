@@ -974,6 +974,7 @@ document.addEventListener("DOMContentLoaded", function () {
     panel._replayTask = replayTask || "";
     panel._replayAttachmentIds = (replayAttachmentIds || []).slice();
     panel._users = (users || []).slice();
+    _renderRemoteQuorumDisplay(panel, quorum || "na");
     chatMessages.scrollTop = chatMessages.scrollHeight;
 
     _attachRemoteUserGateBehavior(panel, sessionId, secretKey);
@@ -1070,49 +1071,37 @@ document.addEventListener("DOMContentLoaded", function () {
     });
   }
 
-  function _renderQuorumDropdown(panel, quorum) {
+  function _humanizeQuorumValue(value) {
+    var normalized = (!value || value === "na") ? "all" : value;
+    return normalized.replace(/_/g, " ").replace(/\b\w/g, function (ch) { return ch.toUpperCase(); });
+  }
+
+  function _resolveQuorumLabel(quorum) {
+    var normalized = (!quorum || quorum === "na") ? "all" : quorum;
+    var allOptions = window._quorumOptions || [];
+    var matched = allOptions.find(function (opt) { return opt && opt.value === normalized; });
+    return matched && matched.label ? matched.label : _humanizeQuorumValue(normalized);
+  }
+
+  function _renderRemoteQuorumDisplay(panel, quorum) {
     var footer = panel.querySelector(".chat-remote-panel__footer");
     if (!footer) return;
 
-    // Normalise: treat missing/legacy 'na' as 'all'.
     var effectiveQuorum = (!quorum || quorum === "na") ? "all" : quorum;
-    var isTeamChoice = effectiveQuorum === "team_choice";
+    var quorumLabel = _resolveQuorumLabel(effectiveQuorum);
 
-    // Build options from the single-source list injected by the server (util.QUORUM_OPTIONS → window._quorumOptions).
-    var allOptions = window._quorumOptions;
-    if (!allOptions || !allOptions.length) return; // server should always inject this
-
-    // 'team_choice' is only selectable via Project Config; hide it from the live dropdown
-    // unless the project is already configured with that value.
-    var visibleOptions = isTeamChoice
-      ? allOptions
-      : allOptions.filter(function (o) { return o.value !== "team_choice"; });
-
-    // Idempotent: if dropdown already exists, update value, disabled state, and option set.
-    var existingSel = footer.querySelector(".remote-panel-quorum-select");
-    if (existingSel) {
-      // Remove team_choice option if it shouldn't be visible.
-      if (!isTeamChoice) {
-        var tcOpt = existingSel.querySelector('option[value="team_choice"]');
-        if (tcOpt) tcOpt.remove();
-      }
-      existingSel.value = effectiveQuorum;
-      existingSel.disabled = isTeamChoice;
+    var existingValue = footer.querySelector(".chat-remote-panel__quorum-value");
+    var existingDisplay = footer.querySelector(".chat-remote-panel__quorum-display");
+    if (existingValue && existingDisplay) {
+      existingDisplay.dataset.quorumValue = effectiveQuorum;
+      existingValue.textContent = quorumLabel;
       return;
     }
 
-    var sessionId = panel.dataset.sessionId || (activeSessionIdInput ? activeSessionIdInput.value.trim() : "");
-    var optionsHtml = visibleOptions.map(function (opt) {
-      return '<option value="' + escapeHtml(opt.value) + '"'
-        + (opt.value === effectiveQuorum ? " selected" : "") + ">"
-        + escapeHtml(opt.label) + "</option>";
-    }).join("");
-
-    var html = '<label class="remote-panel-quorum-label">Quorum:'
-      + '<select class="remote-panel-quorum-select" data-session-id="' + escapeHtml(sessionId) + '"'
-      + (isTeamChoice ? " disabled" : "") + ">"
-      + optionsHtml
-      + "</select></label>";
+    var html = '<div class="chat-remote-panel__quorum-display" data-quorum-value="' + escapeHtml(effectiveQuorum) + '">'
+      + '<img class="chat-remote-panel__quorum-icon" src="/static/server/assets/quorum.png" alt="Quorum">'
+      + '<span class="chat-remote-panel__quorum-value">' + escapeHtml(quorumLabel) + '</span>'
+      + '</div>';
     footer.insertAdjacentHTML("afterbegin", html);
   }
 
@@ -1167,7 +1156,7 @@ document.addEventListener("DOMContentLoaded", function () {
           // Update panel quorum from server (may reflect Redis override).
           panel.dataset.quorum = quorum;
           _renderRemoteUserRows(panel, msg.users || [], quorum, secretKey);
-          _renderQuorumDropdown(panel, quorum);
+          _renderRemoteQuorumDisplay(panel, quorum);
           panel._users = msg.users || [];
         } else if (msg.type === "update") {
           if (panel._users && !panel._users.some(function (u) { return u.name === msg.user_name; })) {
@@ -1242,22 +1231,6 @@ document.addEventListener("DOMContentLoaded", function () {
     fetch("/chat/sessions/" + sessionId + "/remote-users/" + encodeURIComponent(userName) + "/" + endpoint + "/", {
       method: "POST",
       headers: {"X-App-Secret-Key": secretKey, "X-CSRFToken": csrfToken},
-    }).catch(function () { /* non-fatal */ });
-  });
-
-  // Delegated: Quorum dropdown change
-  document.addEventListener("change", function (event) {
-    var sel = event.target && event.target.classList && event.target.classList.contains("remote-panel-quorum-select") ? event.target : null;
-    if (!sel) return;
-    var sessionId = sel.dataset.sessionId || (activeSessionIdInput ? activeSessionIdInput.value.trim() : "");
-    var secretKey = getSecretKey();
-    if (!sessionId || !secretKey) return;
-    var quorum = sel.value;
-    var body = new URLSearchParams({quorum: quorum});
-    fetch("/chat/sessions/" + sessionId + "/remote-users/quorum/", {
-      method: "POST",
-      headers: {"X-App-Secret-Key": secretKey, "X-CSRFToken": csrfToken, "Content-Type": "application/x-www-form-urlencoded"},
-      body: body.toString(),
     }).catch(function () { /* non-fatal */ });
   });
 
@@ -1782,9 +1755,9 @@ document.addEventListener("DOMContentLoaded", function () {
       var remotePanelSessionId = remotePanel.dataset.sessionId || (activeSessionIdInput ? activeSessionIdInput.value.trim() : "");
       var remotePanelSecretKey = getSecretKey();
       if (remotePanelSessionId && remotePanelSecretKey) {
-        // Render the quorum dropdown immediately from data-quorum (server-injected);
+        // Render quorum display immediately from data-quorum (server-injected);
         // the WS state message will update it once connected.
-        _renderQuorumDropdown(remotePanel, remotePanel.dataset.quorum || "na");
+        _renderRemoteQuorumDisplay(remotePanel, remotePanel.dataset.quorum || "na");
         _attachRemoteUserGateBehavior(remotePanel, remotePanelSessionId, remotePanelSecretKey);
       }
     }
@@ -1882,9 +1855,9 @@ document.addEventListener("DOMContentLoaded", function () {
     var initRemoteSessionId = initialRemotePanel.dataset.sessionId || (activeSessionIdInput ? activeSessionIdInput.value.trim() : "");
     var initRemoteSecretKey = getSecretKey();
     if (initRemoteSessionId && initRemoteSecretKey) {
-      // Render the quorum dropdown immediately from data-quorum (server-injected);
+      // Render quorum display immediately from data-quorum (server-injected);
       // the WS state message will update it once connected.
-      _renderQuorumDropdown(initialRemotePanel, initialRemotePanel.dataset.quorum || "na");
+      _renderRemoteQuorumDisplay(initialRemotePanel, initialRemotePanel.dataset.quorum || "na");
       _attachRemoteUserGateBehavior(initialRemotePanel, initRemoteSessionId, initRemoteSecretKey);
     }
   }

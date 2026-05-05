@@ -2263,6 +2263,35 @@ select.input {
     display: flex;
     justify-content: flex-end;
   }
+
+  &__quorum-display {
+    display: inline-flex;
+    align-items: center;
+    gap: $space-xs;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  &__quorum-icon {
+    width: 18px;
+    height: 18px;
+    object-fit: contain;
+    flex-shrink: 0;
+  }
+
+  &__quorum-caption {
+    font-size: $font-size-sm;
+    color: $color-text-muted;
+  }
+
+  &__quorum-value {
+    font-size: $font-size-sm;
+    font-weight: 700;
+    color: $color-text;
+  }
 }
 
 // Remote user row — checkbox | name | status | copy-link button
@@ -2315,31 +2344,6 @@ select.input {
 .remote-user-status--ignored {
   color: $color-text-muted;
   border: 1px solid $color-border;
-}
-
-// Quorum override dropdown rendered at the bottom-right of the panel footer.
-.remote-panel-quorum-label {
-  display: flex;
-  align-items: center;
-  gap: $space-xs;
-  font-size: $font-size-sm;
-  color: $color-text-muted;
-  margin-left: auto;
-}
-
-.remote-panel-quorum-select {
-  font-size: $font-size-sm;
-  padding: 2px $space-xs;
-  border: 1px solid $color-border;
-  border-radius: $radius;
-  background: $color-surface;
-  color: $color-text;
-  cursor: pointer;
-
-  &:focus {
-    outline: none;
-    border-color: $color-primary;
-  }
 }
 
 // ---------------------------------------------------------------------------

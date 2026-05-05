@@ -4,7 +4,7 @@
     project  ? visual project context setter
     neither  ? generic welcome
 {% endcomment %}
-{% load md_extras %}
+{% load md_extras static %}
 
 {% if session %}
 
@@ -145,6 +145,22 @@
     </p>
     <div class="chat-remote-panel__rows">
       <p class="chat-remote-panel__loading">Connecting&hellip;</p>
+    </div>
+    <div class="chat-remote-panel__footer">
+      <div class="chat-remote-panel__quorum-display" data-quorum-value="{{ session_quorum|default:'na' }}">
+        <img class="chat-remote-panel__quorum-icon" src="{% static 'server/assets/quorum.png' %}" alt="Quorum">        
+        <span class="chat-remote-panel__quorum-value">
+          {% if session_quorum == 'first_win' %}
+            First Win
+          {% else %}
+            {% if session_quorum == 'team_choice' %}
+              Team Choice
+            {% else %}
+              All
+            {% endif %}
+          {% endif %}
+        </span>
+      </div>
     </div>
   </div>
 {% endif %}
