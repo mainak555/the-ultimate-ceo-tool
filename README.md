@@ -90,6 +90,10 @@ agents and whether any remote users are configured.
   resumes — *Wait for all*, *First response wins*, or *Agent planner decides*.
   Quorum is only applied when at least one remote user is listed; it has no
   effect in the pure single-assistant or multi-assistant-only cases.
+- `first_win` resumes automatically when the first accepted responder (host or
+  remote) commits the round.
+- Late responders may receive a non-fatal race response (`stale` / `locked`)
+  while the run is already resuming.
 
 #### Adding remote users
 

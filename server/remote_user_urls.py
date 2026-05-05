@@ -35,4 +35,7 @@ urlpatterns = [
 join_urlpatterns = [
     path("join/<str:token>/", remote_user_views.remote_user_join, name="remote_user_join"),
     path("join/<str:token>/online/", remote_user_views.remote_user_mark_online, name="remote_user_mark_online"),
+    path("join/<str:token>/attachments/", remote_user_views.remote_user_upload_attachments, name="remote_user_upload_attachments"),
+    path("join/<str:token>/attachments/<str:attachment_id>/delete/", remote_user_views.remote_user_delete_attachment, name="remote_user_delete_attachment"),
+    path("join/<str:token>/respond/", remote_user_views.remote_user_respond, name="remote_user_respond"),
 ]

@@ -5,27 +5,26 @@
 Implementation reference for remote users and human-gate quorum in chat sessions.
 Required reading before:
 
-- Adding WebSocket / real-time remote user respond endpoints (Phase 2)
 - Changing `chat_session_respond`, `event_stream`, or any quorum gate helper
 - Integrating new quorum modes
-- Extending `UserProxyAgent` beyond placeholder (Phase 2 `team_choice` live input)
+- Extending `UserProxyAgent` beyond placeholder (`team_choice` live input)
 
 ---
 
-## Phase 1 vs Phase 2 boundary
+## Current status and deferred scope
 
-| Feature | Phase 1 (implemented) | Phase 2 (deferred) |
-|---------|-----------------------|--------------------|
-| `remote_users` session snapshot | ✅ | — |
-| Redis per-user gate keys | ✅ | — |
-| `first_win` quorum | ✅ | — |
-| `all` quorum | ✅ (auto-complete remotes) | Real remote POST endpoint + removal of auto-complete |
-| `team_choice` proxy wiring | ✅ (placeholder input func) | Real Redis pub/sub delivery to `UserProxyAgent.input_func` |
-| `UserInputRequestedEvent` SSE breadcrumb | ✅ | WebSocket delivery |
-| Remote user respond UI | ❌ | WebSocket chat panel / link |
-| Remote user respond HTTP endpoint | ❌ | New route + view |
-| Redis pub/sub on gate response | ❌ | Publish on `store_gate_response` |
-| `consumers.py` WebSocket subscription | ❌ | Subscribe to readiness channel |
+Implemented now:
+
+- Remote user respond page/UI and public respond endpoint are live.
+- Host and remote WebSocket subscriptions are live (`HostSessionConsumer`,
+    `RemoteUserReadinessConsumer`, `RemoteChatConsumer`).
+- `first_win` and `all` quorum modes use Redis gate responses, winner lock, and
+    pending-task handoff for run replay.
+
+Still deferred:
+
+- `team_choice` live remote input to `UserProxyAgent.input_func` (current
+    placeholder still returns immediate default input).
 
 ---
 
@@ -35,7 +34,8 @@ Required reading before:
 2. **`expected_names` ordering is fixed**: gate user first, then remote users in project config order. This order governs both discussion entry insertion and the composed task.
 3. **Discussion entries are inserted atomically by the winner** — only after `claim_gate_winner()` returns True.
 4. **`pop_pending_task()` is the handoff from respond-view to event_stream** — it is called once at run start and consumed atomically. A second call returns None.
-5. **Phase 1 auto-complete must be removed in Phase 2** — the `all`-quorum auto-complete block in `chat_session_respond` is a temporary stand-in for real remote user responses.
+5. **`all` mode requires explicit host final Continue** after all expected responder payloads are present; quorum completion is not auto-advanced by backend polling.
+6. **Host WS continuity is required** — `home.js` must keep `/ws/session/<session_id>/` connected (including newly created sessions) so live remote bubbles and `first_win` `quorum_committed` resume signals are received.
 
 ---
 
@@ -196,12 +196,10 @@ Task is in Redis, not in the response body. Frontend triggers `/run/` which pops
 ```
 store_gate_response(session_id, gate_name, text, attachment_ids)
 
-# Phase 1 ONLY — remove in Phase 2:
-for ru in remote_users:
-    store_gate_response(session_id, ru["name"], "", [])
-
 all_present, collected = check_all_gate_responses(session_id, expected_names)
 if not all_present → HTTP 202 {"status": "waiting"}
+
+publish_remote_user_event(..., {"type": "quorum_progress", ...})
 
 claim_gate_winner(session_id, gate_name)  →  False → HTTP 202 {"status": "waiting"}
 
@@ -226,8 +224,14 @@ composed_task = "\n\n".join(
 store_pending_task(session_id, composed_task, gate_attachment_ids)
 clear_gate_responses(session_id, expected_names)
 set_session_status(session_id, "idle")
-return {"status": "ok", "task": "", "attachment_ids": []}
+publish_remote_user_event(..., {"type": "quorum_committed", ...})
+return {"status": "ok", "task": "", "attachment_ids": [], "pending_task_ready": True}
 ```
+
+Remote responders in `all` mode return HTTP 202 with:
+
+- `{status: "waiting", all_present: false}` while quorum is still collecting.
+- `{status: "waiting_host", all_present: true}` once all expected payloads are present and host final continue is required.
 
 ---
 
@@ -264,9 +268,9 @@ elif type(msg).__name__ == "UserInputRequestedEvent":
     })
 ```
 
-This event fires when the AutoGen runtime calls the `UserProxyAgent.input_func`. In Phase 1
-the func returns `"Continue."` immediately so the SSE is informational only. In Phase 2 this
-event triggers a WebSocket push to the remote user's browser.
+This event fires when the AutoGen runtime calls the `UserProxyAgent.input_func`.
+Current implementation keeps this as an informational breadcrumb while team-choice
+live remote input remains deferred.
 
 ---
 
@@ -298,34 +302,9 @@ automatically accounts for proxy turns.
 
 ---
 
-## Phase 2 implementation hooks
+## Deferred implementation hooks
 
-When implementing real remote-user responses (WebSocket phase):
-
-### New files
-
-- `server/remote_user_views.py` — `remote_user_respond(request, session_id)` endpoint
-- Add route in `server/urls.py`: `POST /chat/sessions/<session_id>/remote-respond/`
-
-### Changes to `agents/session_coordination.py`
-
-After `store_gate_response(...)` in the new remote respond endpoint:
-
-```python
-# Publish readiness event so WebSocket consumer can notify all participants
-redis.publish(
-    f"{_namespace()}:gate_readiness:{session_id}",
-    json.dumps({"responder": responder_name}),
-)
-```
-
-### Changes to `server/consumers.py`
-
-Subscribe to `gate_readiness:{session_id}` channel. On message: run
-`check_all_gate_responses` and push a `gate_progress` WebSocket message
-to all session participants.
-
-### Changes to `team_choice` input func
+### Team-choice live input (deferred)
 
 Replace the placeholder func with an async func that:
 1. Subscribes to a Redis pub/sub channel `{NS}:proxy_input:{session_id}:{proxy_name}`
@@ -333,19 +312,6 @@ Replace the placeholder func with an async func that:
 3. Returns the remote user's text payload
 
 Publish the message from the remote user's HTTP POST endpoint.
-
-### Remove Phase 1 auto-complete
-
-In `chat_session_respond`, `quorum == "all"` path: delete the block:
-
-```python
-# Phase 1 ONLY — remove in Phase 2:
-for ru in remote_users:
-    store_gate_response(session_id, ru["name"], "", [])
-```
-
-Replace with: only proceed to the `check_all_gate_responses` check;
-return HTTP 202 for gate user until all remotes have called the new remote-respond endpoint.
 
 ---
 
@@ -426,8 +392,8 @@ Resolution order: Redis quorum override → project config quorum → `"na"`.
 | `server/util.py` | `QUORUM_OPTIONS`, `VALID_QUORUM_VALUES` (single source) |
 | `server/remote_user_views.py` | `set_session_quorum_view` validation |
 | `server/services.py` | `create_chat_session`, `normalize_chat_session` |
-| `server/urls.py` | Phase 2: new remote-respond route |
-| `server/consumers.py` | Phase 2: WebSocket gate readiness subscription |
+| `server/urls.py` | Route wiring for host and remote quorum endpoints |
+| `server/consumers.py` | WebSocket quorum/reply event fanout for host and remotes |
 | `server/static/server/js/home.js` | `_renderQuorumDropdown`, reconnect bootstrap paths |
 | `server/templates/server/home.html` | `window._quorumOptions` JSON injection |
 | `server/templates/server/partials/config_form.html` | Quorum `<select>` template loop |
@@ -442,7 +408,7 @@ Resolution order: Redis quorum override → project config quorum → `"na"`.
 ## AGENTS.md rules that apply
 
 - Rule 58 — Active run coordination is Redis-backed and fail-fast
-- Rule 68 — Single-assistant chat mode / remote users behavior
-- Rule 69 — `AgentMessageTermination` for all team termination (proxies count in `n_agents`)
-- Rule 77 — Mongo collection name constants (`CHAT_SESSIONS_COLLECTION`)
+- Rule 69 — Single-assistant chat mode / remote users behavior
+- Rule 70 — `AgentMessageTermination` for all team termination (proxies count in `n_agents`)
+- Rule 78 — Mongo collection name constants (`CHAT_SESSIONS_COLLECTION`)
 - Rule 57 — Datetime storage standard (`utc_now()`, BSON Date)

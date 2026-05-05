@@ -495,6 +495,175 @@ class RemoteUserReadinessConsumer:
         return session, project, participant_names, project_quorum
 
 
+class HostSessionConsumer:
+    """Host-facing WebSocket stream for realtime session pub/sub updates.
+
+    Auth: ``?skey=<APP_SECRET_KEY>``.
+    Events forwarded:
+      - session message channel payloads (agent + user messages)
+      - remote readiness/quorum events (progress/committed)
+    """
+
+    channel_layer = None
+    channel_layer_alias = "default"
+
+    def __init__(self, scope, receive, send):
+        self.scope = scope
+        self._receive = receive
+        self._send = send
+        self._session_id: str = ""
+        self._listen_task: asyncio.Task | None = None
+        self._closed = False
+
+    @classmethod
+    def as_asgi(cls):
+        async def app(scope, receive, send):
+            consumer = cls(scope, receive, send)
+            await consumer.__call__(scope, receive, send)
+        return app
+
+    async def __call__(self, scope, receive, send):
+        self._receive = receive
+        self._send = send
+
+        if scope["type"] != "websocket":
+            return
+
+        self._session_id = scope["url_route"]["kwargs"]["session_id"]
+        qs = dict(
+            pair.split("=", 1)
+            for pair in (scope.get("query_string", b"").decode().split("&"))
+            if "=" in pair
+        )
+        skey = qs.get("skey", "")
+        app_secret = getattr(settings, "APP_SECRET_KEY", "") or ""
+        if not app_secret or skey != app_secret:
+            await send({"type": "websocket.close", "code": 4003})
+            return
+
+        await send({"type": "websocket.accept"})
+        try:
+            await self._handle()
+        finally:
+            if self._listen_task and not self._listen_task.done():
+                self._listen_task.cancel()
+                try:
+                    await self._listen_task
+                except (asyncio.CancelledError, Exception):
+                    pass
+            if not self._closed:
+                self._closed = True
+                try:
+                    await send({"type": "websocket.close", "code": 1000})
+                except Exception:
+                    pass
+
+    async def _handle(self):
+        import asyncio as _asyncio
+
+        session_id = self._session_id
+        initial = await _asyncio.to_thread(self._load_initial_state, session_id)
+        if isinstance(initial, dict):
+            await self._send_json(initial)
+        self._listen_task = _asyncio.ensure_future(self._listen_redis(session_id))
+        try:
+            while not self._closed:
+                msg = await self._receive()
+                if msg["type"] == "websocket.disconnect":
+                    self._closed = True
+                    break
+        finally:
+            if self._listen_task and not self._listen_task.done():
+                self._listen_task.cancel()
+
+    async def _listen_redis(self, session_id: str):
+        import redis.asyncio as aioredis
+        from agents.session_coordination import (  # type: ignore[attr-defined]
+            _remote_user_pubsub_channel,
+            _session_message_channel,
+        )
+
+        msg_channel = _session_message_channel(session_id)
+        readiness_channel = _remote_user_pubsub_channel(session_id)
+        redis_url = getattr(settings, "REDIS_URI", "redis://localhost:6379/0")
+
+        try:
+            async with aioredis.from_url(redis_url, decode_responses=True) as client:
+                async with client.pubsub() as ps:
+                    await ps.subscribe(msg_channel, readiness_channel)
+                    async for raw_msg in ps.listen():
+                        if self._closed:
+                            break
+                        if raw_msg.get("type") != "message":
+                            continue
+                        try:
+                            payload = json.loads(raw_msg["data"])
+                        except (ValueError, KeyError):
+                            continue
+                        await self._send_json(payload)
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logger.exception(
+                "agents.host_session.ws_listen_error",
+                extra={"session_id": session_id},
+            )
+
+    async def _send_json(self, data: dict):
+        try:
+            await self._send({"type": "websocket.send", "text": json.dumps(data)})
+        except Exception:
+            pass
+
+    @staticmethod
+    def _load_initial_state(session_id: str) -> dict | None:
+        try:
+            from server import services
+            from agents.session_coordination import check_all_gate_responses, get_remote_user_statuses
+
+            session = services.get_chat_session(session_id)
+            if not isinstance(session, dict):
+                return None
+            if session.get("status") != "awaiting_input":
+                return None
+
+            project = services.get_project(session.get("project_id", ""))
+            if not isinstance(project, dict):
+                return None
+
+            gate = project.get("human_gate") or {}
+            quorum = gate.get("quorum") or "na"
+            if quorum != "all":
+                return None
+
+            gate_name = gate.get("name") or "You"
+            remote_users = gate.get("remote_users") or []
+            remote_names = [
+                ru.get("name")
+                for ru in remote_users
+                if isinstance(ru, dict) and ru.get("name")
+            ]
+            statuses = get_remote_user_statuses(session_id, remote_names)
+            active_remotes = [n for n in remote_names if statuses.get(n, "offline") != "ignored"]
+            expected = [gate_name] + active_remotes
+            round_number = int(session.get("current_round") or 1)
+            all_present, responses = check_all_gate_responses(
+                session_id,
+                expected,
+                round_number=round_number,
+            )
+            return {
+                "type": "quorum_progress",
+                "round": round_number,
+                "quorum": "all",
+                "expected": expected,
+                "received": list((responses or {}).keys()),
+                "all_present": all_present,
+            }
+        except Exception:
+            return None
+
+
 # ---------------------------------------------------------------------------
 # Remote-chat consumer — remote user receives live messages from agents
 # ---------------------------------------------------------------------------
@@ -673,6 +842,7 @@ class RemoteChatConsumer:
                 "agent_name": d.get("agent_name", ""),
                 "role": d.get("role", ""),
                 "content": d.get("content", ""),
+                "attachments": d.get("attachments") or [],
                 "timestamp": ts if isinstance(ts, str) else (ts.isoformat() if hasattr(ts, "isoformat") else ""),
             })
         return result

@@ -11,6 +11,7 @@ import asyncio
 import io
 import json
 import logging
+from typing import Iterable
 from urllib.parse import quote
 from datetime import datetime, timezone
 from uuid import uuid4
@@ -358,6 +359,170 @@ def _build_agent_task_for_run(task_text: str, session_id: str, attachment_ids):
         return task_text
 
     return MultiModalMessage(content=content, source="user")
+
+
+def _resolve_gate_expected_names(project: dict, session_id: str, gate_name: str) -> list[str]:
+    """Return quorum participant names for the current gate round.
+
+    Remote users marked as ignored for this session are excluded from the
+    required responder list.
+    """
+    remote_users = (project.get("human_gate") or {}).get("remote_users") or []
+    remote_names = [
+        ru["name"]
+        for ru in remote_users
+        if isinstance(ru, dict) and ru.get("name")
+    ]
+    if not remote_names:
+        return [gate_name]
+
+    try:
+        from agents.session_coordination import get_remote_user_statuses
+        statuses = get_remote_user_statuses(session_id, remote_names)
+    except Exception:
+        statuses = {}
+
+    active_remote_names = [
+        name for name in remote_names
+        if statuses.get(name, "offline") != "ignored"
+    ]
+    return [gate_name] + active_remote_names
+
+
+def _append_user_message_and_publish(
+    *,
+    session_id: str,
+    agent_name: str,
+    text: str,
+    attachment_ids: list[str] | None,
+    origin: str,
+) -> dict:
+    """Persist one user message to discussions and publish it to session pub/sub."""
+    message_id = str(uuid4())
+    attachments = attachment_service.bind_attachments_to_message(
+        session_id=session_id,
+        message_id=message_id,
+        attachment_ids=attachment_ids or [],
+    )
+    display_attachments = _enrich_attachments_for_display(session_id, attachments)
+    ts_dt = datetime.now(timezone.utc)
+    record = {
+        "id": message_id,
+        "agent_name": agent_name,
+        "role": "user",
+        "content": text,
+        "attachments": display_attachments,
+        "timestamp": ts_dt,
+    }
+    services.append_messages(session_id, [record])
+
+    sse_record = dict(record)
+    sse_record["timestamp"] = ts_dt.isoformat()
+    sse_record["user_origin"] = origin
+    _publish_session_message_safe(session_id, sse_record)
+    return record
+
+
+def _ordered_quorum_names_for_compose(project: dict, expected_names: Iterable[str], gate_name: str) -> list[str]:
+    """Return composition order: configured remote users first, then gate user."""
+    expected = [name for name in (expected_names or []) if isinstance(name, str) and name.strip()]
+    expected_set = set(expected)
+
+    remote_users = (project.get("human_gate") or {}).get("remote_users") or []
+    ordered: list[str] = []
+
+    for ru in remote_users:
+        if not isinstance(ru, dict):
+            continue
+        name = (ru.get("name") or "").strip()
+        if not name or name == gate_name:
+            continue
+        if name in expected_set and name not in ordered:
+            ordered.append(name)
+
+    for name in expected:
+        if name == gate_name:
+            continue
+        if name not in ordered:
+            ordered.append(name)
+
+    if gate_name in expected_set:
+        ordered.append(gate_name)
+    return ordered
+
+
+def _build_quorum_composed_payload(
+    session_id: str,
+    project: dict,
+    expected_names: list[str],
+    responses: dict,
+    gate_name: str,
+    winner_name: str | None = None,
+) -> tuple[str, list[str]]:
+    """Build composed markdown payload and merged attachment ids for quorum runs."""
+    responder_order = [winner_name] if winner_name else _ordered_quorum_names_for_compose(
+        project,
+        expected_names,
+        gate_name,
+    )
+
+    lookup_ids: list[str] = []
+    seen_lookup: set[str] = set()
+    for responder in responder_order:
+        payload = (responses or {}).get(responder) or {}
+        for raw_id in payload.get("attachment_ids") or []:
+            aid = str(raw_id or "").strip()
+            if not aid or aid in seen_lookup:
+                continue
+            lookup_ids.append(aid)
+            seen_lookup.add(aid)
+
+    descriptors = attachment_service.get_attachment_descriptors(
+        session_id=session_id,
+        attachment_ids=lookup_ids,
+    )
+    descriptor_by_id = {d.get("id"): d for d in descriptors}
+
+    sections: list[str] = []
+    merged_attachment_ids: list[str] = []
+    seen_merged: set[str] = set()
+
+    for responder in responder_order:
+        payload = (responses or {}).get(responder) or {}
+        text = (payload.get("text") or "").strip()
+        attachment_ids = [
+            str(raw_id or "").strip()
+            for raw_id in (payload.get("attachment_ids") or [])
+            if str(raw_id or "").strip()
+        ]
+
+        if not text and not attachment_ids:
+            continue
+
+        if responder == gate_name:
+            header = f"### Gate user {responder}:"
+        else:
+            header = f"### Remote User {responder}:"
+
+        lines = [header]
+        if text:
+            lines.append(text)
+
+        lines.append("attachment references:")
+        for aid in attachment_ids:
+            if aid not in seen_merged:
+                seen_merged.add(aid)
+                merged_attachment_ids.append(aid)
+            descriptor = descriptor_by_id.get(aid) or {}
+            filename = descriptor.get("filename") or aid
+            url = f"/chat/sessions/{session_id}/attachments/{aid}/content/"
+            lines.append(f"- {filename}: {url}")
+
+        sections.append("\n".join(lines))
+
+    if not sections:
+        return "", []
+    return "## User Replies\n\n" + "\n\n".join(sections), merged_attachment_ids
 
 
 def _build_export_meta(project):
@@ -810,6 +975,22 @@ def _publish_session_message_safe(session_id: str, sse_record: dict) -> None:
         pass
 
 
+def _publish_session_event_safe(session_id: str, event_name: str, payload: dict | None = None) -> None:
+    """Publish a non-message session event for remote user live UI sync.
+
+    Event publishing is best-effort and must never block the host run stream.
+    """
+    try:
+        from agents.session_coordination import publish_session_message
+        publish_session_message(session_id, {
+            "type": "run_status",
+            "event": event_name,
+            **(payload or {}),
+        })
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _friendly_run_error(exc: Exception) -> str:
     """Return a user-readable error string for agent run failures.
 
@@ -1071,6 +1252,7 @@ async def chat_session_run(request, session_id):
                     extra={"session_id": session_id, "phase": "release_conflict"},
                 )
             return util.json_error("Session status changed before run start.", 409)
+        _publish_session_event_safe(session_id, "running", {"status": "running"})
         # Clean up the OAuth readiness counter — it is no longer needed once running.
         from agents.session_coordination import delete_mcp_oauth_readiness
         await asyncio.to_thread(delete_mcp_oauth_readiness, session_id)
@@ -1171,6 +1353,7 @@ async def chat_session_run(request, session_id):
                     except Exception:
                         evict_team(session_id)
                         await asyncio.to_thread(services.set_session_status, session_id, "stopped")
+                        _publish_session_event_safe(session_id, "stopped", {"status": "stopped"})
                         yield _sse("error", {"message": "Unable to restart: state version mismatch."})
                         return
         except Exception as exc:
@@ -1194,6 +1377,11 @@ async def chat_session_run(request, session_id):
                 await asyncio.to_thread(
                     services.set_session_awaiting_oauth, session_id, pending_oauth_mid
                 )
+                _publish_session_event_safe(
+                    session_id,
+                    "awaiting_mcp_oauth",
+                    {"status": "awaiting_mcp_oauth"},
+                )
                 logger.info(
                     "agents.mcp.oauth_gate_blocked_midrun",
                     extra={
@@ -1205,6 +1393,7 @@ async def chat_session_run(request, session_id):
                 yield _sse("awaiting_mcp_oauth", {"servers": pending_oauth_mid})
                 return
             await asyncio.to_thread(services.set_session_status, session_id, "idle")
+            _publish_session_event_safe(session_id, "idle", {"status": "idle"})
             yield _sse("error", {"message": str(exc)})
             return
         
@@ -1291,6 +1480,16 @@ async def chat_session_run(request, session_id):
                     "attachments": attachments_for_display,
                     "timestamp": datetime.now(timezone.utc),  # BSON Date in MongoDB
                 })
+                if (project.get("human_gate") or {}).get("remote_users"):
+                    _publish_session_message_safe(session_id, {
+                        "id": human_message_id,
+                        "agent_name": human_name,
+                        "role": "user",
+                        "content": task,
+                        "attachments": attachments_for_display,
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "user_origin": "host",
+                    })
                 task = task_for_agent
             else:
                 task_for_agent = task
@@ -1345,12 +1544,25 @@ async def chat_session_run(request, session_id):
                                 "max_rounds": None if is_single_assistant_chat_mode else max_iter,
                                 "human_name": project["human_gate"]["name"],
                                 "chat_mode": "single_assistant" if is_single_assistant_chat_mode else "team",
+                                "quorum": (project.get("human_gate") or {}).get("quorum") or "na",
                             }
                             if export_meta:
                                 gate_data["export"] = export_meta
+                            _publish_session_event_safe(
+                                session_id,
+                                "awaiting_input",
+                                {
+                                    "status": "awaiting_input",
+                                    "round": gate_data["round"],
+                                    "max_rounds": gate_data["max_rounds"] or 0,
+                                    "chat_mode": gate_data["chat_mode"],
+                                    "quorum": gate_data.get("quorum") or "na",
+                                },
+                            )
                             yield _sse("gate", gate_data)
                         else:
                             await asyncio.to_thread(services.set_session_status, session_id, "completed")
+                            _publish_session_event_safe(session_id, "completed", {"status": "completed"})
                             evict_team(session_id)
                             done_data = {"status": "completed", "round": current_round}
                             if export_meta:
@@ -1420,6 +1632,7 @@ async def chat_session_run(request, session_id):
                     # Stop should still succeed even if persistence fails here.
                     pass
                 await asyncio.to_thread(services.set_session_status, session_id, "stopped")
+                _publish_session_event_safe(session_id, "stopped", {"status": "stopped"})
                 evict_team(session_id)
                 if lease_lost:
                     yield _sse("error", {"message": "Run lease lost; session stopped."})
@@ -1452,6 +1665,7 @@ async def chat_session_run(request, session_id):
                         extra={"session_id": session_id},
                     )
                 await asyncio.to_thread(services.set_session_status, session_id, "idle")
+                _publish_session_event_safe(session_id, "idle", {"status": "idle"})
                 evict_team(session_id)
                 # AutoGen's BaseGroupChat wraps exceptions as:
                 #   raise RuntimeError(str(message.error))
@@ -1549,6 +1763,12 @@ def chat_session_respond(request, session_id):
         return util.json_error("Session not found", 404)
 
     if session["status"] != "awaiting_input":
+        current_status = str(session.get("status") or "")
+        if current_status == "idle":
+            return util.json_response({
+                "status": "stale",
+                "message": "This gate round is already committed. Waiting for run to resume.",
+            }, status=409)
         return util.json_error(f"Session is not awaiting input (status: {session['status']})", 409)
 
     action = request.POST.get("action", "").strip()
@@ -1566,7 +1786,9 @@ def chat_session_respond(request, session_id):
         quorum = (project.get("human_gate") or {}).get("quorum") or "na" if project else "na"
         remote_users = (project.get("human_gate") or {}).get("remote_users") or []
         gate_name = (project.get("human_gate") or {}).get("name") or "You" if project else "You"
+        round_number = int(session.get("current_round") or 1)
 
+        # No-remote mode: standard gate continue with immediate run resume.
         if quorum in ("na", "team_choice") or not remote_users:
             # No quorum — standard gate: gate user responds, run resumes immediately.
             services.set_session_status(session_id, "idle")
@@ -1581,115 +1803,151 @@ def chat_session_respond(request, session_id):
             check_all_gate_responses,
             claim_gate_winner,
             clear_gate_responses,
+            get_gate_response,
+            publish_remote_user_event,
             store_gate_response,
             store_pending_task,
         )
 
-        expected_names = [gate_name] + [ru["name"] for ru in remote_users]
+        expected_names = _resolve_gate_expected_names(project, session_id, gate_name)
 
+        # first_win mode: first accepted response commits the round immediately.
         if quorum == "first_win":
             # Atomic winner claim: only the first POST proceeds.
-            claimed = claim_gate_winner(session_id, gate_name)
+            claimed = claim_gate_winner(session_id, gate_name, round_number=round_number)
             if not claimed:
-                return HttpResponse(
-                    util.json_dumps({"error": "Another response has already continued this session."}),
-                    status=409,
-                    content_type="application/json",
-                )
-            store_gate_response(session_id, gate_name, text, attachment_ids)
-            # Persist the gate user's discussion entry.
-            human_message_id = str(uuid4())
-            attachments = attachment_service.bind_attachments_to_message(
-                session_id=session_id,
-                message_id=human_message_id,
-                attachment_ids=attachment_ids,
+                return util.json_response({
+                    "status": "locked",
+                    "message": "Another participant already continued this run.",
+                }, status=409)
+            store_gate_response(
+                session_id,
+                gate_name,
+                text,
+                attachment_ids,
+                round_number=round_number,
             )
-            services.append_messages(session_id, [{
-                "id": human_message_id,
-                "agent_name": gate_name,
-                "role": "user",
-                "content": text,
-                "attachments": _enrich_attachments_for_display(session_id, attachments),
-                "timestamp": datetime.now(timezone.utc),
-            }])
-            # Store task in Redis; run start consumes it without inserting a duplicate entry.
-            if text or attachment_ids:
-                store_pending_task(session_id, text, attachment_ids)
-            clear_gate_responses(session_id, expected_names)
+            _append_user_message_and_publish(
+                session_id=session_id,
+                agent_name=gate_name,
+                text=text,
+                attachment_ids=attachment_ids,
+                origin="host",
+            )
+            composed_task, merged_attachment_ids = _build_quorum_composed_payload(
+                session_id,
+                project,
+                expected_names,
+                {gate_name: {"text": text, "attachment_ids": attachment_ids}},
+                gate_name,
+                winner_name=gate_name,
+            )
+            if composed_task or merged_attachment_ids:
+                store_pending_task(session_id, composed_task, merged_attachment_ids)
+            clear_gate_responses(session_id, expected_names, round_number=round_number)
             services.set_session_status(session_id, "idle")
+            publish_remote_user_event(session_id, {
+                "type": "quorum_committed",
+                "round": round_number,
+                "quorum": "first_win",
+                "winner": gate_name,
+            })
             return HttpResponse(
-                util.json_dumps({"status": "ok", "task": "", "attachment_ids": []}),
+                util.json_dumps({
+                    "status": "ok",
+                    "task": "",
+                    "attachment_ids": [],
+                    "pending_task_ready": True,
+                }),
                 content_type="application/json",
             )
 
-        # quorum == "all"
-        store_gate_response(session_id, gate_name, text, attachment_ids)
-        # Phase 1: remote users have no respond UI yet — auto-complete with empty entries
-        # so the gate user's single POST always satisfies the quorum condition.
-        for ru in remote_users:
-            store_gate_response(session_id, ru["name"], "", [])
-        all_present, responses = check_all_gate_responses(session_id, expected_names)
-        if not all_present:
-            # Guarded against in phase 1 (all remotes auto-completed above) but
-            # kept for correctness when real remote-user posting is added.
+        # all mode: collect every responder, then host explicitly finalizes continue.
+        if quorum == "all":
+            existing_gate = get_gate_response(session_id, gate_name, round_number=round_number) or {}
+            if not existing_gate:
+                store_gate_response(
+                    session_id,
+                    gate_name,
+                    text,
+                    attachment_ids,
+                    round_number=round_number,
+                )
+                if text or attachment_ids:
+                    _append_user_message_and_publish(
+                        session_id=session_id,
+                        agent_name=gate_name,
+                        text=text,
+                        attachment_ids=attachment_ids,
+                        origin="host",
+                    )
+            all_present, responses = check_all_gate_responses(
+                session_id,
+                expected_names,
+                round_number=round_number,
+            )
+            publish_remote_user_event(session_id, {
+                "type": "quorum_progress",
+                "round": round_number,
+                "quorum": "all",
+                "expected": expected_names,
+                "received": list(responses.keys()),
+                "all_present": all_present,
+            })
+            if not all_present:
+                return HttpResponse(
+                    util.json_dumps({"status": "waiting", "received": len(responses), "expected": len(expected_names)}),
+                    status=202,
+                    content_type="application/json",
+                )
+            # Quorum met and host confirmed final continue. Claim winner atomically
+            # to prevent duplicate run starts from racing submits.
+            claimed = claim_gate_winner(session_id, gate_name, round_number=round_number)
+            if not claimed:
+                return HttpResponse(
+                    util.json_dumps({"status": "waiting"}),
+                    status=202,
+                    content_type="application/json",
+                )
+            composed_task, combined_attachment_ids = _build_quorum_composed_payload(
+                session_id,
+                project,
+                expected_names,
+                responses,
+                gate_name,
+            )
+            logger.info(
+                "agents.session.quorum_composed",
+                extra={
+                    "session_id": session_id,
+                    "round": round_number,
+                    "quorum": "all",
+                    "participants": len(expected_names),
+                    "text_segments": composed_task.count("### "),
+                    "attachment_count": len(combined_attachment_ids),
+                },
+            )
+            if composed_task or combined_attachment_ids:
+                store_pending_task(session_id, composed_task, combined_attachment_ids)
+            clear_gate_responses(session_id, expected_names, round_number=round_number)
+            services.set_session_status(session_id, "idle")
+            publish_remote_user_event(session_id, {
+                "type": "quorum_committed",
+                "round": round_number,
+                "quorum": "all",
+                "winner": gate_name,
+            })
             return HttpResponse(
-                util.json_dumps({"status": "waiting", "received": len(responses), "expected": len(expected_names)}),
-                status=202,
+                util.json_dumps({
+                    "status": "ok",
+                    "task": "",
+                    "attachment_ids": [],
+                    "pending_task_ready": True,
+                }),
                 content_type="application/json",
             )
-        # Atomic winner claim prevents double-resume when two responses race to
-        # complete the quorum simultaneously.
-        claimed = claim_gate_winner(session_id, gate_name)
-        if not claimed:
-            return HttpResponse(
-                util.json_dumps({"status": "waiting"}),
-                status=202,
-                content_type="application/json",
-            )
-        # Insert ordered discussion entries: gate user first, then remote users
-        # in project config order (matches expected_names order).
-        discussion_entries = []
-        human_message_id = str(uuid4())
-        attachments = attachment_service.bind_attachments_to_message(
-            session_id=session_id,
-            message_id=human_message_id,
-            attachment_ids=attachment_ids,
-        )
-        discussion_entries.append({
-            "id": human_message_id,
-            "agent_name": gate_name,
-            "role": "user",
-            "content": text,
-            "attachments": _enrich_attachments_for_display(session_id, attachments),
-            "timestamp": datetime.now(timezone.utc),
-        })
-        for ru in remote_users:
-            ru_data = responses.get(ru["name"], {})
-            ru_text = ru_data.get("text") or ""
-            if ru_text:
-                discussion_entries.append({
-                    "id": str(uuid4()),
-                    "agent_name": ru["name"],
-                    "role": "user",
-                    "content": ru_text,
-                    "attachments": [],
-                    "timestamp": datetime.now(timezone.utc),
-                })
-        services.append_messages(session_id, discussion_entries)
-        # Compose task: join all non-empty responder texts.
-        all_texts = [text] + [
-            (responses.get(ru["name"]) or {}).get("text") or ""
-            for ru in remote_users
-        ]
-        composed_task = "\n\n".join(t for t in all_texts if t.strip())
-        if composed_task or attachment_ids:
-            store_pending_task(session_id, composed_task, attachment_ids)
-        clear_gate_responses(session_id, expected_names)
-        services.set_session_status(session_id, "idle")
-        return HttpResponse(
-            util.json_dumps({"status": "ok", "task": "", "attachment_ids": []}),
-            content_type="application/json",
-        )
+
+        return util.json_error("Unsupported quorum mode for gate continue.", 409)
 
     return HttpResponse(util.json_dumps({"error": "Invalid action"}), status=400,
                         content_type="application/json")

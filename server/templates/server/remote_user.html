@@ -27,7 +27,7 @@
   </main>
   {% else %}
 
-  <main class="remote-user-page__main" id="remote-chat-main">
+  <main class="remote-user-page__main" id="remote-chat-main" data-session-status="{{ session_status|default:'idle' }}">
 
     {# Reuse the home chat-messages scroll container — all bubble styles are shared #}
     <div class="chat-messages" id="remote-chat-messages">
@@ -36,10 +36,22 @@
           {% if d.role == 'user' %}
             <div class="chat-bubble chat-bubble--human" data-raw-content="{{ d.content }}">
               <div class="chat-bubble__meta">
-                <span class="chat-bubble__name">{{ user_name|default:"You" }}</span>
+                <span class="chat-bubble__name">{{ d.agent_name|default:user_name|default:"You" }}</span>
                 {% if d.timestamp %}<span class="chat-bubble__time"><time class="local-time" data-utc="{{ d.timestamp }}">{{ d.timestamp }}</time></span>{% endif %}
               </div>
               <div class="chat-bubble__content">{{ d.content|markdownify }}</div>
+              {% if d.attachments %}
+                <div class="chat-message-attachments">
+                  {% for att in d.attachments %}
+                    <a class="chat-message-attachment" href="{{ att.content_url }}" target="_blank" rel="noopener noreferrer">
+                      {% if att.thumbnail_url %}
+                        <img class="chat-message-attachment__thumb{% if not att.is_image %} chat-message-attachment__thumb--icon{% endif %}" src="{{ att.thumbnail_url }}" alt="{{ att.filename }}">
+                      {% endif %}
+                      <span class="chat-message-attachment__name">{{ att.filename }}</span>
+                    </a>
+                  {% endfor %}
+                </div>
+              {% endif %}
             </div>
           {% else %}
             <div class="chat-bubble chat-bubble--ai" data-raw-content="{{ d.content }}">
@@ -50,14 +62,32 @@
                   {% if d.timestamp %}<span class="chat-bubble__time"><time class="local-time" data-utc="{{ d.timestamp }}">{{ d.timestamp }}</time></span>{% endif %}
                 </div>
                 <div class="chat-bubble__content">{{ d.content|markdownify }}</div>
+                {% if d.attachments %}
+                  <div class="chat-message-attachments">
+                    {% for att in d.attachments %}
+                      <a class="chat-message-attachment" href="{{ att.content_url }}" target="_blank" rel="noopener noreferrer">
+                        {% if att.thumbnail_url %}
+                          <img class="chat-message-attachment__thumb{% if not att.is_image %} chat-message-attachment__thumb--icon{% endif %}" src="{{ att.thumbnail_url }}" alt="{{ att.filename }}">
+                        {% endif %}
+                        <span class="chat-message-attachment__name">{{ att.filename }}</span>
+                      </a>
+                    {% endfor %}
+                  </div>
+                {% endif %}
               </div>
             </div>
           {% endif %}
         {% endfor %}
       {% else %}
+        {% if session_status != 'awaiting_input' and session_status != 'running' %}
         <div class="remote-user-page__waiting">
           <p>Waiting for the session to start&hellip;</p>
         </div>
+        {% endif %}
+      {% endif %}
+
+      {% if session_status == "running" %}
+        <div class="chat-status-badge chat-status-badge--running">&#x2699; Agents at work</div>
       {% endif %}
     </div>
 
@@ -84,6 +114,7 @@
     window._remoteUserToken = "{{ token }}";
     window._remoteUserName  = "{{ user_name }}";
     window._remoteSessionId = "{{ session_id }}";
+    window._remoteGateContext = {% if gate_context %}{"round": {{ gate_context.round }}, "max_rounds": {{ gate_context.max_rounds }}, "chat_mode": "{{ gate_context.chat_mode }}", "quorum": "{{ gate_context.quorum }}"}{% else %}null{% endif %};
   </script>
   {% compress js %}
   <script src="{% static 'server/js/remote_user.js' %}"></script>

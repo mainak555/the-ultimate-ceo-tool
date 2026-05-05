@@ -334,6 +334,10 @@ Mode-specific pause behavior:
 - **Single-assistant, no remote users (`n_agents == 1`, `remote_users == []`) — pure chat mode**: gate pauses after every assistant turn and does not auto-complete via `max_iterations`; the human `Stop` action controls termination. Empty Continue (no text, no attachments) is rejected with HTTP 400.
 - **Single-assistant with remote users (`n_agents == 1`, `len(remote_users) >= 1`)**: behaves like multi-assistant — team config is honored and `max_iterations` governs run completion. Empty Continue is allowed. Team Setup is visible in config UI.
 - **`quorum == "team_choice"` with `UserProxyAgent` participants**: proxies are counted in `n_agents`. `AgentMessageTermination` fires after one full round that includes proxy turns. The `is_single_assistant_gate`/`is_single_assistant_chat_mode` check uses `session["remote_users"]` (session snapshot), so this mode is never mistakenly classified as pure single-assistant chat mode.
+- **Remote quorum runtime semantics**:
+   - `first_win`: first accepted responder (host or remote) commits the gate round; host UI auto-replays `/run/` from Redis pending-task handoff.
+   - `all`: host waits until all expected responders submit, then host final Continue commits and resumes.
+   - Late responder conflicts return `stale` / `locked` race outcomes and should be treated as already-committed state.
 
 ---
 

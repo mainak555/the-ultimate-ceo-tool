@@ -16,12 +16,16 @@
 (function () {
   "use strict";
 
-  var token    = window._remoteUserToken || "";
-  var userName = window._remoteUserName  || "You";
-
-  if (!token) return; // Error page â€” nothing to do.
+  var token = window._remoteUserToken || "";
+  var userName = window._remoteUserName || "You";
+  if (!token) return;
 
   var _ws = null;
+  var _seenMessageIds = Object.create(null);
+  var composePendingFiles = [];
+  var composeUploaded = [];
+  var _composerState = "waiting_turn";
+  var _currentGateData = null;
 
   // --------------------------------------------------------------------------
   // Helpers
@@ -57,6 +61,131 @@
     if (c) c.scrollTop = c.scrollHeight;
   }
 
+  function _roundLabel(data) {
+    var d = data || {};
+    var isSingle = d.chat_mode === "single_assistant";
+    var round = Number(d.round || 0);
+    var maxRounds = Number(d.max_rounds || 0);
+    if (isSingle || !maxRounds) return "Round " + round;
+    return "Round " + round + "/" + maxRounds;
+  }
+
+  function _clearGateBadge() {
+    var c = document.getElementById("remote-chat-messages");
+    if (!c) return;
+    var badge = c.querySelector(".chat-status-badge--gate");
+    if (badge) badge.remove();
+  }
+
+  function _setAgentsWorkingBadge(show) {
+    var c = document.getElementById("remote-chat-messages");
+    if (!c) return;
+    var badge = c.querySelector(".chat-status-badge--running");
+    if (!show) {
+      if (badge) badge.remove();
+      return;
+    }
+    if (badge) return;
+    c.insertAdjacentHTML("beforeend", '<div class="chat-status-badge chat-status-badge--running">\u2699 Agents at work</div>');
+    scrollToBottom();
+  }
+
+  function _syncSendEnabled() {
+    var sendBtn = document.getElementById("remote-send-btn");
+    var input = document.getElementById("remote-chat-input");
+    if (!sendBtn) return;
+    if (_composerState !== "active_turn") {
+      sendBtn.disabled = true;
+      return;
+    }
+    var hasText = !!(input && input.value.trim());
+    var hasAttachments = composePendingFiles.length > 0 || composeUploaded.length > 0;
+    sendBtn.disabled = !(hasText || hasAttachments);
+  }
+
+  function _setComposerState(nextState, gateData) {
+    var input = document.getElementById("remote-chat-input");
+    var sendBtn = document.getElementById("remote-send-btn");
+    var attachBtn = document.getElementById("remote-attach-btn");
+    var attachInput = document.getElementById("remote-attach-input");
+
+    _composerState = nextState;
+    if (gateData) _currentGateData = gateData;
+
+    if (nextState === "active_turn") {
+      var roundText = _roundLabel(_currentGateData || {});
+      if (input) {
+        input.disabled = false;
+        input.placeholder = roundText + " - enter your response...";
+      }
+      if (attachBtn) attachBtn.disabled = false;
+      if (attachInput) attachInput.disabled = false;
+      _syncSendEnabled();
+      return;
+    }
+
+    if (nextState === "sending") {
+      if (input) {
+        input.disabled = true;
+        input.placeholder = "Sending response...";
+      }
+      if (attachBtn) attachBtn.disabled = true;
+      if (attachInput) attachInput.disabled = true;
+      if (sendBtn) sendBtn.disabled = true;
+      return;
+    }
+
+    if (input) {
+      input.disabled = true;
+      input.placeholder = "Wait for your turn";
+    }
+    if (attachBtn) attachBtn.disabled = true;
+    if (attachInput) attachInput.disabled = true;
+    if (sendBtn) sendBtn.disabled = true;
+  }
+
+  function _setAwaitingTurn(data) {
+    _setAgentsWorkingBadge(false);
+    _setComposerState("active_turn", data);
+  }
+
+  function _setWaitingTurn() {
+    _clearGateBadge();
+    _setComposerState("waiting_turn");
+  }
+
+  function _applyRunStatus(msg) {
+    var status = (msg && (msg.status || msg.event)) || "";
+    if (!status) return;
+
+    if (status === "running") {
+      _setAgentsWorkingBadge(true);
+      _setWaitingTurn();
+      return;
+    }
+    if (status === "awaiting_input") {
+      _setAwaitingTurn(msg);
+      return;
+    }
+    _setAgentsWorkingBadge(false);
+    _setWaitingTurn();
+  }
+
+  function _initComposerState() {
+    var main = document.getElementById("remote-chat-main");
+    var status = main ? (main.dataset.sessionStatus || "") : "";
+    var gate = window._remoteGateContext || null;
+
+    if (status === "awaiting_input" && gate) {
+      _setAwaitingTurn(gate);
+      return;
+    }
+    if (status === "running") {
+      _setAgentsWorkingBadge(true);
+    }
+    _setWaitingTurn();
+  }
+
   // --------------------------------------------------------------------------
   // Bubble factories â€” identical DOM structure to chat_session_history.html
   // --------------------------------------------------------------------------
@@ -65,7 +194,7 @@
    * Build an agent bubble matching .chat-bubble--ai in chat_session_history.html.
    * @param {object} msg  {agent_name, content, timestamp}
    */
-  function buildAgentBubble(msg) {
+  function buildAssistantBubble(msg) {
     var agentName = msg.agent_name || "Agent";
     var content   = msg.content   || "";
     var ts        = msg.timestamp || "";
@@ -87,6 +216,7 @@
       +     timeHtml
       +   "</div>"
       +   '<div class="chat-bubble__content"></div>'
+      +   renderMessageAttachments(msg.attachments || [])
       + "</div>";
 
     el.querySelector(".chat-bubble__content").innerHTML = renderMd(content);
@@ -97,18 +227,59 @@
    * Build a user bubble matching .chat-bubble--human in chat_session_history.html.
    * @param {string} text  Raw message text.
    */
-  function buildUserBubble(text) {
+  function buildUserBubble(msg) {
+    var displayName = msg.agent_name || userName;
+    var content = msg.content || "";
+    var ts = msg.timestamp || "";
+    var timeHtml = ts
+      ? '<span class="chat-bubble__time"><time class="local-time" data-utc="' + escapeHtml(ts) + '"></time></span>'
+      : "";
     var el = document.createElement("div");
     el.className = "chat-bubble chat-bubble--human";
-    el.dataset.rawContent = text;
+    el.dataset.rawContent = content;
     el.innerHTML =
       '<div class="chat-bubble__meta">'
-      +   '<span class="chat-bubble__name">' + escapeHtml(userName) + "</span>"
+      +   '<span class="chat-bubble__name">' + escapeHtml(displayName) + "</span>"
+      +   timeHtml
       + "</div>"
-      + '<div class="chat-bubble__content"></div>';
+      + '<div class="chat-bubble__content"></div>'
+      + renderMessageAttachments(msg.attachments || []);
 
-    el.querySelector(".chat-bubble__content").innerHTML = renderMd(text);
+    el.querySelector(".chat-bubble__content").innerHTML = renderMd(content);
     return el;
+  }
+
+  function _iconUrlForFile(filename) {
+    var ext = (filename || "").split(".").pop().toLowerCase();
+    var known = {
+      pdf: 1, doc: 1, docx: 1, xls: 1, xlsx: 1, ppt: 1, pptx: 1,
+      csv: 1, txt: 1, json: 1, xml: 1, md: 1,
+    };
+    var name = known[ext] ? ext : "document";
+    return "/static/server/assets/icons/file-" + name + ".svg";
+  }
+
+  function renderMessageAttachments(attachments) {
+    var list = attachments || [];
+    if (!list.length) return "";
+    var html = '<div class="chat-message-attachments">';
+    list.forEach(function (att) {
+      var name = escapeHtml(att.filename || "file");
+      var url = att.content_url || "";
+      var thumbUrl = att.thumbnail_url || (att.is_image ? url : _iconUrlForFile(att.filename || ""));
+      var iconCls = att.is_image
+        ? "chat-message-attachment__thumb"
+        : "chat-message-attachment__thumb chat-message-attachment__thumb--icon";
+      var thumb = thumbUrl
+        ? '<img class="' + iconCls + '" src="' + thumbUrl + '" alt="' + name + '">'
+        : "";
+      html += '<a class="chat-message-attachment" href="' + url + '" target="_blank" rel="noopener noreferrer">'
+        + thumb
+        + '<span class="chat-message-attachment__name">' + name + "</span>"
+        + "</a>";
+    });
+    html += "</div>";
+    return html;
   }
 
   /** Append a pre-built bubble element into the messages container. */
@@ -128,17 +299,183 @@
   function sendMessage() {
     var input = document.getElementById("remote-chat-input");
     if (!input) return;
+    if (_composerState !== "active_turn") return;
     var text = input.value.trim();
+    var hasAttachments = composePendingFiles.length > 0 || composeUploaded.length > 0;
+    if (!text && !hasAttachments) return;
+    _setComposerState("sending");
+
+    ensureComposeAttachmentsUploaded()
+      .then(function (attachmentIds) {
+        var body = new URLSearchParams();
+        body.append("text", text);
+        (attachmentIds || []).forEach(function (id) {
+          if (id) body.append("attachment_ids", id);
+        });
+        return fetch("/remote/join/" + encodeURIComponent(token) + "/respond/", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: body.toString(),
+        });
+      })
+      .then(function (r) {
+        return r.json().then(function (data) {
+          if (!r.ok) {
+            var isGracefulConflict = r.status === 409 && (data.status === "locked" || data.status === "stale");
+            if (!isGracefulConflict && r.status !== 202) {
+              throw new Error(data.error || data.message || "Failed to send response");
+            }
+          }
+          if (data.status === "locked" || data.status === "stale") {
+            input.value = "";
+            input.style.height = "";
+            clearComposeAttachments();
+            _setWaitingTurn();
+            renderStatusNote(data.message || "Another participant already continued this run.");
+            return data;
+          }
+          input.value = "";
+          input.style.height = "";
+          clearComposeAttachments();
+          _setWaitingTurn();
+          return data;
+        });
+      })
+      .catch(function (err) {
+        renderStatusNote(err.message || "Failed to send response.");
+        _setComposerState("active_turn", _currentGateData || {});
+      })
+      .finally(function () {
+        _syncSendEnabled();
+      });
+  }
+
+  function renderStatusNote(text) {
     if (!text) return;
+    var c = document.getElementById("remote-chat-messages");
+    if (!c) return;
+    var el = document.createElement("div");
+    el.className = "chat-status-badge chat-status-badge--remote-users";
+    el.textContent = text;
+    c.appendChild(el);
+    scrollToBottom();
+  }
 
-    appendBubble(buildUserBubble(text));
-    input.value = "";
-    input.style.height = "";
+  function formatBytes(size) {
+    var n = Number(size || 0);
+    if (!n) return "0 B";
+    if (n < 1024) return n + " B";
+    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KB";
+    return (n / (1024 * 1024)).toFixed(1) + " MB";
+  }
 
-    // Forward to backend via WebSocket so it can be processed when ready.
-    if (_ws && _ws.readyState === WebSocket.OPEN) {
-      try { _ws.send(JSON.stringify({ type: "message", content: text })); } catch (_) {}
+  function toUploadRecord(file) {
+    var isImg = /^image\//i.test(file.type || "");
+    return {
+      id: "",
+      filename: file.name,
+      mime_type: file.type || "application/octet-stream",
+      size_bytes: file.size || 0,
+      is_image: isImg,
+      thumbnail_url: isImg ? "" : _iconUrlForFile(file.name),
+      content_url: "",
+      _file: file,
+    };
+  }
+
+  function attachmentChipHtml(att, target, index) {
+    var name = escapeHtml(att.filename || "file");
+    var url = att.content_url || "";
+    var iconCls = att.is_image
+      ? "chat-attachment-chip__thumb"
+      : "chat-attachment-chip__thumb chat-attachment-chip__thumb--icon";
+    var thumb = att.thumbnail_url
+      ? '<img class="' + iconCls + '" src="' + att.thumbnail_url + '" alt="' + name + '">' 
+      : "";
+    var openTag = url
+      ? '<a class="chat-attachment-chip__file" href="' + url + '" target="_blank" rel="noopener noreferrer">'
+      : '<span class="chat-attachment-chip__file">';
+    var closeTag = url ? "</a>" : "</span>";
+
+    return '<div class="chat-attachment-chip">'
+      + thumb
+      + openTag
+      + '<span class="chat-attachment-chip__name">' + name + "</span>"
+      + '<span class="chat-attachment-chip__meta">' + formatBytes(att.size_bytes) + "</span>"
+      + closeTag
+      + '<button class="chat-attachment-chip__remove" type="button" data-attachment-target="' + target + '" data-attachment-index="' + index + '">&#x00D7;</button>'
+      + "</div>";
+  }
+
+  function renderComposeAttachments() {
+    var attachList = document.getElementById("remote-compose-attachments");
+    if (!attachList) return;
+    var all = composeUploaded.concat(composePendingFiles);
+    if (!all.length) {
+      attachList.innerHTML = "";
+      attachList.hidden = true;
+      _syncSendEnabled();
+      return;
     }
+    attachList.hidden = false;
+    attachList.innerHTML = all.map(function (att, idx) {
+      return attachmentChipHtml(att, "compose", idx);
+    }).join("");
+    _syncSendEnabled();
+  }
+
+  function deleteUploadedAttachment(attachmentId) {
+    return fetch(
+      "/remote/join/" + encodeURIComponent(token) + "/attachments/" + encodeURIComponent(attachmentId) + "/delete/",
+      { method: "POST" }
+    ).then(function (r) {
+      return r.json().then(function (data) {
+        if (!r.ok) {
+          throw new Error((data && (data.error || data.message)) || "Failed to delete attachment");
+        }
+        return data;
+      });
+    });
+  }
+
+  function ensureComposeAttachmentsUploaded() {
+    if (!composePendingFiles.length) {
+      return Promise.resolve(composeUploaded.map(function (x) { return x.id; }));
+    }
+    var pending = composePendingFiles.slice();
+    composePendingFiles = [];
+    var form = new FormData();
+    pending.forEach(function (rec) {
+      if (rec && rec._file) form.append("files", rec._file);
+    });
+    return fetch("/remote/join/" + encodeURIComponent(token) + "/attachments/", {
+      method: "POST",
+      body: form,
+    }).then(function (r) {
+      return r.json().then(function (data) {
+        if (!r.ok) throw new Error(data.error || "Attachment upload failed");
+        composeUploaded = composeUploaded.concat(data.attachments || []);
+        renderComposeAttachments();
+        return composeUploaded.map(function (x) { return x.id; });
+      });
+    }).catch(function (err) {
+      composePendingFiles = pending.concat(composePendingFiles);
+      renderComposeAttachments();
+      throw err;
+    });
+  }
+
+  function clearComposeAttachments() {
+    composePendingFiles = [];
+    composeUploaded = [];
+    renderComposeAttachments();
+  }
+
+  function addComposeFiles(fileList) {
+    Array.from(fileList || []).forEach(function (file) {
+      composePendingFiles.push(toUploadRecord(file));
+    });
+    renderComposeAttachments();
   }
 
   // --------------------------------------------------------------------------
@@ -152,6 +489,24 @@
     input.addEventListener("input", function () {
       input.style.height = "";
       input.style.height = Math.min(input.scrollHeight, 160) + "px";
+      _syncSendEnabled();
+    });
+
+    input.addEventListener("paste", function (e) {
+      var files = (e.clipboardData && e.clipboardData.files) || [];
+      if (!files.length) return;
+      e.preventDefault();
+      addComposeFiles(files);
+    });
+
+    input.addEventListener("dragover", function (e) {
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+    });
+
+    input.addEventListener("drop", function (e) {
+      e.preventDefault();
+      addComposeFiles((e.dataTransfer && e.dataTransfer.files) || []);
     });
 
     input.addEventListener("keydown", function (e) {
@@ -172,24 +527,51 @@
   function initAttach() {
     var attachBtn   = document.getElementById("remote-attach-btn");
     var attachInput = document.getElementById("remote-attach-input");
-    var attachList  = document.getElementById("remote-compose-attachments");
     if (!attachBtn || !attachInput) return;
 
     attachBtn.addEventListener("click", function () { attachInput.click(); });
 
     attachInput.addEventListener("change", function () {
-      if (!attachList) return;
-      attachList.innerHTML = "";
-      if (!attachInput.files.length) { attachList.hidden = true; return; }
-      attachList.hidden = false;
-      Array.from(attachInput.files).forEach(function (f) {
-        var chip = document.createElement("span");
-        chip.className = "chat-attachment-chip";
-        chip.textContent = f.name;
-        attachList.appendChild(chip);
-      });
+      addComposeFiles(attachInput.files || []);
+      attachInput.value = "";
     });
+
+    _syncSendEnabled();
   }
+
+  document.body.addEventListener("click", function (e) {
+    var removeBtn = e.target.closest(".chat-attachment-chip__remove");
+    if (!removeBtn) return;
+    if (_composerState === "sending") return;
+
+    var target = removeBtn.getAttribute("data-attachment-target") || "";
+    if (target !== "compose") return;
+
+    var idx = parseInt(removeBtn.getAttribute("data-attachment-index") || "-1", 10);
+    if (idx < 0) return;
+
+    var uploadedLen = composeUploaded.length;
+    if (idx < uploadedLen) {
+      var rec = composeUploaded[idx];
+      if (!rec || !rec.id) {
+        composeUploaded.splice(idx, 1);
+        renderComposeAttachments();
+        return;
+      }
+      removeBtn.disabled = true;
+      deleteUploadedAttachment(rec.id).then(function () {
+        composeUploaded = composeUploaded.filter(function (x) { return x.id !== rec.id; });
+        renderComposeAttachments();
+      }).catch(function (err) {
+        removeBtn.disabled = false;
+        renderStatusNote((err && err.message) || "Failed to delete attachment.");
+      });
+      return;
+    }
+
+    composePendingFiles.splice(idx - uploadedLen, 1);
+    renderComposeAttachments();
+  });
 
   // --------------------------------------------------------------------------
   // Eviction overlay
@@ -233,14 +615,24 @@
         var container = document.getElementById("remote-chat-messages");
         if (container && container.querySelector(".remote-user-page__waiting")) {
           (msg.messages || []).forEach(function (m) {
-            appendBubble(
-              m.role === "user" ? buildUserBubble(m.content || "") : buildAgentBubble(m)
-            );
+            if (!m || !m.id || _seenMessageIds[m.id]) return;
+            _seenMessageIds[m.id] = 1;
+            appendBubble(m.role === "user" ? buildUserBubble(m) : buildAssistantBubble(m));
           });
         }
       } else if (msg.type === "message") {
         var m = msg.message || msg;
-        if (m.role !== "user") appendBubble(buildAgentBubble(m));
+        if (m && m.id && _seenMessageIds[m.id]) return;
+        if (m && m.id) _seenMessageIds[m.id] = 1;
+        appendBubble(m.role === "user" ? buildUserBubble(m) : buildAssistantBubble(m));
+      } else if (msg.type === "run_status") {
+        _applyRunStatus(msg);
+      } else if (msg.type === "quorum_progress") {
+        if (msg.awaiting_host_final) {
+          _setWaitingTurn();
+        }
+      } else if (msg.type === "quorum_committed") {
+        _setWaitingTurn();
       } else if (msg.type === "evict") {
         _ws.close();
         showEvictionOverlay();
@@ -261,6 +653,7 @@
     scrollToBottom();
     initTextarea();
     initAttach();
+    _initComposerState();
     markOnline();
     connect();
   });

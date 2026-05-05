@@ -560,12 +560,16 @@ def _remote_user_token_ttl() -> int:
     return max(60, raw)
 
 
-def _gate_response_key(session_id: str, responder_name: str) -> str:
-    return f"{_namespace()}:gate_response:{session_id}:{responder_name}"
+def _gate_response_key(session_id: str, responder_name: str, round_number: int | None = None) -> str:
+    if round_number is None:
+        return f"{_namespace()}:gate_response:{session_id}:{responder_name}"
+    return f"{_namespace()}:gate_response:{session_id}:{int(round_number)}:{responder_name}"
 
 
-def _gate_winner_key(session_id: str) -> str:
-    return f"{_namespace()}:gate_winner:{session_id}"
+def _gate_winner_key(session_id: str, round_number: int | None = None) -> str:
+    if round_number is None:
+        return f"{_namespace()}:gate_winner:{session_id}"
+    return f"{_namespace()}:gate_winner:{session_id}:{int(round_number)}"
 
 
 def _pending_task_key(session_id: str) -> str:
@@ -577,6 +581,7 @@ def store_gate_response(
     responder_name: str,
     text: str,
     attachment_ids: list,
+    round_number: int | None = None,
 ) -> None:
     """Store a gate responder's input in an individual Redis key.
 
@@ -585,8 +590,12 @@ def store_gate_response(
     """
     import json as _json
 
-    key = _gate_response_key(session_id, responder_name)
-    payload = _json.dumps({"text": text or "", "attachment_ids": list(attachment_ids or [])})
+    key = _gate_response_key(session_id, responder_name, round_number)
+    payload = _json.dumps({
+        "text": text or "",
+        "attachment_ids": list(attachment_ids or []),
+        "round": int(round_number) if round_number is not None else None,
+    })
     try:
         _get_client().set(key, payload, ex=_gate_response_ttl())
     except Exception as exc:  # noqa: BLE001
@@ -597,11 +606,15 @@ def store_gate_response(
     )
 
 
-def get_gate_response(session_id: str, responder_name: str) -> dict | None:
+def get_gate_response(
+    session_id: str,
+    responder_name: str,
+    round_number: int | None = None,
+) -> dict | None:
     """Return the stored gate response for a single responder, or None if absent."""
     import json as _json
 
-    key = _gate_response_key(session_id, responder_name)
+    key = _gate_response_key(session_id, responder_name, round_number)
     try:
         raw = _get_client().get(key)
         return _json.loads(raw) if raw else None
@@ -610,7 +623,9 @@ def get_gate_response(session_id: str, responder_name: str) -> dict | None:
 
 
 def check_all_gate_responses(
-    session_id: str, expected_names: list[str]
+    session_id: str,
+    expected_names: list[str],
+    round_number: int | None = None,
 ) -> tuple[bool, dict]:
     """Check whether all expected responders have submitted gate responses.
 
@@ -625,7 +640,7 @@ def check_all_gate_responses(
         client = _get_client()
         pipe = client.pipeline(transaction=False)
         for name in expected_names:
-            pipe.get(_gate_response_key(session_id, name))
+            pipe.get(_gate_response_key(session_id, name, round_number))
         results = pipe.execute()
     except Exception as exc:  # noqa: BLE001
         raise SessionCoordinationError("Unable to check gate responses.") from exc
@@ -643,28 +658,32 @@ def check_all_gate_responses(
     return all_present, collected
 
 
-def claim_gate_winner(session_id: str, claimer_name: str) -> bool:
+def claim_gate_winner(session_id: str, claimer_name: str, round_number: int | None = None) -> bool:
     """Atomically claim the gate winner role using SET NX.
 
     Returns ``True`` when this claimer wins the race; ``False`` when another
     caller already claimed (concurrent POST scenario).
     """
-    key = _gate_winner_key(session_id)
+    key = _gate_winner_key(session_id, round_number)
     try:
         return bool(_get_client().set(key, claimer_name, ex=_gate_response_ttl(), nx=True))
     except Exception as exc:  # noqa: BLE001
         raise SessionCoordinationError("Unable to claim gate winner.") from exc
 
 
-def clear_gate_responses(session_id: str, expected_names: list[str]) -> None:
+def clear_gate_responses(
+    session_id: str,
+    expected_names: list[str],
+    round_number: int | None = None,
+) -> None:
     """Delete all per-user gate response keys and the winner key.
 
     Called once quorum is met and the session has been set to idle.
     DEL on non-existent keys is a no-op in Redis — safe to call with a full
     expected_names list even when some users never responded (phase 1 auto-complete).
     """
-    keys = [_gate_response_key(session_id, name) for name in expected_names]
-    keys.append(_gate_winner_key(session_id))
+    keys = [_gate_response_key(session_id, name, round_number) for name in expected_names]
+    keys.append(_gate_winner_key(session_id, round_number))
     try:
         _get_client().delete(*keys)
     except Exception as exc:  # noqa: BLE001
