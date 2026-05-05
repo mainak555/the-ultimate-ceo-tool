@@ -1732,7 +1732,7 @@ document.addEventListener("DOMContentLoaded", function () {
         return data;
       });
     }).then(function (data) {
-      return _copyTextToClipboard(data.join_url || "", btn).then(function () {
+      return window.ChatCopyUtils.copyTextToClipboard(data.join_url || "", btn).then(function () {
         appendBubble('<div class="chat-bubble chat-bubble--system">Guest link copied to clipboard.</div>');
       });
     }).catch(function (err) {
