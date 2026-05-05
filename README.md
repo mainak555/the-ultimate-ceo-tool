@@ -50,6 +50,19 @@ bottom input bar switches to **gate mode**:
 - Notes sent with Send are rendered as markdown in both live chat and
   persisted session history.
 
+## Guest Readonly View
+
+Host page provides a **Guest share** action above the message box. It generates
+and copies a per-session guest URL.
+
+Guest page behavior:
+
+- Readonly only: header + chat history panel
+- No send box, no attach controls, no mutation actions
+- Live updates stream through WebSocket while the host run is active
+
+Guest links are standalone and do not require remote-user configuration.
+
 ---
 
 ### Mode reference
@@ -268,6 +281,19 @@ docker run -p 8000:8000 --env-file .env product-discovery
 
 The container runs `uvicorn` (ASGI) by default, which is required for SSE
 streaming of agent output.
+
+---
+
+## Documentation Map (Contributors)
+
+Use this map to avoid duplicated guidance:
+
+- Policy rules and repository contracts: [AGENTS.md](AGENTS.md)
+- Architecture-level UI contracts: [docs/UI.md](docs/UI.md)
+- Shared chat layout/surface implementation checklist: [`.agents/skills/chat_surface_shared/SKILL.md`](.agents/skills/chat_surface_shared/SKILL.md)
+- Shared compose/send/attachment checklist: [`.agents/skills/chat_compose_attachment_contract/SKILL.md`](.agents/skills/chat_compose_attachment_contract/SKILL.md)
+
+Keep implementation detail in skills and keep AGENTS/docs concise.
 
 ---
 

@@ -88,11 +88,15 @@ See [`.agents/skills/remote_user_quorum/SKILL.md`](.agents/skills/remote_user_qu
 - Phase 1 vs Phase 2 boundary (auto-complete remotes → real WebSocket respond)
 - Phase 2 implementation hooks and files to touch
 
-See [`.agents/skills/remote_user_chat_page/SKILL.md`](.agents/skills/remote_user_chat_page/SKILL.md) for:
-- CSS reuse contract (`.chat-messages`, `.chat-bubble--ai/--human`, `.chat-input-panel`)
-- Bubble factory + WS event contracts for `remote_user.js`
-- Template rules: `{% load md_extras %}`, ID prefixes, no copy buttons, no toolbar
-- SCSS ownership boundary for `.remote-user-page { }` sub-rules
+See [`.agents/skills/chat_surface_shared/SKILL.md`](.agents/skills/chat_surface_shared/SKILL.md) for:
+- Shared chat panel/bubble/style contracts across Home (HITL), Remote, and Guest surfaces
+- Bubble DOM parity and public-page header contracts (Remote + Guest)
+- SCSS ownership boundaries for `.remote-user-page { }` and `.guest-user-page { }`
+
+See [`.agents/skills/chat_compose_attachment_contract/SKILL.md`](.agents/skills/chat_compose_attachment_contract/SKILL.md) for:
+- Send/enter behavior and composer state contracts across Home (HITL) and Remote
+- Attachment interactions (picker/drag-drop/paste), staged chips, upload/bind/delete contracts
+- Security/scope distinctions for secret-gated host endpoints vs token-gated remote endpoints
 
 ## Observability & Logging
 
@@ -168,7 +172,7 @@ See [docs/observability.md](docs/observability.md) for:
 58. **Active run coordination is Redis-backed and fail-fast**: chat run ownership must be coordinated by `agents/session_coordination.py` using one lease per `session_id` plus heartbeat and cross-instance cancel signaling. `POST /chat/sessions/<id>/run/` must fail fast when Redis is unavailable and must not enter `running`. MongoDB remains the durable source for `chat_sessions.agent_state` and discussion history used for resume.
 59. **Run lifecycle refactors require the active-session skill**: before changing chat run/start/stop/lease/cancel behavior, follow [`.agents/skills/active_session_coordination/SKILL.md`](.agents/skills/active_session_coordination/SKILL.md).
 60. **Remote user quorum changes require the remote-user-quorum skill**: before adding a new quorum mode, changing `chat_session_respond` or `remote_user_respond` quorum logic, modifying quorum event fanout, or changing gate Redis helpers, follow [`.agents/skills/remote_user_quorum/SKILL.md`](.agents/skills/remote_user_quorum/SKILL.md). `remote_users` and `quorum` are always read from the live project — never stored in `chat_sessions`.
-60a. **Remote user chat page must reuse shared chat CSS**: `remote_user.html` must use `.chat-messages`, `.chat-bubble--ai`, `.chat-bubble--human`, `.chat-input-panel`, `.chat-input-row`, and `.chat-input__textarea` — the same classes as the home chat panel. No copy buttons on public pages. `remote_user.js` must use `buildAgentBubble`/`buildUserBubble` factories that match the server-rendered bubble DOM exactly. Before modifying the remote user page, follow [`.agents/skills/remote_user_chat_page/SKILL.md`](.agents/skills/remote_user_chat_page/SKILL.md).
+60a. **Chat surface contracts are shared across Home/HITL, Remote, and Guest**: shared chat classes and bubble DOM structure must remain aligned across all chat surfaces; Remote and Guest public pages must keep a unified header contract (left title, right role badge). Send + attachment interactions must remain consistent between Home/HITL and Remote, while Guest remains readonly. Before modifying these surfaces, follow [`.agents/skills/chat_surface_shared/SKILL.md`](.agents/skills/chat_surface_shared/SKILL.md) and [`.agents/skills/chat_compose_attachment_contract/SKILL.md`](.agents/skills/chat_compose_attachment_contract/SKILL.md).
 60b. **`QUORUM_OPTIONS` has a single source of truth in `server/util.py`**: option values and labels are defined once there; imported by `views.py` (config form context + `window._quorumOptions` JSON), and by `remote_user_views.py` (`VALID_QUORUM_VALUES`). Never hardcode quorum option arrays in templates or JS. **`team_choice` must never appear as a selectable option** in the live participants readiness dropdown — it is only shown (disabled) when the project is already configured with that value. The server-rendered `.chat-remote-panel` must carry `data-quorum="{{ session_quorum|default:'na' }}"` so the dropdown renders immediately on page load and session switch without waiting for the WebSocket `state` message. Resolution order for `session_quorum`: Redis quorum key → project config quorum → `"na"`.
 60c. **Host session websocket continuity is mandatory**: `home.js` must keep `/ws/session/<session_id>/` connected for active sessions, including newly created sessions. `first_win` auto-resume depends on receiving `quorum_committed`, and remote-user chat bubbles depend on `message` events from this channel.
 61. **Chat attachments are session-scoped by storage key**: all attachment blobs must use the flat key `sessions/{session_id}/attachments/{attachment_id}/{filename}` — no `message_id` segment, no project prefix. This key is assigned at upload time and is permanent (no rename at bind). All attachment lookup/bind/read operations must validate `session_id` equality before returning metadata or bytes.
