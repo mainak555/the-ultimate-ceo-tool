@@ -91,6 +91,22 @@ Cross-page UI controls must maintain shared visual language:
 
 Canonical styling rules for new SCSS work live in [docs/scss_style_guide.md](scss_style_guide.md). Follow that guide for token usage, component semantics, and responsive guardrails.
 
+## Shared Chat Surface Contracts
+
+Chat UI behavior is split into one layout contract and one interaction contract:
+
+- Layout/surface contract: [`.agents/skills/chat_surface_shared/SKILL.md`](../.agents/skills/chat_surface_shared/SKILL.md)
+- Compose/attachment interaction contract: [`.agents/skills/chat_compose_attachment_contract/SKILL.md`](../.agents/skills/chat_compose_attachment_contract/SKILL.md)
+
+Canonical rules:
+
+1. Shared chat classes (`.chat-messages`, bubble classes, attachment row classes) are reused across Home/HITL, Remote, and Guest surfaces.
+2. Bubble DOM parity is mandatory between server-rendered history and JS-rendered live messages.
+3. Public pages (Remote and Guest) use the same header pattern: left title + right role badge.
+4. Compose/send/attachment interactions are shared between Home/HITL and Remote only; Guest remains readonly by design.
+
+Detailed implementation checklists live in the two skills above; this section stays architecture-level and non-duplicative.
+
 ## Dynamic Agent Cards (JS)
 
 `app.js` handles shared behavior only:

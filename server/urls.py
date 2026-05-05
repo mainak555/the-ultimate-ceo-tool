@@ -52,4 +52,7 @@ urlpatterns = [
 
     # Remote user session participation (host-facing, secret-gated)
     path("chat/sessions/", include("server.remote_user_urls")),
+
+    # Guest readonly invite links (host-facing, secret-gated)
+    path("chat/sessions/", include("server.guest_urls")),
 ]

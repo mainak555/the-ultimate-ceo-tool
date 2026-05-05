@@ -770,8 +770,24 @@ def _remote_user_pubsub_channel(session_id: str) -> str:
     return f"{_namespace()}:remote_user:readiness:{session_id}"
 
 
+def _guest_pubsub_channel(session_id: str) -> str:
+    return f"{_namespace()}:remote_user:{session_id}:guest"
+
+
 def _session_message_channel(session_id: str) -> str:
     return f"{_namespace()}:session:messages:{session_id}"
+
+
+def _guest_token_key(session_id: str) -> str:
+    return f"{_namespace()}:guest_user:{session_id}:token"
+
+
+def _guest_token_reverse_key(token: str) -> str:
+    return f"{_namespace()}:guest_user:token:{token}"
+
+
+def _guest_status_key(session_id: str) -> str:
+    return f"{_namespace()}:guest_user:{session_id}:status"
 
 
 def generate_remote_user_token(session_id: str, user_name: str, project_id: str) -> str:
@@ -797,6 +813,33 @@ def generate_remote_user_token(session_id: str, user_name: str, project_id: str)
     logger.info(
         "agents.remote_user.token_generated",
         extra={"session_id": session_id, "user_name": user_name},
+    )
+    return token
+
+
+def generate_guest_token(session_id: str, project_id: str) -> str:
+    """Generate a UUID4 invitation token for guest readonly access."""
+    import json as _json
+    from uuid import uuid4 as _uuid4
+
+    token = str(_uuid4())
+    ttl = _remote_user_token_ttl()
+    meta = _json.dumps({"session_id": session_id, "project_id": project_id})
+    try:
+        client = _get_client()
+        pipe = client.pipeline(transaction=False)
+        old_token = client.get(_guest_token_key(session_id))
+        pipe.set(_guest_token_key(session_id), token, ex=ttl)
+        pipe.set(_guest_token_reverse_key(token), meta, ex=ttl)
+        if old_token:
+            pipe.delete(_guest_token_reverse_key(old_token))
+        pipe.delete(_guest_status_key(session_id))
+        pipe.execute()
+    except Exception as exc:  # noqa: BLE001
+        raise SessionCoordinationError("Unable to generate guest token.") from exc
+    logger.info(
+        "agents.guest.token_generated",
+        extra={"session_id": session_id},
     )
     return token
 
@@ -831,6 +874,25 @@ def get_remote_user_token_data(token: str) -> dict | None:
         return _json.loads(raw) if raw else None
     except Exception as exc:  # noqa: BLE001
         raise SessionCoordinationError("Unable to lookup remote user token.") from exc
+
+
+def get_guest_token(session_id: str) -> str | None:
+    """Return the active guest token for a session, or None."""
+    try:
+        return _get_client().get(_guest_token_key(session_id))
+    except Exception as exc:  # noqa: BLE001
+        raise SessionCoordinationError("Unable to get guest token.") from exc
+
+
+def get_guest_token_data(token: str) -> dict | None:
+    """Reverse-lookup a guest token to metadata or None."""
+    import json as _json
+
+    try:
+        raw = _get_client().get(_guest_token_reverse_key(token))
+        return _json.loads(raw) if raw else None
+    except Exception as exc:  # noqa: BLE001
+        raise SessionCoordinationError("Unable to lookup guest token.") from exc
 
 
 def get_remote_user_statuses(session_id: str, user_names: list[str]) -> dict[str, str]:
@@ -917,9 +979,27 @@ def _publish_remote_user_event(session_id: str, payload: dict) -> None:
         pass  # pub/sub failure is non-fatal
 
 
+def _publish_guest_event(session_id: str, payload: dict) -> None:
+    """Internal: publish a JSON event to the guest pub/sub channel."""
+    import json as _json
+
+    try:
+        _get_client().publish(
+            _guest_pubsub_channel(session_id),
+            _json.dumps(payload),
+        )
+    except Exception:  # noqa: BLE001
+        pass  # pub/sub failure is non-fatal
+
+
 def publish_remote_user_event(session_id: str, payload: dict) -> None:
     """Publish a remote-user readiness event (public wrapper for external callers)."""
     _publish_remote_user_event(session_id, payload)
+
+
+def publish_guest_event(session_id: str, payload: dict) -> None:
+    """Publish a guest watcher event (public wrapper for external callers)."""
+    _publish_guest_event(session_id, payload)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -974,6 +1054,53 @@ def purge_remote_user_session_keys(session_id: str, user_names: list[str]) -> No
         raise SessionCoordinationError("Unable to purge remote user session keys.") from exc
 
 
+def revoke_guest_token(session_id: str) -> None:
+    """Delete guest token keys for a session and broadcast eviction."""
+    try:
+        client = _get_client()
+        token = client.get(_guest_token_key(session_id))
+        keys = [_guest_token_key(session_id), _guest_status_key(session_id)]
+        if token:
+            keys.append(_guest_token_reverse_key(token))
+        client.delete(*keys)
+        _publish_guest_event(session_id, {"type": "evict"})
+    except Exception as exc:  # noqa: BLE001
+        raise SessionCoordinationError("Unable to revoke guest token.") from exc
+
+
+def set_guest_online(session_id: str) -> None:
+    """Mark guest watcher online for this session."""
+    try:
+        _get_client().set(
+            _guest_status_key(session_id),
+            "online",
+            ex=_remote_user_token_ttl(),
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise SessionCoordinationError("Unable to set guest online.") from exc
+
+
+def set_guest_offline(session_id: str) -> None:
+    """Clear guest watcher online marker for this session."""
+    try:
+        _get_client().delete(_guest_status_key(session_id))
+    except Exception as exc:  # noqa: BLE001
+        raise SessionCoordinationError("Unable to set guest offline.") from exc
+
+
+def purge_guest_session_keys(session_id: str) -> None:
+    """Delete guest token and status keys for a session."""
+    try:
+        client = _get_client()
+        token = client.get(_guest_token_key(session_id))
+        keys = [_guest_token_key(session_id), _guest_status_key(session_id)]
+        if token:
+            keys.append(_guest_token_reverse_key(token))
+        client.delete(*keys)
+    except Exception as exc:  # noqa: BLE001
+        raise SessionCoordinationError("Unable to purge guest session keys.") from exc
+
+
 def publish_session_message(session_id: str, message: dict) -> None:
     """Publish a chat message event to the session message channel.
 
@@ -1002,6 +1129,7 @@ __all__ = [
     "delete_mcp_oauth_readiness",
     "ensure_redis_available",
     "generate_remote_user_token",
+    "generate_guest_token",
     "get_gate_response",
     "get_heartbeat_interval_seconds",
     "get_instance_id",
@@ -1013,6 +1141,8 @@ __all__ = [
     "get_remote_user_statuses",
     "get_remote_user_token",
     "get_remote_user_token_data",
+    "get_guest_token",
+    "get_guest_token_data",
     "get_run_traceparent",
     "init_mcp_oauth_readiness",
     "is_cancel_signaled",
@@ -1020,18 +1150,23 @@ __all__ = [
     "pop_pending_task",
     "publish_oauth_server_authorized",
     "publish_remote_user_event",
+    "publish_guest_event",
     "publish_session_message",
     "purge_mcp_oauth_tokens",
     "purge_remote_user_session_keys",
+    "purge_guest_session_keys",
     "release_run_lease",
     "renew_run_lease",
     "revoke_remote_user_token",
+    "revoke_guest_token",
     "set_mcp_oauth_state",
     "set_mcp_oauth_test_status",
     "set_mcp_oauth_token",
     "set_remote_user_ignored",
     "set_remote_user_offline",
     "set_remote_user_online",
+    "set_guest_online",
+    "set_guest_offline",
     "set_session_quorum",
     "get_session_quorum",
     "signal_cancel",

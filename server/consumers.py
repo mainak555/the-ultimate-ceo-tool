@@ -846,3 +846,157 @@ class RemoteChatConsumer:
                 "timestamp": ts if isinstance(ts, str) else (ts.isoformat() if hasattr(ts, "isoformat") else ""),
             })
         return result
+
+
+class GuestChatConsumer:
+    """Async WebSocket consumer for guest readonly chat watchers."""
+
+    channel_layer = None
+    channel_layer_alias = "default"
+
+    def __init__(self, scope, receive, send):
+        self.scope = scope
+        self._receive = receive
+        self._send = send
+        self._token: str = ""
+        self._listen_task: asyncio.Task | None = None
+        self._closed = False
+
+    @classmethod
+    def as_asgi(cls):
+        async def app(scope, receive, send):
+            consumer = cls(scope, receive, send)
+            await consumer.__call__(scope, receive, send)
+        return app
+
+    async def __call__(self, scope, receive, send):
+        self._receive = receive
+        self._send = send
+
+        if scope["type"] != "websocket":
+            return
+
+        self._token = scope["url_route"]["kwargs"]["token"]
+
+        await send({"type": "websocket.accept"})
+
+        try:
+            await self._handle()
+        except Exception:
+            logger.exception("agents.guest.chat_ws_error")
+        finally:
+            if self._listen_task and not self._listen_task.done():
+                self._listen_task.cancel()
+                try:
+                    await self._listen_task
+                except (asyncio.CancelledError, Exception):
+                    pass
+            if not self._closed:
+                self._closed = True
+                try:
+                    await send({"type": "websocket.close", "code": 1000})
+                except Exception:
+                    pass
+
+    async def _handle(self):
+        import asyncio as _asyncio
+
+        token_data = await _asyncio.to_thread(self._validate_token, self._token)
+        if token_data is None:
+            await self._send_json({"type": "error", "message": "Invalid or expired guest link."})
+            return
+
+        session_id = token_data["session_id"]
+
+        history = await _asyncio.to_thread(self._load_history, session_id)
+        await self._send_json({"type": "history", "messages": history})
+
+        self._listen_task = _asyncio.ensure_future(self._listen_redis(session_id))
+
+        try:
+            while not self._closed:
+                msg = await self._receive()
+                if msg["type"] == "websocket.disconnect":
+                    self._closed = True
+                    break
+        finally:
+            if self._listen_task and not self._listen_task.done():
+                self._listen_task.cancel()
+
+    async def _listen_redis(self, session_id: str):
+        import redis.asyncio as aioredis
+        from agents.session_coordination import (  # type: ignore[attr-defined]
+            _guest_pubsub_channel,
+            _session_message_channel,
+        )
+
+        msg_channel = _session_message_channel(session_id)
+        guest_channel = _guest_pubsub_channel(session_id)
+        redis_url = getattr(settings, "REDIS_URI", "redis://localhost:6379/0")
+
+        try:
+            async with aioredis.from_url(redis_url, decode_responses=True) as client:
+                async with client.pubsub() as ps:
+                    await ps.subscribe(msg_channel, guest_channel)
+                    async for raw_msg in ps.listen():
+                        if self._closed:
+                            break
+                        if raw_msg.get("type") != "message":
+                            continue
+                        try:
+                            payload = json.loads(raw_msg["data"])
+                        except (ValueError, KeyError):
+                            continue
+
+                        raw_channel = raw_msg.get("channel", "")
+                        if raw_channel == msg_channel:
+                            await self._send_json(payload)
+                        elif raw_channel == guest_channel:
+                            if payload.get("type") == "evict":
+                                await self._send_json({"type": "evict"})
+                                break
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logger.exception(
+                "agents.guest.chat_ws_listen_error",
+                extra={"session_id": session_id},
+            )
+
+    async def _send_json(self, data: dict):
+        try:
+            await self._send({"type": "websocket.send", "text": json.dumps(data)})
+        except Exception:
+            pass
+
+    @staticmethod
+    def _validate_token(token: str) -> dict | None:
+        try:
+            from agents.session_coordination import get_guest_token_data
+
+            return get_guest_token_data(token)
+        except Exception:  # noqa: BLE001
+            return None
+
+    @staticmethod
+    def _load_history(session_id: str) -> list:
+        from server import services
+
+        session = services.get_chat_session(session_id)
+        if session is None:
+            return []
+        discussions = session.get("discussions") or []
+        result = []
+        for d in discussions:
+            if not isinstance(d, dict):
+                continue
+            ts = d.get("timestamp", "")
+            result.append({
+                "id": str(d.get("id", "")),
+                "agent_name": d.get("agent_name", ""),
+                "role": d.get("role", ""),
+                "content": d.get("content", ""),
+                "attachments": d.get("attachments") or [],
+                "timestamp": ts if isinstance(ts, str) else (ts.isoformat() if hasattr(ts, "isoformat") else ""),
+            })
+        return result

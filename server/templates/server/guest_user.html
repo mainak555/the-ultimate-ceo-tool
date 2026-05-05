@@ -1,9 +1,10 @@
-{% load compress static md_extras %}<!DOCTYPE html>
+{% load compress static md_extras %}
+<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>{% if project_name %}{{ project_name }} — {% endif %}Remote Session{% if user_name %} · {{ user_name }}{% endif %}</title>
+  <title>{% if project_name %}{{ project_name }} — {% endif %}Guest Session</title>
   <meta name="robots" content="noindex,nofollow">
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E🤖%3C/text%3E%3C/svg%3E">
   {% compress css %}
@@ -11,32 +12,28 @@
   {% endcompress %}
   <script src="https://cdn.jsdelivr.net/npm/marked@15/marked.min.js"></script>
 </head>
-<body class="remote-user-page">
+<body class="guest-user-page">
 
-  <header class="remote-user-page__header">
-    <div class="remote-user-page__title">
-      {% if project_name %}{{ project_name }}{% else %}Product Discovery{% endif %}
-    </div>
-    <div class="remote-user-page__badge">{{ user_name|default:"Remote Participant" }}</div>
+  <header class="guest-user-page__header">
+    <div class="guest-user-page__title">{{ session_title|default:"Session" }}</div>
+    <div class="guest-user-page__badge">Guest</div>
   </header>
 
   {% if error %}
-  <main class="remote-user-page__error">
-    <div class="remote-user-page__error-icon">&#x26A0;</div>
-    <p class="remote-user-page__error-text">{{ error }}</p>
+  <main class="guest-user-page__error">
+    <div class="guest-user-page__error-icon">&#x26A0;</div>
+    <p class="guest-user-page__error-text">{{ error }}</p>
   </main>
   {% else %}
 
-  <main class="remote-user-page__main" id="remote-chat-main" data-session-status="{{ session_status|default:'idle' }}">
-
-    {# Reuse the home chat-messages scroll container — all bubble styles are shared #}
-    <div class="chat-messages" id="remote-chat-messages">
+  <main class="guest-user-page__main" id="guest-chat-main" data-session-status="{{ session_status|default:'idle' }}">
+    <div class="chat-messages" id="guest-chat-messages">
       {% if discussions %}
         {% for d in discussions %}
           {% if d.role == 'user' %}
             <div class="chat-bubble chat-bubble--human" data-raw-content="{{ d.content }}">
               <div class="chat-bubble__meta">
-                <span class="chat-bubble__name">{{ d.agent_name|default:user_name|default:"You" }}</span>
+                <span class="chat-bubble__name">{{ d.agent_name|default:"User" }}</span>
                 {% if d.timestamp %}<span class="chat-bubble__time"><time class="local-time" data-utc="{{ d.timestamp }}">{{ d.timestamp }}</time></span>{% endif %}
               </div>
               <div class="chat-bubble__content">{{ d.content|markdownify }}</div>
@@ -79,11 +76,9 @@
           {% endif %}
         {% endfor %}
       {% else %}
-        {% if session_status != 'awaiting_input' and session_status != 'running' and session_status != 'stopped' and session_status != 'completed' %}
-        <div class="remote-user-page__waiting">
+        <div class="guest-user-page__waiting">
           <p>Waiting for the session to start&hellip;</p>
         </div>
-        {% endif %}
       {% endif %}
 
       {% if session_status == "running" %}
@@ -94,34 +89,14 @@
         <div class="chat-status-badge chat-status-badge--completed">Run completed</div>
       {% endif %}
     </div>
-
-    {# Reuse home chat-input-panel — identical structure, no toolbar row needed #}
-    <div class="chat-input-panel">
-      <div class="chat-input-row">
-        <button class="chat-attach-btn" id="remote-attach-btn" type="button" title="Attach files">
-          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
-        </button>
-        <textarea id="remote-chat-input"
-                  class="chat-input__textarea"
-                  placeholder="Type a message…"
-                  rows="1"
-                  autocomplete="off"></textarea>
-        <button class="btn btn--primary chat-send-btn" id="remote-send-btn" title="Send">&#x2191;</button>
-        <input id="remote-attach-input" type="file" hidden multiple>
-      </div>
-      <div class="chat-attachment-list" id="remote-compose-attachments" hidden></div>
-    </div>
-
   </main>
 
   <script>
-    window._remoteUserToken = "{{ token }}";
-    window._remoteUserName  = "{{ user_name }}";
-    window._remoteSessionId = "{{ session_id }}";
-    window._remoteGateContext = {% if gate_context %}{"round": {{ gate_context.round }}, "max_rounds": {{ gate_context.max_rounds }}, "chat_mode": "{{ gate_context.chat_mode }}", "quorum": "{{ gate_context.quorum }}"}{% else %}null{% endif %};
+    window._guestToken = "{{ token }}";
+    window._guestSessionId = "{{ session_id }}";
   </script>
   {% compress js %}
-  <script src="{% static 'server/js/remote_user.js' %}"></script>
+  <script src="{% static 'server/js/guest_user.js' %}"></script>
   {% endcompress %}
 
   {% endif %}

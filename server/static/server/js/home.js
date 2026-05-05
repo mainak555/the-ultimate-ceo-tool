@@ -63,12 +63,20 @@ document.addEventListener("DOMContentLoaded", function () {
   var chatAttachmentInput = document.getElementById("chat-attachment-input");
   var chatComposeAttachments = document.getElementById("chat-compose-attachments");
   var chatProjectBtn = document.getElementById("chat-project-btn");
+  var chatGuestShareBtn = document.getElementById("chat-guest-share-btn");
   var activeProjectIdInput = document.getElementById("active-project-id");
   var activeSessionIdInput = document.getElementById("active-session-id");
   var csrfToken = (document.getElementById("csrf-token-value") || {}).value || "";
 
   var composePendingFiles = [];
   var composeUploaded = [];
+
+  function _scrollChatToBottom() {
+    if (!chatMessages) return;
+    window.requestAnimationFrame(function () {
+      chatMessages.scrollTop = chatMessages.scrollHeight;
+    });
+  }
 
   function escapeHtml(text) {
     return String(text || "")
@@ -230,6 +238,12 @@ document.addEventListener("DOMContentLoaded", function () {
     if (chatAttachBtn) {
       chatAttachBtn.disabled = !hasSecret;
       chatAttachBtn.title = hasSecret ? "Attach files" : "Enter the Secret Key to attach files.";
+    }
+    if (chatGuestShareBtn) {
+      chatGuestShareBtn.disabled = !hasSecret;
+      chatGuestShareBtn.title = hasSecret
+        ? "Generate a readonly guest link"
+        : "Enter the Secret Key to generate a guest link.";
     }
     if (chatAttachmentInput) {
       chatAttachmentInput.disabled = !hasSecret;
@@ -666,6 +680,18 @@ document.addEventListener("DOMContentLoaded", function () {
     ta.select();
     try { document.execCommand("copy"); _showCopiedFeedback(btn); } catch (e) { /* silent */ }
     document.body.removeChild(ta);
+  }
+
+  function _copyTextToClipboard(text, btn) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      return navigator.clipboard.writeText(text).then(function () {
+        if (btn) _showCopiedFeedback(btn);
+      }).catch(function () {
+        _fallbackCopyText(text, btn || document.createElement("button"));
+      });
+    }
+    _fallbackCopyText(text, btn || document.createElement("button"));
+    return Promise.resolve();
   }
 
   document.body.addEventListener("click", function (e) {
@@ -1327,15 +1353,16 @@ document.addEventListener("DOMContentLoaded", function () {
       if ((mode || "") === "continue_with_context" && text) {
         appendHumanBubble(text);
       }
-      startRun(data.task || "");
+      if (activeSessionIdInput) activeSessionIdInput.value = sessionId;
+      startRun(data.task || "", [], sessionId);
     }).catch(function (err) {
       setRunningState(false);
       appendBubble('<div class="chat-bubble chat-bubble--error">Error: ' + err.message + '</div>');
     });
   }
 
-  function startRun(task, attachmentIds) {
-    var sessionId = activeSessionIdInput ? activeSessionIdInput.value.trim() : "";
+  function startRun(task, attachmentIds, forceSessionId) {
+    var sessionId = (forceSessionId || (activeSessionIdInput ? activeSessionIdInput.value.trim() : "")).trim();
     if (!sessionId) { return; }
 
     var secretKey = getSecretKey();
@@ -1740,6 +1767,45 @@ document.addEventListener("DOMContentLoaded", function () {
     if (activeSessionIdInput) activeSessionIdInput.value = "";
   });
 
+  document.body.addEventListener("click", function (e) {
+    var btn = e.target.closest("#chat-guest-share-btn");
+    if (!btn) return;
+
+    var secretKey = getSecretKey();
+    if (!secretKey) {
+      alert("Enter the Secret Key first.");
+      return;
+    }
+
+    var sessionId = activeSessionIdInput ? activeSessionIdInput.value.trim() : "";
+    if (!sessionId) {
+      alert("Select a chat session before generating a guest link.");
+      return;
+    }
+
+    btn.disabled = true;
+    fetch("/chat/sessions/" + encodeURIComponent(sessionId) + "/guest/invite/", {
+      method: "POST",
+      headers: {
+        "X-App-Secret-Key": secretKey,
+        "X-CSRFToken": csrfToken,
+      },
+    }).then(function (r) {
+      return r.json().then(function (data) {
+        if (!r.ok) throw new Error(data.error || "Unable to generate guest link.");
+        return data;
+      });
+    }).then(function (data) {
+      return _copyTextToClipboard(data.join_url || "", btn).then(function () {
+        appendBubble('<div class="chat-bubble chat-bubble--system">Guest link copied to clipboard.</div>');
+      });
+    }).catch(function (err) {
+      appendBubble('<div class="chat-bubble chat-bubble--error">Error: ' + escapeHtml(err.message || "Unable to generate guest link.") + '</div>');
+    }).finally(function () {
+      updateChatAuthState();
+    });
+  });
+
   document.body.addEventListener("htmx:beforeRequest", function (e) {
     var elt = e.detail && e.detail.elt;
     if (!elt) return;
@@ -1792,6 +1858,7 @@ document.addEventListener("DOMContentLoaded", function () {
     } else {
       _teardownHostSessionWs();
     }
+    _scrollChatToBottom();
   });
 
   document.body.addEventListener("input", function (e) {
@@ -1889,4 +1956,5 @@ document.addEventListener("DOMContentLoaded", function () {
   if (initSid && initSecret) {
     _connectHostSessionWs(initSid, initSecret);
   }
+  _scrollChatToBottom();
 });

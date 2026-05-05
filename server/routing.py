@@ -3,6 +3,7 @@
 from django.urls import path
 
 from server.consumers import (
+    GuestChatConsumer,
     HostSessionConsumer,
     OAuthReadinessConsumer,
     RemoteChatConsumer,
@@ -28,5 +29,10 @@ websocket_urlpatterns = [
     path(
         "ws/remote/chat/<str:token>/",
         RemoteChatConsumer.as_asgi(),
+    ),
+    # Guest-facing readonly chat feed (public, token-gated)
+    path(
+        "ws/guest/chat/<str:token>/",
+        GuestChatConsumer.as_asgi(),
     ),
 ]
