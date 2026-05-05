@@ -26,7 +26,7 @@ Cross-references: [docs/API.md](API.md) (HTTP endpoint contracts — **not** a s
   // ── Top-level ─────────────────────────────────────────────────────────────
   "project_name": "string (unique, used as URL slug)",
   "objective":    "string — injected into every agent system prompt and selector system prompt at runtime",
-  "version":      1.0,  // float — server-managed; set to 1.0 on create, incremented by 0.1 on every save, bumped to next integer on clone (e.g. 1.x → 2.0)
+  "version":      1.0,  // float — server-managed; set to 1.0 on create, bumped +0.1 on update ONLY when team.type changes or human_gate.quorum departs team_choice (via _compute_version_bump()), bumped to next integer on clone (e.g. 1.x → 2.0)
   "created_at":   "datetime (UTC BSON Date — set on insert, never overwritten)",
   "updated_at":   "datetime (UTC BSON Date — stamped on every replace_one)",
 

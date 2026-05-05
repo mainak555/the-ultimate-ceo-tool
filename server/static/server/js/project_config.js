@@ -291,8 +291,9 @@ document.addEventListener("DOMContentLoaded", function () {
       teamDisabledHint.hidden = !isSingleAssistantChatMode;
     }
 
-    // Selector is still invalid for 1 agent regardless of remote users
-    if (isSingleAssistant && teamTypeSelect && teamTypeSelect.value === "selector") {
+    // Selector is invalid only in pure single-assistant chat mode (1 agent, no remote users).
+    // With remote users present, selector is valid and must not be reset.
+    if (isSingleAssistantChatMode && teamTypeSelect && teamTypeSelect.value === "selector") {
       teamTypeSelect.value = "round_robin";
     }
   }

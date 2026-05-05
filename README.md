@@ -232,7 +232,7 @@ alongside the project name in the sidebar, the edit form header, and the readonl
 | Action | Version rule | Example |
 |---|---|---|
 | Create new project | Starts at `1.0` | → `v1.0` |
-| Save / update | Increments by `0.1` | `v1.0 → v1.1 → v1.2` |
+| Save / update | Bumps `+0.1` only when `team.type` changes or `human_gate.quorum` departs `team_choice`; unchanged otherwise | `v1.0 → v1.1` |
 | Clone | Bumps to next whole number | `v1.x → v2.0`, `v2.x → v3.0` |
 
 The version is **set by the server only** — it is never exposed as an editable form field
@@ -655,7 +655,7 @@ Every project document carries a server-managed `version` float displayed as `vX
 | Event | Version rule |
 |-------|-------------|
 | **Create** | Starts at `1.0` |
-| **Save / Edit** | Decimal incremented: `1.0 → 1.1 → 1.2 …` |
+| **Save / Edit** | Bumps `+0.1` only when `team.type` changes OR `human_gate.quorum` departs `team_choice`; unchanged for all other field edits. Multiple conditions in one save still produce exactly one `+0.1`. Bump logic lives in `_compute_version_bump(existing, cleaned)` in `server/services.py` — extend there. |
 | **Clone** | Integer part bumped by 1, decimal reset: `1.x → 2.0`, `2.x → 3.0` |
 
 The field is computed entirely server-side in `server/services.py`. It is never exposed as a user-editable input. Legacy documents (written before this field was added) default to `1.0` on read via `normalize_project()`. To persist the default to MongoDB, run:

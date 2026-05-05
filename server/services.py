@@ -473,6 +473,36 @@ def create_project(data, initial_version=1.0):
     return normalized
 
 
+def _compute_version_bump(existing, cleaned):
+    """
+    Single source of truth for project version bump logic on update.
+
+    Rules:
+    - Bump +0.1 when team.type changes.
+    - Bump +0.1 when human_gate.quorum changes FROM "team_choice" to any other value.
+    - No bump for any other field changes.
+    - Multiple conditions met simultaneously still produce exactly one +0.1 bump.
+
+    To extend versioning rules, add additional bump conditions here.
+
+    Returns the new version float (rounded to 1 decimal place).
+    """
+    current_version = round(float(existing.get("version") or 1.0), 1)
+
+    existing_team_type = (existing.get("team") or {}).get("type") or "round_robin"
+    new_team_type = (cleaned.get("team") or {}).get("type") or "round_robin"
+    team_type_changed = existing_team_type != new_team_type
+
+    existing_quorum = (existing.get("human_gate") or {}).get("quorum") or ""
+    new_quorum = (cleaned.get("human_gate") or {}).get("quorum") or ""
+    quorum_departed_team_choice = existing_quorum == "team_choice" and new_quorum != "team_choice"
+
+    should_bump = team_type_changed or quorum_departed_team_choice
+    if should_bump:
+        return round(current_version + 0.1, 1)
+    return current_version
+
+
 @traced_function("service.project.update")
 def update_project(project_id, data):
     """
@@ -502,9 +532,8 @@ def update_project(project_id, data):
     # Preserve original created_at; stamp updated_at as BSON Date
     cleaned["created_at"] = existing.get("created_at") or util.utc_now()
     cleaned["updated_at"] = util.utc_now()
-    # Increment the decimal part of the version on every save (1.0 → 1.1 → 1.2 …)
-    current_version = float(existing.get("version") or 1.0)
-    cleaned["version"] = round(current_version + 0.1, 1)
+    # Bump version only on structural/behavioral changes — see _compute_version_bump()
+    cleaned["version"] = _compute_version_bump(existing, cleaned)
 
     try:
         result = col.replace_one({"_id": oid}, cleaned)

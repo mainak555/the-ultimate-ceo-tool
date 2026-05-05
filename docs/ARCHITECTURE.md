@@ -71,7 +71,7 @@ product-discovery/
 - `list_projects()` — returns all projects sorted by name.
 - `get_project(project_id)` — returns a single normalized project by MongoDB ObjectId hex string or `None`.
 - `create_project(data, initial_version=1.0)` — validates, inserts, sets `version` to `initial_version` (default `1.0`). Handles duplicate name errors.
-- `update_project(project_id, data)` — validates, replaces existing document, increments `version` by `0.1` (e.g. `1.0 → 1.1`).
+- `update_project(project_id, data)` — validates, replaces existing document, conditionally bumps `version` by `0.1` via `_compute_version_bump(existing, cleaned)`. Bump triggers: (a) `team.type` changes, or (b) `human_gate.quorum` departs `team_choice`. All other field changes leave `version` unchanged.
 - `clone_project(project_id)` — copies project as `"{name} - Copy"`, bumps major version (e.g. `1.x → 2.0`, `2.x → 3.0`).
 - `delete_project(project_id)` — deletes only when no dependent chat sessions exist.
 - `normalize_project(data)` — adapts old documents to the new nested shape for display.
