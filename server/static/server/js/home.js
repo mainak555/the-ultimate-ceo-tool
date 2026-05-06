@@ -1030,6 +1030,17 @@ document.addEventListener("DOMContentLoaded", function () {
           clearGateMode();
           startRun("", []);
         }
+        return;
+      }
+
+      if (msg.type === "team_choice_turn_requested") {
+        var activeName = msg.remote_user_name || "Remote participant";
+        appendQuorumInfoBadge("Waiting for " + activeName + " to respond");
+        return;
+      }
+
+      if (msg.type === "team_choice_turn_submitted" || msg.type === "team_choice_turn_resolved") {
+        return;
       }
     };
 

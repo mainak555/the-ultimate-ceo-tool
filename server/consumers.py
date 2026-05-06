@@ -876,6 +876,12 @@ class RemoteChatConsumer:
                                 if payload.get("status") == "ignored":
                                     await self._send_json({"type": "evict"})
                                     break
+                            elif payload.get("type") in {
+                                "team_choice_turn_requested",
+                                "team_choice_turn_submitted",
+                                "team_choice_turn_resolved",
+                            }:
+                                await self._send_json(payload)
         except asyncio.CancelledError:
             pass
         except Exception:

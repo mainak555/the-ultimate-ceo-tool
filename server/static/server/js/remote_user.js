@@ -200,6 +200,10 @@
     }
 
     if (status === "awaiting_input") {
+      if ((msg.quorum || "") === "team_choice") {
+        _setWaitingTurn();
+        return;
+      }
       _setAwaitingTurn(msg);
       return;
     }
@@ -689,6 +693,20 @@
         appendBubble(m.role === "user" ? buildUserBubble(m) : buildAssistantBubble(m));
       } else if (msg.type === "run_status") {
         _applyRunStatus(msg);
+      } else if (msg.type === "team_choice_turn_requested") {
+        var targetName = (msg.remote_user_name || "").trim();
+        if (targetName && targetName === userName) {
+          _setAwaitingTurn({
+            round: Number(msg.round || 0),
+            max_rounds: 0,
+            chat_mode: "team",
+            quorum: "team_choice",
+          });
+        } else {
+          _setWaitingTurn();
+        }
+      } else if (msg.type === "team_choice_turn_submitted" || msg.type === "team_choice_turn_resolved") {
+        _setWaitingTurn();
       } else if (msg.type === "quorum_progress") {
         if (msg.awaiting_host_final) {
           _setWaitingTurn();

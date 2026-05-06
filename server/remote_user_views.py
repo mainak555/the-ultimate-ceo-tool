@@ -35,7 +35,9 @@ from django.views.decorators.csrf import csrf_exempt
 from agents.session_coordination import (
     check_all_gate_responses,
     claim_gate_winner,
+    get_team_choice_active_request,
     clear_gate_responses,
+    clear_team_choice_active_request,
     get_gate_response,
     get_session_quorum,
     generate_remote_user_token,
@@ -48,6 +50,7 @@ from agents.session_coordination import (
     set_session_quorum,
     store_gate_response,
     store_pending_task,
+    submit_team_choice_response,
     SessionCoordinationError,
 )
 from . import services, util, attachment_service
@@ -337,6 +340,7 @@ def remote_user_respond(request, token):
     """Remote-user gate response endpoint (token-gated).
 
     Supports quorum modes:
+    - team_choice: only the currently selected proxy target can respond.
     - first_win: first responder (host or any remote) wins immediately.
     - all: stores remote response and waits for all responders + host final continue.
     """
@@ -420,6 +424,76 @@ def remote_user_respond(request, token):
             "winner": responder_name,
         })
         return util.json_response({"status": "ok", "pending_task_ready": True})
+
+    # team_choice mode: only the selected remote user can respond for this turn.
+    if quorum == "team_choice":
+        active_request = get_team_choice_active_request(session_id)
+        if not active_request:
+            return util.json_response(
+                {
+                    "status": "waiting",
+                    "message": "No active turn request yet. Wait for your turn.",
+                },
+                status=409,
+            )
+
+        request_id = str(active_request.get("request_id") or "").strip()
+        target_name = str(active_request.get("remote_user_name") or "").strip()
+        if not request_id or not target_name:
+            clear_team_choice_active_request(session_id)
+            return util.json_response(
+                {
+                    "status": "waiting",
+                    "message": "Turn request is stale. Please wait for the next turn.",
+                },
+                status=409,
+            )
+
+        if responder_name != target_name:
+            return util.json_response(
+                {
+                    "status": "waiting",
+                    "message": f"Waiting for {target_name} to respond.",
+                },
+                status=409,
+            )
+
+        task_text = text + attachment_service.build_attachment_context_block(
+            session_id=session_id,
+            attachment_ids=attachment_ids,
+        )
+        accepted = submit_team_choice_response(
+            session_id=session_id,
+            request_id=request_id,
+            responder_name=responder_name,
+            text=text,
+            attachment_ids=attachment_ids,
+            task_text=task_text,
+        )
+        if not accepted:
+            return util.json_response(
+                {
+                    "status": "locked",
+                    "message": "This turn was already submitted.",
+                },
+                status=409,
+            )
+
+        _append_user_message_and_publish(
+            session_id=session_id,
+            agent_name=responder_name,
+            text=text,
+            attachment_ids=attachment_ids,
+            origin="remote",
+        )
+
+        return util.json_response(
+            {
+                "status": "ok",
+                "request_id": request_id,
+                "pending_task_ready": True,
+            }
+        )
 
     # all mode: store remote response and wait for host final continue.
     if quorum == "all":
