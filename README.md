@@ -496,17 +496,17 @@ Full documentation: [docs/mcp_integration.md](docs/mcp_integration.md).
 | `MONGODB_NAME` | MongoDB database name | `product_discovery` |
 | `REDIS_URI` | Redis connection string used for active run coordination | `redis://localhost:6379/0` |
 | `REDIS_NAMESPACE` | Redis key namespace prefix | `product_discovery` |
-| `REDIS_SOCKET_TIMEOUT` | Redis socket read/write timeout (seconds) used by the shared Redis client | `2.0` |
-| `REDIS_SOCKET_CONNECT_TIMEOUT` | Redis socket connect timeout (seconds) used by the shared Redis client | `2.0` |
+| `REDIS_SOCKET_TIMEOUT` | Redis socket operation timeout (seconds) for the shared sync Redis client used by session coordination and Redis-backed helpers. This bounds read/write waits after a connection is established; lower values fail faster under Redis stalls, higher values tolerate transient latency. Note: async WebSocket pub/sub clients do not inherit this unless passed explicitly at `aioredis.from_url(...)` call sites. | `2.0` |
+| `REDIS_SOCKET_CONNECT_TIMEOUT` | Redis connection-establishment timeout (seconds) for the shared sync Redis client. This controls how long the app waits to open a TCP connection to Redis before treating Redis as unavailable; keep this low for fast failover behavior. Note: async WebSocket pub/sub clients do not inherit this unless passed explicitly at `aioredis.from_url(...)` call sites. | `2.0` |
 | `REDIS_RUN_LEASE_TTL_SECONDS` | Active run lease TTL (seconds) | `300` |
-| `REDIS_RUN_HEARTBEAT_SECONDS` | Lease heartbeat interval (seconds) | `20` |
-| `REDIS_CANCEL_SIGNAL_TTL_SECONDS` | Cancel signal TTL (seconds) | `120` |
-| `REDIS_ATTACHMENT_TTL_SECONDS` | How long extracted attachment text is kept in Redis (seconds). Raise this if sessions span multiple days. | `86400` (24 h) |
-| `REDIS_GATE_RESPONSE_TTL_SECONDS` | TTL for HITL gate response keys in Redis (seconds) | `21600` (6 h) |
-| `REDIS_PENDING_TASK_TTL_SECONDS` | TTL for quorum pending-task keys in Redis (seconds) | `300` |
-| `REDIS_REMOTE_USER_TOKEN_TTL_SECONDS` | TTL for remote-user invitation tokens in Redis (seconds) | `21600` (6 h) |
-| `REDIS_REMOTE_USER_ONLINE_STATUS_TTL_SECONDS` | TTL for remote-user online status keys in Redis (seconds). Applies to `online` only; `ignored` status stays durable until host action or session cleanup. | `300` (5 min) |
-| `REDIS_REMOTE_USER_TTL_REFRESH_INTERVAL_SECONDS` | Server-side refresh interval (seconds) for extending remote-user `online` status TTL while the remote chat WebSocket is alive. | `60` |
+| `REDIS_RUN_HEARTBEAT_SECONDS` | Interval (seconds) between lease-renewal heartbeats for an active run owner. The runner periodically renews the session lease; if renew fails, the run is cancelled to prevent split-brain execution across workers. Keep this comfortably below `REDIS_RUN_LEASE_TTL_SECONDS`. | `20` |
+| `REDIS_CANCEL_SIGNAL_TTL_SECONDS` | TTL (seconds) for the cross-worker cancel key set by stop actions. Running loops check this key and cancel promptly; TTL auto-cleans stale cancel keys if a worker crashes before cleanup. | `120` |
+| `REDIS_ATTACHMENT_TTL_SECONDS` | TTL (seconds) for extracted non-image attachment text cached in Redis. On cache miss, text is re-extracted from blob storage; on hit, runs resume quickly without reprocessing. Increase for long-lived sessions, decrease to reduce Redis memory footprint. | `86400` (24 h) |
+| `REDIS_GATE_RESPONSE_TTL_SECONDS` | TTL (seconds) for per-responder human-gate quorum keys (responses and winner-claim key). Supports delayed human responses while ensuring old gate rounds expire automatically and do not leak across later rounds. | `21600` (6 h) |
+| `REDIS_PENDING_TASK_TTL_SECONDS` | TTL (seconds) for quorum-composed pending task payloads stored between respond and next run. Short-lived by design: protects against stale composed tasks while allowing immediate resume calls to consume data via atomic pop. | `300` |
+| `REDIS_REMOTE_USER_TOKEN_TTL_SECONDS` | TTL (seconds) for remote-user and guest invitation token mappings in Redis. Also reused by related short-lived remote-session markers (for example ignored status, session quorum override, and guest online marker), so changing this value affects invitation validity and some readiness-state durability. | `21600` (6 h) |
+| `REDIS_REMOTE_USER_ONLINE_STATUS_TTL_SECONDS` | TTL (seconds) for remote-user online presence keys only. Presence is refreshed while the remote chat socket is alive and naturally expires if the client disconnects unexpectedly; ignored status is handled separately and is not governed by this TTL. | `300` (5 min) |
+| `REDIS_REMOTE_USER_TTL_REFRESH_INTERVAL_SECONDS` | Refresh cadence (seconds) for extending remote-user online presence TTL from the RemoteChat WebSocket loop. Keep this lower than `REDIS_REMOTE_USER_ONLINE_STATUS_TTL_SECONDS` to avoid accidental offline transitions during normal connected sessions. | `60` |
 | `MAX_AGENT_STATE_BYTES` | Maximum byte size of serialised AutoGen agent state stored in MongoDB. Raise for long sessions with many attachments or embedded images. MongoDB's document limit is 16 MB (shared with `discussions[]`). | `1000000` (1 MB) |
 | `DEBUG` | Django debug mode | `True` |
 | `ALLOWED_HOSTS` | Comma-separated allowed hosts | `localhost,127.0.0.1` |
