@@ -9,6 +9,7 @@ Use this skill when touching readiness cards in chat history UI, including:
 
 - gate badge (`.chat-status-badge--gate`)
 - OAuth readiness panel (`.chat-oauth-panel`)
+- remote participants panel (`.chat-remote-panel`)
 - restart readiness panel (`.chat-restart-panel`)
 
 ## When this skill applies
@@ -59,12 +60,16 @@ Server render (`chat_session_history.html`):
 
 - `awaiting_input` renders `.chat-status-badge--gate[data-gate-context]`
 - `awaiting_mcp_oauth` renders `.chat-oauth-panel[data-session-id][data-project-id]`
+- `awaiting_remote_users` renders `.chat-remote-panel[data-session-id][data-project-id][data-quorum]`
 - `completed|stopped` + `has_agent_state` renders `.chat-restart-panel`
 
 Client runtime (`home.js`):
 
 - Remove stale readiness cards before a new run starts.
 - Handle OAuth gate from both pre-run 409 and mid-run SSE event.
+- Handle remote participants gate from pre-run 409 `status:"awaiting_remote_users"`.
+- Preserve deferred remote-disconnect behavior: disconnect during `running` does
+  not interrupt the current run; block the next run behind `.chat-remote-panel`.
 - Restore readiness state on both `DOMContentLoaded` and `htmx:afterSwap`.
 
 ## Review checklist

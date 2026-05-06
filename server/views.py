@@ -1189,9 +1189,28 @@ async def chat_session_run(request, session_id):
     # be online (or host-ignored) before the run starts.
     remote_users_cfg = (project.get("human_gate") or {}).get("remote_users") or []
     if remote_users_cfg:
+        from agents.session_coordination import (
+            clear_remote_user_readiness_latch,
+            has_remote_user_readiness_latch,
+        )
+        readiness_latched = False
+        try:
+            readiness_latched = await asyncio.to_thread(
+                has_remote_user_readiness_latch,
+                session_id,
+            )
+        except Exception:  # noqa: BLE001
+            readiness_latched = False
+
         pending_remote = await asyncio.to_thread(
             services.compute_pending_remote_users, project, session_id
         )
+        if pending_remote is None and readiness_latched:
+            try:
+                await asyncio.to_thread(clear_remote_user_readiness_latch, session_id)
+            except Exception:  # noqa: BLE001
+                pass
+
         if pending_remote is not None:
             all_names = [r["name"] for r in remote_users_cfg if isinstance(r, dict) and r.get("name")]
             from agents.session_coordination import (

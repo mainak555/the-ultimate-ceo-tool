@@ -107,6 +107,10 @@ agents and whether any remote users are configured.
   remote) commits the round.
 - Late responders may receive a non-fatal race response (`stale` / `locked`)
   while the run is already resuming.
+- If a required remote user disconnects while a run is already in progress,
+	the current run continues. The next run start is blocked by the remote
+	participants readiness card until required users are online again (or
+	explicitly ignored by the host).
 
 #### Adding remote users
 

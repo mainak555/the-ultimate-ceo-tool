@@ -1060,6 +1060,10 @@ def _remote_user_quorum_key(session_id: str) -> str:
     return f"{_namespace()}:quorum:{session_id}"
 
 
+def _remote_user_readiness_latch_key(session_id: str) -> str:
+    return f"{_namespace()}:remote_user:{session_id}:readiness_latch"
+
+
 def set_session_quorum(session_id: str, quorum: str) -> None:
     """Store a per-session quorum override (all | first_win | team_choice) with token TTL."""
     try:
@@ -1071,6 +1075,41 @@ def set_session_quorum(session_id: str, quorum: str) -> None:
         "agents.remote_user.quorum_set",
         extra={"session_id": session_id, "quorum": quorum},
     )
+
+
+def set_remote_user_readiness_latch(session_id: str, user_name: str) -> None:
+    """Set a deferred readiness latch for the next run start.
+
+    This latch is used when a required remote participant disconnects while a run
+    is already in progress. The current run is not interrupted; the next run
+    start is blocked until readiness is satisfied.
+    """
+    import json as _json
+
+    key = _remote_user_readiness_latch_key(session_id)
+    payload = _json.dumps({"user_name": user_name or ""})
+    try:
+        _get_client().set(key, payload, ex=_remote_user_token_ttl())
+    except Exception as exc:  # noqa: BLE001
+        raise SessionCoordinationError("Unable to set remote readiness latch.") from exc
+
+
+def has_remote_user_readiness_latch(session_id: str) -> bool:
+    """Return True when the deferred remote readiness latch is set."""
+    key = _remote_user_readiness_latch_key(session_id)
+    try:
+        return bool(_get_client().exists(key))
+    except Exception as exc:  # noqa: BLE001
+        raise SessionCoordinationError("Unable to read remote readiness latch.") from exc
+
+
+def clear_remote_user_readiness_latch(session_id: str) -> None:
+    """Clear deferred remote readiness latch for this session."""
+    key = _remote_user_readiness_latch_key(session_id)
+    try:
+        _get_client().delete(key)
+    except Exception as exc:  # noqa: BLE001
+        raise SessionCoordinationError("Unable to clear remote readiness latch.") from exc
 
 
 def get_session_quorum(session_id: str) -> str | None:
@@ -1085,6 +1124,7 @@ def purge_remote_user_session_keys(session_id: str, user_names: list[str]) -> No
     """Delete all token, status, and quorum keys for a session's remote users."""
     keys: list[str] = [
         _remote_user_quorum_key(session_id),
+        _remote_user_readiness_latch_key(session_id),
     ]
     try:
         client = _get_client()
@@ -1220,6 +1260,9 @@ __all__ = [
     "set_guest_offline",
     "set_session_quorum",
     "get_session_quorum",
+    "set_remote_user_readiness_latch",
+    "has_remote_user_readiness_latch",
+    "clear_remote_user_readiness_latch",
     "signal_cancel",
     "store_gate_response",
     "store_pending_task",

@@ -90,6 +90,22 @@ A project can define `human_gate.remote_users` — additional human participants
 - Team config changes (adding/removing remote users, changing quorum mode) take effect on the next run without creating a new session.
 - `event_stream` and `chat_session_respond` always load the project and read `remote_users` from it.
 
+### Remote disconnect during active run (deferred readiness latch)
+
+When a configured remote participant disconnects while `session.status == "running"`:
+
+- The current run is not interrupted.
+- A Redis deferred-readiness latch is set for that session.
+- The next `POST /chat/sessions/<id>/run/` is blocked behind the existing
+   `awaiting_remote_users` readiness path until required participants are
+   satisfied (`online` or `ignored`).
+
+Scope rules:
+
+- Applies only to configured remote users.
+- Does not apply to guest watchers.
+- Does not trigger for users already marked `ignored`.
+
 ### `quorum == "team_choice"` — UserProxyAgent Wiring
 
 `build_team()` creates one `UserProxyAgent` per remote user when `quorum == "team_choice"` and `remote_users` is non-empty:
