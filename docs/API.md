@@ -30,6 +30,7 @@ All routes are under the `server` app namespace.
 | `POST` | `/chat/sessions/<session_id>/remote-users/<user_name>/ignore/` | `ignore_remote_user` | Mark a remote user ignored for the current run readiness/quorum |
 | `POST` | `/chat/sessions/<session_id>/remote-users/<user_name>/unignore/` | `unignore_remote_user` | Re-enable a previously ignored remote user |
 | `POST` | `/chat/sessions/<session_id>/remote-users/quorum/` | `set_session_quorum_view` | Override live session quorum (`all` or `first_win`) |
+| `POST` | `/chat/sessions/<session_id>/remote-users/<user_name>/allow-export/` | `allow_remote_user_export` | Grant or revoke export access for one remote user (admin-only). Body: `{"enable": true\|false}`. `enable=true` generates a per-user impersonated export key in Redis and publishes `remote_export_enabled` to the session's WebSocket; `enable=false` revokes the key and publishes `remote_export_disabled`. |
 | `GET` | `/remote/join/<token>/` | `remote_user_join` | Public remote-user page for a tokenized invite |
 | `POST` | `/remote/join/<token>/online/` | `remote_user_mark_online` | Mark invite holder online and publish readiness update |
 | `POST` | `/remote/join/<token>/attachments/` | `remote_user_upload_attachments` | Upload remote-user attachments for the active gate response |
@@ -57,6 +58,10 @@ All routes are under the `server` app namespace.
 
 See [docs/trello_integration.md](trello_integration.md) for full Trello integration details.
 
+> **Session-scoped endpoints** (`/trello/<session_id>/...`) accept either the admin `APP_SECRET_KEY`
+> **or** a per-user impersonated export key issued by `allow_remote_user_export`.
+> Project-scoped endpoints (`/trello/project/<project_id>/...`) require the admin key only.
+
 ## Jira Endpoints
 
 `<type>` must be one of `software`, `service_desk`, `business`.
@@ -82,6 +87,10 @@ See [docs/trello_integration.md](trello_integration.md) for full Trello integrat
 
 See [docs/jira_integration.md](jira_integration.md) for full Jira integration details.
 
+> **Session-scoped endpoints** (`/jira/<sid>/...`) accept either the admin `APP_SECRET_KEY`
+> **or** a per-user impersonated export key. Project-scoped endpoints (`/jira/project/<pid>/...`)
+> require the admin key only. See [`.agents/skills/remote_user_export/SKILL.md`](../.agents/skills/remote_user_export/SKILL.md) for the full key lifecycle.
+
 ## MCP OAuth Endpoints
 
 | Method | Path | View/Handler | Description |
@@ -96,7 +105,7 @@ See [docs/jira_integration.md](jira_integration.md) for full Jira integration de
 |--------|------|----------|-------------|
 | `WS` | `/ws/session/<session_id>/?skey=<APP_SECRET_KEY>` | `HostSessionConsumer` | Host realtime feed for chat messages plus quorum progress/commit events |
 | `WS` | `/ws/remote-users/<session_id>/?skey=<APP_SECRET_KEY>` | `RemoteUserReadinessConsumer` | Host realtime readiness panel updates for remote online/ignored status |
-| `WS` | `/ws/remote/chat/<token>/` | `RemoteChatConsumer` | Remote-user realtime feed for agent messages and status updates |
+| `WS` | `/ws/remote/chat/<token>/` | `RemoteChatConsumer` | Remote-user realtime feed for agent messages, status updates, and export-permission events (`remote_export_enabled` / `remote_export_disabled`) |
 
 ## Generic Export Popup Endpoint Pattern
 

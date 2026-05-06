@@ -77,6 +77,8 @@ product-discovery/
 - `normalize_project(data)` — adapts old documents to the new nested shape for display.
 - `get_available_models()` — returns the sorted model catalog used by the UI.
 - `verify_secret_key(key)` — constant-time comparison against `APP_SECRET_KEY`.
+- `verify_session_export_key(key, session_id)` — validates a per-user impersonated export key against Redis; used by session-scoped export endpoints.
+- `has_valid_session_auth(request, session_id)` — accepts either `APP_SECRET_KEY` or a valid session export key; used by all session-scoped Trello and Jira endpoints so remote users with export access can call them.
 - All functions work with plain dicts — no HTTP/request coupling.
 
 Deletion policy:
@@ -112,7 +114,7 @@ Implements a Strategy + Factory pattern for pluggable blob providers.
 - `agents/team_builder.py` builds AutoGen teams (`RoundRobinGroupChat` or `SelectorGroupChat`) from saved configuration. The team type is read from `project["team"]["type"]`. Each `AssistantAgent` receives `description=` (line 1 of its resolved system message) so that `SelectorGroupChat`'s `{roles}` placeholder renders meaningful routing context.
 - Single-assistant projects run in chat mode with Human Gate enabled and a `RoundRobinGroupChat` runtime; selector routing requires at least two assistants.
 - `agents/runtime.py` owns process-local team/cache lifecycle and MCP workbench teardown.
-- `agents/session_coordination.py` owns Redis-backed active-session coordination (run lease, heartbeat, cross-instance cancel signaling) and remote-user readiness ephemeral state (online/ignored status, per-session quorum override, deferred readiness latch).
+- `agents/session_coordination.py` owns Redis-backed active-session coordination (run lease, heartbeat, cross-instance cancel signaling), remote-user readiness ephemeral state (online/ignored status, per-session quorum override, deferred readiness latch), and per-user impersonated export keys (`generate_remote_user_export_key`, `revoke_remote_user_export_key`, `get_remote_export_key_data`, `get_all_remote_user_export_states`).
 
 ### Root `core/` Package — Shared Infrastructure
 - `core/tracing.py` owns OpenTelemetry setup and helpers (`init_tracing`,
@@ -122,10 +124,12 @@ Implements a Strategy + Factory pattern for pluggable blob providers.
 
 Provider client resolution in `agents/factory.py` (builder-per-provider pattern):
 - `openai`          → `OpenAIChatCompletionClient` — direct OpenAI API
-- `anthropic`       → `AnthropicChatCompletionClient` — direct Anthropic API
+- `anthropic`       → `AnthropicChatCompletionClient` wrapped in `_RetryAnthropicClient` — direct Anthropic API with HTTP 529 exponential-backoff retry
 - `google`          → `OpenAIChatCompletionClient` — Google Gemini (OpenAI-compatible)
 - `azure_openai`    → `AzureOpenAIChatCompletionClient` — Azure AI Foundry OpenAI deployment
-- `azure_anthropic` → `AnthropicChatCompletionClient` with `base_url` — Anthropic model on Azure AI Foundry
+- `azure_anthropic` → `AnthropicChatCompletionClient` wrapped in `_RetryAnthropicClient` with `base_url` — Anthropic model on Azure AI Foundry
+
+`_RetryAnthropicClient` is a transparent proxy that retries `create()` and `create_stream()` on HTTP 529 (`OverloadedError`) using exponential backoff with jitter. All other attribute accesses delegate to the inner client unchanged. Retry count and base delay are configurable via `ANTHROPIC_MAX_RETRIES` (default `3`) and `ANTHROPIC_RETRY_BASE_DELAY` (default `5.0` seconds).
 
 To add a new provider, define a `_build_<name>` function in `agents/factory.py` and add one entry to `_PROVIDER_BUILDERS`.
 
@@ -137,7 +141,7 @@ See [docs/agent_factory.md](agent_factory.md) for the full `agent_models.json` s
 - **Provider secrets**: API keys are read from env only — `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, `AZURE_OPENAI_API_KEY`, `AZURE_ANTHROPIC_API_KEY`.
 - **Provider endpoints**: Azure endpoint URLs are stored per-model in `agent_models.json` under the `endpoint` field. No endpoint env var is used; each Azure resource has its own URL.
 - **No Django ORM**: `DATABASES = {}`. Sessions use signed cookies.
-- **Runtime state split**: Redis serves three roles — (1) active run coordination (lease per `session_id`, heartbeat, cross-instance cancel signal via `agents/session_coordination.py`); (2) remote-user readiness ephemeral state (status keys, quorum override, deferred readiness latch for next-run blocking after mid-run disconnect); (3) attachment text cache (`{REDIS_NAMESPACE}:attachment:{session_id}:{attachment_id}:text`, TTL `REDIS_ATTACHMENT_TTL_SECONDS`, default 24 h). MongoDB persists durable discussion history and `agent_state` resume data (no file content). Azure Blob holds raw attachment bytes.
+- **Runtime state split**: Redis serves four roles — (1) active run coordination (lease per `session_id`, heartbeat, cross-instance cancel signal via `agents/session_coordination.py`); (2) remote-user readiness ephemeral state (status keys, quorum override, deferred readiness latch for next-run blocking after mid-run disconnect); (3) attachment text cache (`{REDIS_NAMESPACE}:attachment:{session_id}:{attachment_id}:text`, TTL `REDIS_ATTACHMENT_TTL_SECONDS`, default 24 h); (4) per-user impersonated export keys (`{NS}:remote_user:{session_id}:{user_name}:export_key` → key UUID, `{NS}:remote_export:key:{key}` → `{session_id, user_name}`, TTL `REDIS_REMOTE_USER_TOKEN_TTL_SECONDS`). MongoDB persists durable discussion history and `agent_state` resume data (no file content). Azure Blob holds raw attachment bytes.
 - **Secret key auth**: GET/POST HTMX requests can carry `X-App-Secret-Key`; invalid or missing keys get read-only views or rejected saves.
 - **Model catalog**: `agent_models.json` is keyed by model name; Azure deployments use the optional `deployment_name` field (defaults to model key). See [docs/agent_factory.md](agent_factory.md) for schema details.
 - **SCSS**: Compiled at request time in dev, offline in production.
@@ -162,6 +166,8 @@ See [docs/agent_factory.md](agent_factory.md) for the full `agent_models.json` s
 - `server/static/server/js/jira_service_desk.js`: Jira Service Desk provider registration wrapper only.
 - `server/static/server/js/jira_business.js`: Jira Business provider registration wrapper only.
 - `server/static/server/js/provider_registry.js`: provider capability registry used by shared modules to open export modals and sync provider config without hardcoded provider switches.
+- `server/static/server/js/remote_user.js`: remote-user chat page behavior only (chat bubbles, WebSocket lifecycle, export dropdown injection/removal, attachment handling for gate responses). Owns the `_injectExportDropdowns` / `_removeExportDropdowns` contract and `openRemoteExportModal`.
+- `server/static/server/js/markdown_viewer.js`: shared markdown rendering module. Consumed by Home, Trello export popup, Jira export popup, and the remote-user page. Never duplicate markdown parser logic in feature modules — import from this shared module.
 
 When adding new UI behavior, create a dedicated module for a distinct feature surface instead of extending `app.js`.
 See [docs/frontend_js_architecture.md](frontend_js_architecture.md) for the module ownership and event contract.
@@ -187,6 +193,7 @@ Repo-local extension skills live under `.agents/skills/`.
 - `.agents/skills/scss_style_consistency/SKILL.md` — token-only SCSS and shared component style consistency requirements.
 - `.agents/skills/active_session_coordination/SKILL.md` — Redis lease/heartbeat/cancel and Mongo resume-state contract for chat run lifecycle changes.
 - `.agents/skills/chat_attachment_workflow/SKILL.md` — attachment upload/bind/Redis-cache/vision/delete contract and implementation checklist.
+- `.agents/skills/remote_user_export/SKILL.md` — per-user impersonated export key lifecycle (Redis schema, auth wiring, host/remote UI event contracts, purge behavior).
 
 ## Integration Docs
 

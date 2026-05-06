@@ -92,6 +92,14 @@ defaults to `"chat_agent"` and `env` = `settings.ENVIRONMENT`.
 | `{NS}:remote_user:token:{token}` | JSON `{"session_id", "user_name", "project_id"}` | token TTL (24 h) |
 | `{NS}:quorum:{session_id}` | string `all \| first_win \| team_choice` | token TTL (24 h) |
 | `{NS}:remote_user:{session_id}:readiness_latch` | JSON `{"user_name": str}` (deferred next-run gate trigger) | token TTL (24 h) |
+| `{NS}:remote_user:{session_id}:{user_name}:export_key` | UUID export key string | `REDIS_REMOTE_USER_TOKEN_TTL_SECONDS` (6 h) |
+| `{NS}:remote_export:key:{export_key}` | JSON `{"session_id": str, "user_name": str}` | `REDIS_REMOTE_USER_TOKEN_TTL_SECONDS` (6 h) |
+
+Export key pairs are written atomically by `generate_remote_user_export_key` and deleted by
+`revoke_remote_user_export_key`. `purge_remote_user_session_keys` also deletes both entries per
+user. `ignore_remote_user` additionally calls `revoke_remote_user_export_key` to ensure export
+keys never outlive a user's active participation. See [`.agents/skills/remote_user_export/SKILL.md`](../remote_user_export/SKILL.md)
+for the full export key lifecycle.
 
 Gate TTLs are safety nets only — gate keys are cleared explicitly on quorum completion.
 

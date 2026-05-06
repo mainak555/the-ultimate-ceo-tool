@@ -88,6 +88,13 @@ See [`.agents/skills/remote_user_quorum/SKILL.md`](.agents/skills/remote_user_qu
 - Phase 1 vs Phase 2 boundary (auto-complete remotes → real WebSocket respond)
 - Phase 2 implementation hooks and files to touch
 
+See [`.agents/skills/remote_user_export/SKILL.md`](.agents/skills/remote_user_export/SKILL.md) for:
+- Per-user impersonated export key lifecycle (Redis schema, generation, revocation, purge)
+- Auth wiring: `has_valid_session_auth` vs `verify_secret_key` for session-scoped endpoints
+- Host UI "Can Export" checkbox and WebSocket event contracts (`remote_export_enabled` / `remote_export_disabled`)
+- Remote page window globals, dropdown injection, bubble `data-` attribute contracts
+- Export modal context shape and `getExportKey()` rule
+
 See [`.agents/skills/chat_surface_shared/SKILL.md`](.agents/skills/chat_surface_shared/SKILL.md) for:
 - Shared chat panel/bubble/style contracts across Home (HITL), Remote, and Guest surfaces
 - Bubble DOM parity and public-page header contracts (Remote + Guest)
@@ -200,3 +207,5 @@ See [docs/observability.md](docs/observability.md) for:
 82. **Rule and skill boundary is strict**: `AGENTS.md` defines repository policy contracts; `.agents/skills/*/SKILL.md` defines implementation procedures/checklists. Do not duplicate full rule text across both layers; keep AGENTS concise and use skills for execution detail.
 83. **Readonly card header layout is the project standard for all `agent-card--readonly` cards**: the right-side meta block (`agent-card__header-meta`) must be a floated element placed **first** in DOM order inside the card so left-side content flows naturally beside it. Title uses `agent-card__title` (bold, `$font-size-lg`). Temperature renders as `agent-card__temp` (italic, `$color-text-muted`, `$font-size-sm`) stacked below the model badge inside the meta block. The card itself requires `overflow: hidden` (float clearfix). All six card types — Assistant Agents, Selector/Team, Trello, Jira Software, Jira Service Desk, Jira Business — must follow this identical structure. See `docs/scss_style_guide.md` §"Readonly Card Layout" and `.agents/skills/ui_consistency_guardrails/SKILL.md`.
 84. **Public chat name-label contract is mandatory**: Home user-role history labels remain `You`; Remote page must label only the currently joined remote participant's own user-role messages as `You` and keep other participant names visible; Guest page remains name-based for all senders (no viewer-relative `You`). Follow `docs/UI.md` and `.agents/skills/chat_surface_shared/SKILL.md` before changing chat bubble name rendering.
+85. **Session-scoped export endpoints use `has_valid_session_auth`**: all Trello and Jira endpoints scoped to a `session_id` must call `services.has_valid_session_auth(request, session_id)` instead of `verify_secret_key` alone. This allows remote users who hold a valid impersonated export key (issued by `allow_remote_user_export`) to call these endpoints without receiving the admin key. Admin-only project-scoped and config endpoints continue to use `_has_valid_secret` / `verify_secret_key`. Never swap these — using the wrong check silently blocks remote users or inadvertently widens access. Before changing session-scoped auth, follow `.agents/skills/remote_user_export/SKILL.md`.
+86. **Anthropic 529 retry is handled exclusively by `_RetryAnthropicClient`**: never add inline retry loops around Anthropic model calls in `team_builder.py`, `runtime.py`, or agent code. The proxy in `agents/factory.py` handles transient HTTP 529 (`OverloadedError`) via exponential backoff with jitter (`ANTHROPIC_MAX_RETRIES` attempts, `ANTHROPIC_RETRY_BASE_DELAY` base seconds, defaults `3` and `5.0`). All other errors propagate immediately. Both `anthropic` and `azure_anthropic` providers are wrapped automatically by their respective builder functions.
