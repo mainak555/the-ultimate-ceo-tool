@@ -266,6 +266,18 @@
             <span class="project-ctx__agent-model">Human reviewer</span>
           </div>
         </div>
+
+        {% for remote_user in project.human_gate.remote_users %}
+          <div class="project-ctx__agent-card project-ctx__agent-card--human">
+            <div class="project-ctx__agent-avatar project-ctx__agent-avatar--human">
+              {{ remote_user.name|slice:":1"|upper }}
+            </div>
+            <div class="project-ctx__agent-info">
+              <span class="project-ctx__agent-name">{{ remote_user.name }}</span>
+              <span class="project-ctx__agent-model">Remote participant</span>
+            </div>
+          </div>
+        {% endfor %}
       {% endif %}
 
     </div>
