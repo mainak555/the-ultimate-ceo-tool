@@ -29,6 +29,12 @@ urlpatterns = [
         remote_user_views.set_session_quorum_view,
         name="remote_user_quorum",
     ),
+    # Grant or revoke per-user impersonated export access
+    path(
+        "<str:session_id>/remote-users/<str:user_name>/allow-export/",
+        remote_user_views.allow_remote_user_export,
+        name="remote_user_allow_export",
+    ),
 ]
 
 # Public join routes — included under /remote/ in config/urls.py

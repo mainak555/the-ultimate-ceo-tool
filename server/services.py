@@ -1271,3 +1271,37 @@ def verify_secret_key(key):
     if not expected:
         return False
     return hmac.compare_digest(key, expected)
+
+
+def verify_session_export_key(key: str, session_id: str) -> bool:
+    """Return True if *key* is a valid impersonated export key scoped to *session_id*.
+
+    Looks up the key in Redis via :func:`get_remote_export_key_data`.  Any
+    Redis/coordination error is treated as an auth failure (returns False).
+    """
+    from agents.session_coordination import (
+        SessionCoordinationError,
+        get_remote_export_key_data,
+    )
+
+    if not key or not session_id:
+        return False
+    try:
+        data = get_remote_export_key_data(key)
+    except SessionCoordinationError:
+        return False
+    return bool(data and data.get("session_id") == session_id)
+
+
+def has_valid_session_auth(request, session_id: str) -> bool:
+    """Return True if the request carries either the admin secret key or a
+    valid per-user export key scoped to *session_id*.
+
+    This is the shared auth guard for session-scoped export endpoints (Trello,
+    Jira, future providers).  Admin-only endpoints must continue to call
+    :func:`verify_secret_key` directly.
+    """
+    key = request.headers.get("X-App-Secret-Key", "").strip()
+    if not key:
+        return False
+    return verify_secret_key(key) or verify_session_export_key(key, session_id)

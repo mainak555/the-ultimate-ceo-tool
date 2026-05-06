@@ -18,7 +18,7 @@ VALID_JIRA_TYPES = frozenset(("software", "service_desk", "business"))
 
 
 def _has_valid_secret(request):
-    """Check the secret key passed in the request headers."""
+    """Check the secret key (admin-only endpoints)."""
     key = request.headers.get("X-App-Secret-Key", "").strip()
     return services.verify_secret_key(key)
 
@@ -79,7 +79,7 @@ def jira_project_spaces(request, project_id, type_name):
 @require_GET
 def jira_session_status(request, session_id, type_name):
     """GET — Check if a Jira type is configured for the session's project."""
-    if not _has_valid_secret(request):
+    if not services.has_valid_session_auth(request, session_id):
         return util.json_error("Unauthorized", 403)
 
     err = _validate_type(type_name)
@@ -97,7 +97,7 @@ def jira_session_status(request, session_id, type_name):
 @require_GET
 def jira_session_spaces(request, session_id, type_name):
     """GET — List Jira projects for the session's project type (export modal)."""
-    if not _has_valid_secret(request):
+    if not services.has_valid_session_auth(request, session_id):
         return util.json_error("Unauthorized", 403)
 
     err = _validate_type(type_name)
@@ -115,7 +115,7 @@ def jira_session_spaces(request, session_id, type_name):
 @require_GET
 def jira_session_metadata(request, session_id, type_name):
     """GET — Return project metadata for export editor dropdowns."""
-    if not _has_valid_secret(request):
+    if not services.has_valid_session_auth(request, session_id):
         return util.json_error("Unauthorized", 403)
 
     err = _validate_type(type_name)
@@ -138,7 +138,7 @@ def jira_session_metadata(request, session_id, type_name):
 @require_POST
 def jira_extract(request, session_id, discussion_id, type_name):
     """POST — Run extraction agent against a discussion message."""
-    if not _has_valid_secret(request):
+    if not services.has_valid_session_auth(request, session_id):
         return util.json_error("Unauthorized", 403)
 
     err = _validate_type(type_name)
@@ -159,7 +159,7 @@ def jira_extract(request, session_id, discussion_id, type_name):
 @require_http_methods(["GET", "POST"])
 def jira_export_data(request, session_id, discussion_id, type_name):
     """GET — Load saved export. POST — Save edited export."""
-    if not _has_valid_secret(request):
+    if not services.has_valid_session_auth(request, session_id):
         return util.json_error("Unauthorized", 403)
 
     err = _validate_type(type_name)
@@ -198,7 +198,7 @@ def jira_export_data(request, session_id, discussion_id, type_name):
 @require_GET
 def jira_reference(request, session_id, discussion_id):
     """GET — Return raw discussion content as markdown for the reference pane."""
-    if not _has_valid_secret(request):
+    if not services.has_valid_session_auth(request, session_id):
         return util.json_error("Unauthorized", 403)
 
     try:
@@ -213,7 +213,7 @@ def jira_reference(request, session_id, discussion_id):
 @require_POST
 def jira_push(request, session_id, type_name):
     """POST — Push issues to Jira and save push result."""
-    if not _has_valid_secret(request):
+    if not services.has_valid_session_auth(request, session_id):
         return util.json_error("Unauthorized", 403)
 
     err = _validate_type(type_name)

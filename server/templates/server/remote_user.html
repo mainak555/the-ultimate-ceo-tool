@@ -77,6 +77,28 @@
                       {% endfor %}
                     </div>
                   {% endif %}
+                  {% if d.visible_export_providers %}
+                    <div class="chat-bubble__actions">
+                      <div class="export-dropdown" data-export-dropdown>
+                        <button type="button" class="btn btn--sm btn--warning export-dropdown__toggle" aria-expanded="false">
+                          Export <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-left:3px"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+                        </button>
+                        <div class="export-dropdown__menu" hidden>
+                          {% for provider in d.visible_export_providers %}
+                            <button
+                              type="button"
+                              class="export-dropdown__item"
+                              data-provider="{{ provider.name }}"
+                              data-session-id="{{ session_id }}"
+                              data-discussion-id="{{ d.id|default:'' }}"
+                            >
+                              {{ provider.label }}
+                            </button>
+                          {% endfor %}
+                        </div>
+                      </div>
+                    </div>
+                  {% endif %}
                 </div>
               </div>
             {% endif %}
@@ -123,9 +145,21 @@
     window._remoteUserName  = "{{ user_name }}";
     window._remoteSessionId = "{{ session_id }}";
     window._remoteGateContext = {% if gate_context %}{"round": {{ gate_context.round }}, "max_rounds": {{ gate_context.max_rounds }}, "chat_mode": "{{ gate_context.chat_mode }}", "quorum": "{{ gate_context.quorum }}"}{% else %}null{% endif %};
+    window._remoteExportKey = "{{ export_key|default:'' }}";
+    window._remoteProjectId = "{{ project_id|default:'' }}";
+    window._csrfToken = "{{ csrf_token }}";
   </script>
   {% compress js %}
   <script src="{% static 'server/js/chat_copy_utils.js' %}"></script>
+  <script src="{% static 'server/js/markdown_viewer.js' %}"></script>
+  <script src="{% static 'server/js/provider_registry.js' %}"></script>
+  <script src="{% static 'server/js/export_modal_base.js' %}"></script>
+  <script src="{% static 'server/js/trello.js' %}"></script>
+  <script src="{% static 'server/js/jira.js' %}"></script>
+  <script src="{% static 'server/js/jira_adapter_factory.js' %}"></script>
+  <script src="{% static 'server/js/jira_software.js' %}"></script>
+  <script src="{% static 'server/js/jira_service_desk.js' %}"></script>
+  <script src="{% static 'server/js/jira_business.js' %}"></script>
   <script src="{% static 'server/js/remote_user.js' %}"></script>
   {% endcompress %}
 

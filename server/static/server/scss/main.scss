@@ -2343,7 +2343,7 @@ select.input {
 // Remote user row — checkbox | name | status | copy-link button
 .remote-user-row {
   display: grid;
-  grid-template-columns: auto 1fr auto auto;
+  grid-template-columns: auto 1fr auto auto auto;
   align-items: center;
   gap: $space-sm;
   padding: $space-sm $space-md;
@@ -2372,6 +2372,24 @@ select.input {
     padding: 2px $space-xs;
     border-radius: $radius;
     white-space: nowrap;
+  }
+
+  &__export-label {
+    display: inline-flex;
+    align-items: center;
+    gap: $space-xs;
+    font-size: $font-size-sm;
+    color: $color-text-muted;
+    cursor: pointer;
+    white-space: nowrap;
+    user-select: none;
+  }
+
+  &__export-cb {
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+    cursor: pointer;
   }
 }
 

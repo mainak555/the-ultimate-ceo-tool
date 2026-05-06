@@ -1111,6 +1111,7 @@ document.addEventListener("DOMContentLoaded", function () {
     (users || []).forEach(function (u) {
       var name = typeof u === "string" ? u : (u.name || "");
       var status = typeof u === "object" ? (u.status || "offline") : "offline";
+      var exportAllowed = typeof u === "object" ? !!u.export_allowed : false;
 
       if (rowsContainer.querySelector('[data-remote-user-name="' + name.replace(/"/g, '\\"') + '"]')) return;
 
@@ -1120,15 +1121,30 @@ document.addEventListener("DOMContentLoaded", function () {
       var cbDisabled = isTeamChoice ? " disabled" : "";
       var cbChecked = (status === "ignored") ? "" : " checked";
       var copyDisabled = (status === "ignored") ? " disabled" : "";
+      var exportChecked = exportAllowed ? " checked" : "";
+      var exportDisabled = (status === "ignored") ? " disabled" : "";
 
       var rowHtml = '<div class="remote-user-row" data-remote-user-name="' + safe + '" data-status="' + escapeHtml(status) + '">'
         + '<input type="checkbox" class="remote-user-row__checkbox" title="Require this user"' + cbChecked + cbDisabled + '>'
         + '<span class="remote-user-row__name">' + safe + '</span>'
-        + '<span class="remote-user-row__status ' + statusClass + '">' + statusLabel + '</span>'
+        + '<label class="remote-user-row__export-label" title="Allow this user to export from their chat page">'
+        + '<input type="checkbox" class="remote-user-row__export-cb"' + exportChecked + exportDisabled + '> Can Export'
+        + '</label>'
         + '<button type="button" class="btn btn--sm btn--secondary remote-user-copy-btn" data-session-id="' + escapeHtml(sessionId) + '" data-user-name="' + safe + '" title="Copy invite link"' + copyDisabled + '>Copy Link</button>'
+        + '<span class="remote-user-row__status ' + statusClass + '">' + statusLabel + '</span>'
         + '</div>';
       rowsContainer.insertAdjacentHTML("beforeend", rowHtml);
     });
+  }
+
+  function _updateRemoteUserExportRow(panel, userName, enabled) {
+    if (!panel) return;
+    var rowsContainer = panel.querySelector(".chat-remote-panel__rows");
+    if (!rowsContainer) return;
+    var row = rowsContainer.querySelector('[data-remote-user-name="' + userName.replace(/"/g, '\\"') + '"]');
+    if (!row) return;
+    var cb = row.querySelector(".remote-user-row__export-cb");
+    if (cb) cb.checked = !!enabled;
   }
 
   function _humanizeQuorumValue(value) {
@@ -1233,6 +1249,20 @@ document.addEventListener("DOMContentLoaded", function () {
           }
         } else if (msg.type === "count_update" || msg.type === "complete") {
           if (msg.type === "complete") _onAllReady();
+        } else if (msg.type === "remote_export_enabled") {
+          if (panel._users) {
+            panel._users.forEach(function (u) {
+              if (u.name === msg.user_name) { u.export_allowed = true; }
+            });
+          }
+          _updateRemoteUserExportRow(panel, msg.user_name, true);
+        } else if (msg.type === "remote_export_disabled") {
+          if (panel._users) {
+            panel._users.forEach(function (u) {
+              if (u.name === msg.user_name) { u.export_allowed = false; }
+            });
+          }
+          _updateRemoteUserExportRow(panel, msg.user_name, false);
         }
       };
       _remoteUserWs.onerror = function () {
@@ -1291,6 +1321,25 @@ document.addEventListener("DOMContentLoaded", function () {
     fetch("/chat/sessions/" + sessionId + "/remote-users/" + encodeURIComponent(userName) + "/" + endpoint + "/", {
       method: "POST",
       headers: {"X-App-Secret-Key": secretKey, "X-CSRFToken": csrfToken},
+    }).catch(function () { /* non-fatal */ });
+  });
+
+  // Delegated: Can Export checkbox toggle
+  document.addEventListener("change", function (event) {
+    var cb = event.target && event.target.classList && event.target.classList.contains("remote-user-row__export-cb") ? event.target : null;
+    if (!cb) return;
+    var row = cb.closest(".remote-user-row");
+    var panel = cb.closest(".chat-remote-panel");
+    if (!row || !panel) return;
+    var sessionId = panel.dataset.sessionId || (activeSessionIdInput ? activeSessionIdInput.value.trim() : "");
+    var userName = row.dataset.remoteUserName;
+    var secretKey = getSecretKey();
+    if (!sessionId || !userName || !secretKey) return;
+
+    fetch("/chat/sessions/" + sessionId + "/remote-users/" + encodeURIComponent(userName) + "/allow-export/", {
+      method: "POST",
+      headers: {"X-App-Secret-Key": secretKey, "X-CSRFToken": csrfToken, "Content-Type": "application/json"},
+      body: JSON.stringify({"enable": cb.checked}),
     }).catch(function () { /* non-fatal */ });
   });
 
