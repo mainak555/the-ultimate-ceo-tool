@@ -417,10 +417,10 @@
     if (!text) return;
     var c = document.getElementById("remote-chat-messages");
     if (!c) return;
-    var el = document.createElement("div");
-    el.className = "chat-status-badge chat-status-badge--remote-users";
-    el.textContent = text;
-    c.appendChild(el);
+    c.insertAdjacentHTML(
+      "beforeend",
+      '<div class="chat-status-badge chat-status-badge--remote-users">\u23F3 ' + escapeHtml(text) + "</div>"
+    );
     scrollToBottom();
   }
 

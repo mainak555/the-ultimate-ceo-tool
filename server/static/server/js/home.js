@@ -452,7 +452,7 @@ document.addEventListener("DOMContentLoaded", function () {
     if (!text) return;
     chatMessages.insertAdjacentHTML(
       "beforeend",
-      '<div class="chat-status-badge chat-status-badge--remote-users">' + escapeHtml(text) + '</div>'
+      '<div class="chat-status-badge chat-status-badge--remote-users">\u23F3 ' + escapeHtml(text) + '</div>'
     );
     chatMessages.scrollTop = chatMessages.scrollHeight;
   }

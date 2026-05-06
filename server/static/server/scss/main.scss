@@ -2036,6 +2036,13 @@ select.input {
     border: 1px solid lighten($color-warning, 35%);
   }
 
+  // Team-choice turn is pending for a specific remote participant.
+  &--remote-users {
+    background: lighten($color-warning, 45%);
+    color: $color-warning;
+    border: 1px solid lighten($color-warning, 35%);
+  }
+
   &--running {
     background: lighten($color-info, 43%);
     color: darken($color-info, 12%);
