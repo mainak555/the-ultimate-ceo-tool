@@ -1643,6 +1643,13 @@ select.input {
   margin-bottom: $space-xs;
 }
 
+.project-ctx__tag-row {
+  display: flex;
+  align-items: center;
+  gap: $space-xs;
+  flex-wrap: wrap;
+}
+
 .project-ctx__tag {
   font-size: $font-size-sm;
   color: $color-text-muted;
@@ -1651,6 +1658,10 @@ select.input {
   border-radius: 99px;
   padding: 2px 10px;
   display: inline-block;
+}
+
+.project-ctx__tag--quorum {
+  text-transform: lowercase;
 }
 
 .project-ctx__section {
