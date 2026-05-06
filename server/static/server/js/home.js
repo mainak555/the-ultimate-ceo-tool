@@ -450,11 +450,19 @@ document.addEventListener("DOMContentLoaded", function () {
 
   function appendQuorumInfoBadge(text) {
     if (!text) return;
+    clearQuorumInfoBadges();
     chatMessages.insertAdjacentHTML(
       "beforeend",
       '<div class="chat-status-badge chat-status-badge--remote-users">\u23F3 ' + escapeHtml(text) + '</div>'
     );
     chatMessages.scrollTop = chatMessages.scrollHeight;
+  }
+
+  function clearQuorumInfoBadges() {
+    if (!chatMessages) return;
+    chatMessages.querySelectorAll(".chat-status-badge--remote-users").forEach(function (el) {
+      el.remove();
+    });
   }
 
   // Re-evaluate Send button enabled state honouring gate mode rules.
@@ -687,6 +695,7 @@ document.addEventListener("DOMContentLoaded", function () {
   function appendStatusBadge(type) {
     var label = type === "completed" ? "Run completed" : "Run stopped";
     setAgentsWorkingBadge(false);
+    clearQuorumInfoBadges();
     chatMessages.insertAdjacentHTML(
       "beforeend",
       '<div class="chat-status-badge chat-status-badge--' + type + '">' + label + '</div>'
@@ -702,6 +711,7 @@ document.addEventListener("DOMContentLoaded", function () {
       return;
     }
     if (existing) return;
+    clearQuorumInfoBadges();
     chatMessages.insertAdjacentHTML(
       "beforeend",
       '<div class="chat-status-badge chat-status-badge--running">\u2699 Agents at work</div>'
@@ -1009,6 +1019,7 @@ document.addEventListener("DOMContentLoaded", function () {
         var payload = msg.message || msg;
         if (!payload || payload.role !== "user") return;
         if (payload.user_origin === "host") return;
+        clearQuorumInfoBadges();
         appendRemoteUserBubble(payload);
         return;
       }
@@ -1022,6 +1033,7 @@ document.addEventListener("DOMContentLoaded", function () {
       }
 
       if (msg.type === "quorum_committed" && _gateData) {
+        clearQuorumInfoBadges();
         var isFirstWin = msg.quorum === "first_win";
         var shouldAutoStart = isFirstWin;
         _gateData.awaiting_host_final = false;
@@ -1040,6 +1052,7 @@ document.addEventListener("DOMContentLoaded", function () {
       }
 
       if (msg.type === "team_choice_turn_submitted" || msg.type === "team_choice_turn_resolved") {
+        clearQuorumInfoBadges();
         return;
       }
     };
