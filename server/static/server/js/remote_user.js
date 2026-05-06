@@ -310,15 +310,17 @@
     // WS payload uses msg.export.providers; provider list absent when export not yet granted.
     var providers = (msg.export && msg.export.providers) || msg.providers || null;
     var discussionId = msg.id || msg.discussion_id || "";
+    // Apply per-agent export_agents filtering (mirrors home.js getVisibleExportProviders).
+    var filteredProviders = _filterProvidersByAgent(providers, agentName);
 
     var el = document.createElement("div");
     el.className = "chat-bubble chat-bubble--ai";
     el.dataset.rawContent = content;
     el.dataset.discussionId = discussionId;
-    // Always store providers on the bubble so _injectExportDropdowns can find them later.
-    if (providers && providers.length) {
+    // Store only the filtered providers so _injectExportDropdowns respects export_agents.
+    if (filteredProviders && filteredProviders.length) {
       el.dataset.exportProviders = JSON.stringify(
-        providers.map(function (p) { return { name: p.name, label: p.label }; })
+        filteredProviders.map(function (p) { return { name: p.name, label: p.label }; })
       );
     }
     el.innerHTML =
@@ -331,7 +333,7 @@
       +   "</div>"
       +   '<div class="chat-bubble__content"></div>'
       +   renderMessageAttachments(msg.attachments || [])
-      +   _buildExportDropdownHtml(providers, discussionId)
+      +   _buildExportDropdownHtml(filteredProviders, discussionId)
       + "</div>";
 
     el.querySelector(".chat-bubble__content").innerHTML = renderMd(content);
@@ -343,12 +345,28 @@
   // --------------------------------------------------------------------------
   function getExportKey() { return window._remoteExportKey || ""; }
 
+  /**
+   * Filter providers by agent name using the export_agents allowlist.
+   * An empty allowlist means all agents are allowed (same rule as home.js).
+   */
+  function _filterProvidersByAgent(providers, agentName) {
+    if (!providers || !providers.length) return [];
+    var lower = (agentName || "").toLowerCase();
+    return providers.filter(function (p) {
+      var allowlist = p.export_agents || [];
+      if (!allowlist.length) return true;
+      return allowlist.some(function (name) {
+        return (name || "").toLowerCase() === lower;
+      });
+    });
+  }
+
   function _buildExportDropdownHtml(providers, discussionId) {
     if (!getExportKey() || !providers || !providers.length) return "";
     var sessionId = window._remoteSessionId || "";
     var html = '<div class="chat-bubble__actions">'
       + '<div class="export-dropdown" data-export-dropdown>'
-      + '<button type="button" class="btn btn--sm btn--warning export-dropdown__toggle" aria-expanded="false">'
+      + '<button type="button" class="btn btn--sm btn--secondary export-dropdown__toggle" aria-expanded="false">'
       + 'Export <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-left:3px"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>'
       + '</button>'
       + '<div class="export-dropdown__menu" hidden>';
@@ -389,10 +407,8 @@
       var rawProviders = bubble.dataset.exportProviders;
       var providers;
       try { providers = rawProviders ? JSON.parse(rawProviders) : null; } catch (_) { providers = null; }
-      // Fallback to global list for server-rendered bubbles that lack per-agent filtering.
-      if (!providers || !providers.length) {
-        providers = window._remoteExportProviders || null;
-      }
+      // data-export-providers is set server-side with per-agent filtering applied.
+      // Empty or absent means this agent has no providers — do not fall back to the global list.
       var html = _buildExportDropdownHtml(providers, discussionId);
       if (html) body.insertAdjacentHTML("beforeend", html);
     });
