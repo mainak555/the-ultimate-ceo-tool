@@ -112,7 +112,7 @@ Implements a Strategy + Factory pattern for pluggable blob providers.
 - `agents/team_builder.py` builds AutoGen teams (`RoundRobinGroupChat` or `SelectorGroupChat`) from saved configuration. The team type is read from `project["team"]["type"]`. Each `AssistantAgent` receives `description=` (line 1 of its resolved system message) so that `SelectorGroupChat`'s `{roles}` placeholder renders meaningful routing context.
 - Single-assistant projects run in chat mode with Human Gate enabled and a `RoundRobinGroupChat` runtime; selector routing requires at least two assistants.
 - `agents/runtime.py` owns process-local team/cache lifecycle and MCP workbench teardown.
-- `agents/session_coordination.py` owns Redis-backed active-session coordination (run lease, heartbeat, cross-instance cancel signaling).
+- `agents/session_coordination.py` owns Redis-backed active-session coordination (run lease, heartbeat, cross-instance cancel signaling) and remote-user readiness ephemeral state (online/ignored status, per-session quorum override, deferred readiness latch).
 
 ### Root `core/` Package — Shared Infrastructure
 - `core/tracing.py` owns OpenTelemetry setup and helpers (`init_tracing`,
@@ -137,7 +137,7 @@ See [docs/agent_factory.md](agent_factory.md) for the full `agent_models.json` s
 - **Provider secrets**: API keys are read from env only — `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, `AZURE_OPENAI_API_KEY`, `AZURE_ANTHROPIC_API_KEY`.
 - **Provider endpoints**: Azure endpoint URLs are stored per-model in `agent_models.json` under the `endpoint` field. No endpoint env var is used; each Azure resource has its own URL.
 - **No Django ORM**: `DATABASES = {}`. Sessions use signed cookies.
-- **Runtime state split**: Redis serves two roles — (1) active run coordination (lease per `session_id`, heartbeat, cross-instance cancel signal via `agents/session_coordination.py`); (2) attachment text cache (`{REDIS_NAMESPACE}:attachment:{session_id}:{attachment_id}:text`, TTL `REDIS_ATTACHMENT_TTL_SECONDS`, default 24 h). MongoDB persists durable discussion history and `agent_state` resume data (no file content). Azure Blob holds raw attachment bytes.
+- **Runtime state split**: Redis serves three roles — (1) active run coordination (lease per `session_id`, heartbeat, cross-instance cancel signal via `agents/session_coordination.py`); (2) remote-user readiness ephemeral state (status keys, quorum override, deferred readiness latch for next-run blocking after mid-run disconnect); (3) attachment text cache (`{REDIS_NAMESPACE}:attachment:{session_id}:{attachment_id}:text`, TTL `REDIS_ATTACHMENT_TTL_SECONDS`, default 24 h). MongoDB persists durable discussion history and `agent_state` resume data (no file content). Azure Blob holds raw attachment bytes.
 - **Secret key auth**: GET/POST HTMX requests can carry `X-App-Secret-Key`; invalid or missing keys get read-only views or rejected saves.
 - **Model catalog**: `agent_models.json` is keyed by model name; Azure deployments use the optional `deployment_name` field (defaults to model key). See [docs/agent_factory.md](agent_factory.md) for schema details.
 - **SCSS**: Compiled at request time in dev, offline in production.

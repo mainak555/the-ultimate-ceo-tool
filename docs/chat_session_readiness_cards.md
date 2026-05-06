@@ -33,12 +33,14 @@ Server-rendered mapping (`chat_session_history.html`):
 
 - `awaiting_input` -> `.chat-status-badge.chat-status-badge--gate`
 - `awaiting_mcp_oauth` -> `.chat-oauth-panel`
+- `awaiting_remote_users` -> `.chat-remote-panel`
 - `completed|stopped` with `has_agent_state=true` -> `.chat-restart-panel`
 
 Runtime mapping (`home.js`):
 
 - `event: gate` -> append gate badge and enter gate mode
 - `event: awaiting_mcp_oauth` -> show OAuth readiness panel
+- pre-run HTTP 409 `{status:"awaiting_remote_users"}` -> show remote participants panel
 - `event: done|stopped` -> append status badge and restart panel (when applicable)
 
 ## Mandatory DOM/Data Contract
@@ -70,6 +72,19 @@ Runtime mapping (`home.js`):
 - Continue-with-context action: `.chat-restart-btn--with-context`
 - Submit context action: `.chat-restart-btn--submit`
 
+### Remote participants panel
+
+- Root class: `.chat-remote-panel`
+- Data attrs:
+   - `data-session-id`
+   - `data-project-id`
+   - `data-quorum`
+- Rows container: `.chat-remote-panel__rows`
+- Loading marker: `.chat-remote-panel__loading`
+- Row class: `.remote-user-row` with `data-remote-user-name` and `data-status`
+- Require-checkbox class: `.remote-user-row__checkbox`
+- Invite action class: `.remote-user-copy-btn`
+
 ## Lifecycle Contract
 
 1. `startRun()` removes stale readiness surfaces (`.chat-status-badge`,
@@ -78,16 +93,23 @@ Runtime mapping (`home.js`):
 2. OAuth gate can be triggered from:
    - Pre-run HTTP 409: `{status:"awaiting_mcp_oauth", servers:[...]}`
    - Mid-run SSE event `awaiting_mcp_oauth`
-3. OAuth readiness must support:
+3. Remote-user readiness can be triggered from pre-run HTTP 409:
+   - `{status:"awaiting_remote_users", users:[...], quorum:...}`
+4. Deferred readiness latch behavior is mandatory:
+   - If a required remote disconnects while `session.status == "running"`, the
+     current run continues.
+   - The *next* run attempt must be blocked by the existing remote participants
+     panel until required users are online/ignored.
+5. OAuth readiness must support:
    - WS push (`state` / `update` / `complete`)
    - Popup postMessage fallback
-4. On full authorization, the run is replayed automatically.
-5. Quorum replay behavior is mode-specific:
+6. On full authorization, the run is replayed automatically.
+7. Quorum replay behavior is mode-specific:
     - `first_win`: host receives `quorum_committed` and auto-replays the run via
        `startRun("", [])` (pending task is popped server-side).
     - `all`: host receives `quorum_progress` updates until all expected responses
        are present, then host final Continue commits and resumes.
-6. On `DOMContentLoaded` and `htmx:afterSwap`, readiness state is restored by
+8. On `DOMContentLoaded` and `htmx:afterSwap`, readiness state is restored by
    scanning server-rendered cards in history.
 
 ## UI Override Policy (allowed)

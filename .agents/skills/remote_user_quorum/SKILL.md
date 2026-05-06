@@ -85,10 +85,11 @@ defaults to `"chat_agent"` and `env` = `settings.ENVIRONMENT`.
 
 | Key | Value | TTL |
 |-----|-------|-----|
-| `{NS}:remote_user:{session_id}:{user_name}:status` | `"online"` or `"ignored"` (absent = offline) | token TTL (24 h) |
+| `{NS}:remote_user:{session_id}:{user_name}:status` | `"online"` or `"ignored"` (absent = offline) | `online` uses `REDIS_REMOTE_USER_ONLINE_STATUS_TTL_SECONDS`; `ignored` uses token TTL |
 | `{NS}:remote_user:{session_id}:{user_name}:token` | UUID invite token string | token TTL (24 h) |
 | `{NS}:remote_user:token:{token}` | JSON `{"session_id", "user_name", "project_id"}` | token TTL (24 h) |
 | `{NS}:quorum:{session_id}` | string `all \| first_win \| team_choice` | token TTL (24 h) |
+| `{NS}:remote_user:{session_id}:readiness_latch` | JSON `{"user_name": str}` (deferred next-run gate trigger) | token TTL (24 h) |
 
 Gate TTLs are safety nets only — gate keys are cleared explicitly on quorum completion.
 
@@ -109,13 +110,42 @@ host WebSocket.
 
 | Helper | Redis write | Published status |
 |--------|-------------|------------------|
-| `set_remote_user_online(session_id, user_name)` | `SET status_key "online"` | `"online"` |
+| `set_remote_user_online(session_id, user_name)` | `SET status_key "online"` (online-status TTL) | `"online"` |
 | `set_remote_user_ignored(session_id, user_name)` | `SET status_key "ignored"` | `"ignored"` |
 | `set_remote_user_offline(session_id, user_name)` | `DEL status_key` | `"offline"` |
 
 `set_remote_user_offline` is called by `unignore_remote_user` in `server/remote_user_views.py`
 (host re-checks the participant checkbox) **and** by the WebSocket disconnect handler when a
 remote user's connection closes.  Both paths must publish so the host panel stays current.
+
+### Deferred readiness latch helpers
+
+The deferred readiness latch is the guardrail for this contract:
+
+- If a required remote user disconnects while a run is already `running`, do **not** interrupt
+    that run.
+- Instead, block the **next** `/run/` attempt behind the existing remote readiness panel until
+    required users are online/ignored.
+
+Helpers:
+
+- `set_remote_user_readiness_latch(session_id, user_name)`
+    - Called only for configured remote users when disconnect transitions `online -> offline`
+        during `session.status == "running"`.
+    - Must not be triggered for guest watcher disconnects.
+    - Must not be triggered for users already `ignored`.
+- `has_remote_user_readiness_latch(session_id)`
+    - Checked at run-start gate path in `chat_session_run`.
+- `clear_remote_user_readiness_latch(session_id)`
+    - Clear when all required participants are satisfied (`online` or `ignored`) and during
+        session key purge.
+
+Run-boundary contract:
+
+- `chat_session_run` still computes `pending_remote` from current statuses.
+- If latch exists but `pending_remote is None`, clear latch and continue.
+- If `pending_remote` exists, return the existing `awaiting_remote_users` 409 payload and show
+    `.chat-remote-panel`.
 
 ### `store_gate_response(session_id, responder_name, text, attachment_ids)`
 

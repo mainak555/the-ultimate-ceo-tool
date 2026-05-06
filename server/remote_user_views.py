@@ -535,6 +535,12 @@ def _maybe_publish_complete(project_or_session, session_id: str) -> None:
             for name in all_names
         )
         if satisfied:
+            try:
+                from agents.session_coordination import clear_remote_user_readiness_latch
+
+                clear_remote_user_readiness_latch(session_id)
+            except Exception:  # noqa: BLE001
+                pass
             publish_remote_user_event(session_id, {"type": "complete"})
             logger.info(
                 "agents.remote_user.all_ready",

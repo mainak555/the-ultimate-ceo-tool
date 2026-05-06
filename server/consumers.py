@@ -748,9 +748,11 @@ class RemoteChatConsumer:
         import asyncio as _asyncio
         from agents.session_coordination import (
             SessionCoordinationError,
+            set_remote_user_readiness_latch,
             set_remote_user_offline_if_online,
             touch_remote_user_online_status,
         )
+        from server import services
 
         token = self._token
         token_data = await _asyncio.to_thread(self._validate_token, token)
@@ -778,7 +780,32 @@ class RemoteChatConsumer:
                 if msg["type"] == "websocket.disconnect":
                     self._closed = True
                     try:
-                        await _asyncio.to_thread(set_remote_user_offline_if_online, session_id, user_name)
+                        became_offline = await _asyncio.to_thread(
+                            set_remote_user_offline_if_online,
+                            session_id,
+                            user_name,
+                        )
+                        if became_offline:
+                            # Defer readiness gate to next run start only when a
+                            # configured remote participant drops during an active run.
+                            session = await _asyncio.to_thread(services.get_chat_session, session_id)
+                            if isinstance(session, dict) and session.get("status") == "running":
+                                project = await _asyncio.to_thread(
+                                    services.get_project,
+                                    session.get("project_id", ""),
+                                )
+                                remote_users_cfg = ((project or {}).get("human_gate") or {}).get("remote_users") or []
+                                configured_names = {
+                                    ru.get("name")
+                                    for ru in remote_users_cfg
+                                    if isinstance(ru, dict) and ru.get("name")
+                                }
+                                if user_name in configured_names:
+                                    await _asyncio.to_thread(
+                                        set_remote_user_readiness_latch,
+                                        session_id,
+                                        user_name,
+                                    )
                     except SessionCoordinationError:
                         logger.warning(
                             "agents.remote_user.chat_ws_offline_set_failed",

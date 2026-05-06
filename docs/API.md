@@ -182,6 +182,8 @@ Chat sessions carry a `status` field that governs which endpoints are valid:
 | `idle` | No active run | `run`, `restart`, `delete` |
 | `running` | SSE stream active | `stop` |
 | `awaiting_input` | Human gate paused | `respond` |
+| `awaiting_mcp_oauth` | Waiting for MCP OAuth authorization completion | `run` |
+| `awaiting_remote_users` | Waiting for required remote participants to be online/ignored | `run`, `remote-users/*` |
 | `completed` | Finished by iteration limit | `restart`, `delete` |
 | `stopped` | Terminated by human | `restart`, `delete` |
 
@@ -218,6 +220,10 @@ Run endpoint attachment contract:
   - `task`: optional text (required on first run unless attachments are provided)
   - `attachment_ids`: optional repeated values
 - Behavior:
+  - Pre-run gates may return `409` with:
+    - `{status:"awaiting_mcp_oauth", servers:[...]}` when MCP OAuth authorization is incomplete.
+    - `{status:"awaiting_remote_users", users:[...], required_count, online_count, quorum}` when required remote participants are not ready.
+  - Deferred readiness latch: when a required configured remote user disconnects while `session.status == "running"`, the current run continues uninterrupted, but the next `/run/` attempt is blocked by `awaiting_remote_users` until required users are online/ignored.
   - Non-image attachments: text is extracted lazily (Redis-cached, first call downloads from Azure Blob). Full extracted text is appended to the agent task as an `--- Attachments:` block — no truncation.
   - Image attachments: bytes are downloaded from Azure Blob and passed as `autogen_core.Image` objects inside a `MultiModalMessage` to vision-capable models. Requires `"vision": true` in the model's `agent_models.json` entry.
 
