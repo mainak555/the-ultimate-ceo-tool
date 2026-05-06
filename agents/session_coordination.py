@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 import os
 import socket
+import time
 from importlib import import_module
 from typing import Final
 
@@ -582,6 +583,324 @@ def _pending_task_key(session_id: str) -> str:
     return f"{_namespace()}:pending_task:{session_id}"
 
 
+def _team_choice_turn_ttl() -> int:
+    """Return team_choice turn/request TTL from settings (default 30 min)."""
+    raw = int(getattr(settings, "REDIS_TEAM_CHOICE_TURN_TTL_SECONDS", 1800) or 1800)
+    return max(60, raw)
+
+
+def _team_choice_wait_timeout() -> int:
+    """Return max wait duration for a proxy turn response (default 15 min)."""
+    raw = int(getattr(settings, "REDIS_TEAM_CHOICE_WAIT_TIMEOUT_SECONDS", 900) or 900)
+    return max(30, raw)
+
+
+def _team_choice_poll_interval() -> float:
+    """Return polling interval used while waiting for proxy response."""
+    raw = float(getattr(settings, "REDIS_TEAM_CHOICE_POLL_INTERVAL_SECONDS", 1.0) or 1.0)
+    return max(0.2, raw)
+
+
+def _team_choice_active_request_key(session_id: str) -> str:
+    return f"{_namespace()}:team_choice:{session_id}:active_request"
+
+
+def _team_choice_response_key(session_id: str, request_id: str) -> str:
+    return f"{_namespace()}:team_choice:{session_id}:request:{request_id}:response"
+
+
+def _team_choice_claim_key(session_id: str, request_id: str) -> str:
+    return f"{_namespace()}:team_choice:{session_id}:request:{request_id}:claimed"
+
+
+def _team_choice_turn_channel(session_id: str) -> str:
+    return f"{_namespace()}:team_choice:{session_id}:turn_events"
+
+
+@traced_function("agents.session.team_choice_request_set")
+def set_team_choice_active_request(
+    session_id: str,
+    request_id: str,
+    proxy_name: str,
+    remote_user_name: str,
+    round_number: int | None = None,
+) -> None:
+    """Store the currently active team_choice proxy-input request.
+
+    Publishes a readiness event so host/remote websocket clients can toggle
+    input availability for the selected remote participant.
+    """
+    import json as _json
+
+    payload = {
+        "request_id": request_id,
+        "proxy_name": proxy_name,
+        "remote_user_name": remote_user_name,
+        "round": int(round_number) if round_number is not None else None,
+        "created_at": int(time.time()),
+    }
+    ttl = _team_choice_turn_ttl()
+    try:
+        client = _get_client()
+        client.set(
+            _team_choice_active_request_key(session_id),
+            _json.dumps(payload),
+            ex=ttl,
+        )
+        client.publish(
+            _remote_user_pubsub_channel(session_id),
+            _json.dumps(
+                {
+                    "type": "team_choice_turn_requested",
+                    "request_id": request_id,
+                    "proxy_name": proxy_name,
+                    "remote_user_name": remote_user_name,
+                    "round": payload["round"],
+                }
+            ),
+        )
+        client.publish(
+            _team_choice_turn_channel(session_id),
+            _json.dumps(
+                {
+                    "type": "team_choice_turn_requested",
+                    "request_id": request_id,
+                    "proxy_name": proxy_name,
+                    "remote_user_name": remote_user_name,
+                    "round": payload["round"],
+                }
+            ),
+        )
+        logger.info(
+            "agents.session.team_choice_request_set",
+            extra={
+                "session_id": session_id,
+                "request_id": request_id,
+                "proxy_name": proxy_name,
+                "remote_user_name": remote_user_name,
+                "round": payload["round"],
+            },
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise SessionCoordinationError("Unable to set team_choice active request.") from exc
+
+
+def get_team_choice_active_request(session_id: str) -> dict | None:
+    """Return the currently active team_choice request for a session."""
+    import json as _json
+
+    try:
+        raw = _get_client().get(_team_choice_active_request_key(session_id))
+    except Exception as exc:  # noqa: BLE001
+        raise SessionCoordinationError("Unable to get team_choice active request.") from exc
+    if not raw:
+        return None
+    try:
+        payload = _json.loads(raw)
+        return payload if isinstance(payload, dict) else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+@traced_function("agents.session.team_choice_request_clear")
+def clear_team_choice_active_request(session_id: str, request_id: str | None = None) -> None:
+    """Clear active team_choice request and publish turn-closed event."""
+    import json as _json
+
+    ended_payload = {
+        "type": "team_choice_turn_resolved",
+        "request_id": request_id or "",
+    }
+    try:
+        active = get_team_choice_active_request(session_id)
+        if request_id and active and active.get("request_id") != request_id:
+            return
+        resolved_request_id = request_id or ""
+        if active:
+            ended_payload["proxy_name"] = active.get("proxy_name", "")
+            ended_payload["remote_user_name"] = active.get("remote_user_name", "")
+            if not ended_payload["request_id"]:
+                ended_payload["request_id"] = active.get("request_id", "")
+            if not resolved_request_id:
+                resolved_request_id = str(active.get("request_id") or "")
+        client = _get_client()
+        keys = [_team_choice_active_request_key(session_id)]
+        if resolved_request_id:
+            keys.append(_team_choice_response_key(session_id, resolved_request_id))
+            keys.append(_team_choice_claim_key(session_id, resolved_request_id))
+        client.delete(*keys)
+    except Exception as exc:  # noqa: BLE001
+        raise SessionCoordinationError("Unable to clear team_choice active request.") from exc
+
+    try:
+        msg = _json.dumps(ended_payload)
+        client = _get_client()
+        client.publish(_remote_user_pubsub_channel(session_id), msg)
+        client.publish(_team_choice_turn_channel(session_id), msg)
+        logger.info(
+            "agents.session.team_choice_request_cleared",
+            extra={
+                "session_id": session_id,
+                "request_id": ended_payload.get("request_id", ""),
+                "proxy_name": ended_payload.get("proxy_name", ""),
+                "remote_user_name": ended_payload.get("remote_user_name", ""),
+            },
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
+
+@traced_function("agents.session.team_choice_response_submit")
+def submit_team_choice_response(
+    session_id: str,
+    request_id: str,
+    responder_name: str,
+    text: str,
+    attachment_ids: list[str] | None = None,
+    text_with_context: str | None = None,
+    images: list[dict] | None = None,
+) -> bool:
+    """Store a remote response for the active team_choice request.
+
+    First submission wins via a per-request claim key (SET NX).
+    Returns True when accepted, False when already claimed.
+    """
+    import json as _json
+
+    claim_key = _team_choice_claim_key(session_id, request_id)
+    response_key = _team_choice_response_key(session_id, request_id)
+    ttl = _team_choice_turn_ttl()
+    payload = {
+        "request_id": request_id,
+        "responder_name": responder_name,
+        "text": text or "",
+        "attachment_ids": list(attachment_ids or []),
+        "text_with_context": text_with_context if text_with_context is not None else (text or ""),
+        "images": list(images or []),
+        "timestamp": int(time.time()),
+    }
+
+    try:
+        client = _get_client()
+        claimed = bool(client.set(claim_key, responder_name, ex=ttl, nx=True))
+        if not claimed:
+            logger.info(
+                "agents.session.team_choice_response_conflict",
+                extra={
+                    "session_id": session_id,
+                    "request_id": request_id,
+                    "responder_name": responder_name,
+                },
+            )
+            return False
+        pipe = client.pipeline(transaction=False)
+        pipe.set(response_key, _json.dumps(payload), ex=ttl)
+        pipe.publish(
+            _remote_user_pubsub_channel(session_id),
+            _json.dumps(
+                {
+                    "type": "team_choice_turn_submitted",
+                    "request_id": request_id,
+                    "responder_name": responder_name,
+                }
+            ),
+        )
+        pipe.publish(
+            _team_choice_turn_channel(session_id),
+            _json.dumps(
+                {
+                    "type": "team_choice_turn_submitted",
+                    "request_id": request_id,
+                    "responder_name": responder_name,
+                }
+            ),
+        )
+        pipe.execute()
+        logger.info(
+            "agents.session.team_choice_response_submitted",
+            extra={
+                "session_id": session_id,
+                "request_id": request_id,
+                "responder_name": responder_name,
+                "attachment_count": len(payload["attachment_ids"]),
+                "image_count": len(payload["images"]),
+            },
+        )
+        return True
+    except Exception as exc:  # noqa: BLE001
+        raise SessionCoordinationError("Unable to submit team_choice response.") from exc
+
+
+@traced_function("agents.session.team_choice_response_pop")
+def pop_team_choice_response(session_id: str, request_id: str) -> dict | None:
+    """Atomically consume a team_choice response payload for a request."""
+    import json as _json
+
+    response_key = _team_choice_response_key(session_id, request_id)
+    try:
+        client = _get_client()
+        try:
+            raw = client.getdel(response_key)
+        except AttributeError:
+            pipe = client.pipeline(transaction=True)
+            pipe.get(response_key)
+            pipe.delete(response_key)
+            results = pipe.execute()
+            raw = results[0]
+    except Exception as exc:  # noqa: BLE001
+        raise SessionCoordinationError("Unable to pop team_choice response.") from exc
+
+    if not raw:
+        return None
+    try:
+        payload = _json.loads(raw)
+        if isinstance(payload, dict):
+            logger.info(
+                "agents.session.team_choice_response_popped",
+                extra={
+                    "session_id": session_id,
+                    "request_id": request_id,
+                    "responder_name": payload.get("responder_name", ""),
+                },
+            )
+        return payload if isinstance(payload, dict) else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+@traced_function("agents.session.team_choice_response_wait")
+def wait_for_team_choice_response(session_id: str, request_id: str) -> dict | None:
+    """Wait until a team_choice response is available, cancelled, or timed out."""
+    deadline = time.time() + _team_choice_wait_timeout()
+    poll_interval = _team_choice_poll_interval()
+
+    while True:
+        if is_cancel_signaled(session_id):
+            logger.info(
+                "agents.session.team_choice_wait_cancelled",
+                extra={"session_id": session_id, "request_id": request_id},
+            )
+            return None
+        response = pop_team_choice_response(session_id, request_id)
+        if response is not None:
+            logger.info(
+                "agents.session.team_choice_wait_completed",
+                extra={
+                    "session_id": session_id,
+                    "request_id": request_id,
+                    "responder_name": response.get("responder_name", ""),
+                },
+            )
+            return response
+        if time.time() >= deadline:
+            logger.warning(
+                "agents.session.team_choice_wait_timeout",
+                extra={"session_id": session_id, "request_id": request_id},
+            )
+            return None
+        time.sleep(poll_interval)
+
+
 def store_gate_response(
     session_id: str,
     responder_name: str,
@@ -1140,6 +1459,15 @@ def purge_remote_user_session_keys(session_id: str, user_names: list[str]) -> No
             if token:
                 keys.append(_remote_user_token_reverse_key(token))
         client.delete(*keys)
+        # Clear team_choice ephemeral keys for this session.
+        pattern = f"{_namespace()}:team_choice:{session_id}:*"
+        cursor = 0
+        while True:
+            cursor, tc_keys = client.scan(cursor=cursor, match=pattern, count=100)
+            if tc_keys:
+                client.delete(*tc_keys)
+            if cursor == 0:
+                break
     except Exception as exc:  # noqa: BLE001
         raise SessionCoordinationError("Unable to purge remote user session keys.") from exc
 
@@ -1264,8 +1592,14 @@ __all__ = [
     "has_remote_user_readiness_latch",
     "clear_remote_user_readiness_latch",
     "signal_cancel",
+    "submit_team_choice_response",
     "store_gate_response",
     "store_pending_task",
     "store_run_traceparent",
+    "set_team_choice_active_request",
+    "get_team_choice_active_request",
+    "clear_team_choice_active_request",
+    "pop_team_choice_response",
+    "wait_for_team_choice_response",
     "touch_remote_user_online_status",
 ]

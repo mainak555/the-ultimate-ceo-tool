@@ -61,17 +61,29 @@
     if (c) c.scrollTop = c.scrollHeight;
   }
 
+  function _getHistoryContainer() {
+    var container = document.getElementById("remote-chat-messages");
+    if (!container) return null;
+    var history = document.getElementById("remote-chat-history-msgs");
+    if (history) return history;
+    history = document.createElement("div");
+    history.className = "chat-history";
+    history.id = "remote-chat-history-msgs";
+    container.insertAdjacentElement("afterbegin", history);
+    return history;
+  }
+
   function buildCopyBtn() {
     return window.ChatCopyUtils.buildCopyBtnHtml();
   }
 
   function _roundLabel(data) {
     var d = data || {};
-    var isSingle = d.chat_mode === "single_assistant";
-    var round = Number(d.round || 0);
-    var maxRounds = Number(d.max_rounds || 0);
-    if (isSingle || !maxRounds) return "Round " + round;
-    return "Round " + round + "/" + maxRounds;
+    var round = Number(d.round ?? 0);
+    var maxRounds = Number(d.max_rounds ?? 0);
+    if (!isFinite(round) || round <= 0) return "";
+    if (isFinite(maxRounds) && maxRounds > 0) return "Round " + round + "/" + maxRounds + "-MAX";
+    return "Round " + round + "/N-MAX";
   }
 
   function _clearGateBadge() {
@@ -142,6 +154,33 @@
     var sendBtn = document.getElementById("remote-send-btn");
     var attachBtn = document.getElementById("remote-attach-btn");
     var attachInput = document.getElementById("remote-attach-input");
+    var inputRow = input && input.closest ? input.closest(".chat-input-row") : null;
+
+    function setTurnCue(active, text) {
+      var panel = input && input.closest ? input.closest(".chat-input-panel") : null;
+      var hint = panel ? panel.querySelector(".chat-turn-hint") : null;
+      if (!hint && panel) {
+        hint = document.createElement("div");
+        hint.className = "chat-turn-hint";
+        hint.hidden = true;
+        panel.appendChild(hint);
+      }
+      if (inputRow) {
+        inputRow.classList.toggle("chat-input-row--active-turn", !!active);
+      }
+      if (hint) {
+        hint.hidden = !active;
+        hint.textContent = active ? (text || "Your turn - type a response") : "";
+      }
+      if (!active || !inputRow) return;
+      inputRow.classList.remove("chat-input-row--active-turn-pulse");
+      void inputRow.offsetWidth;
+      inputRow.classList.add("chat-input-row--active-turn-pulse");
+      if (input) input.focus();
+      setTimeout(function () {
+        if (inputRow) inputRow.classList.remove("chat-input-row--active-turn-pulse");
+      }, 1200);
+    }
 
     _composerState = nextState;
     if (gateData) _currentGateData = gateData;
@@ -150,10 +189,11 @@
       var roundText = _roundLabel(_currentGateData || {});
       if (input) {
         input.disabled = false;
-        input.placeholder = roundText + " - enter your response...";
+        input.placeholder = roundText ? (roundText + " - enter your response...") : "enter your response...";
       }
       if (attachBtn) attachBtn.disabled = false;
       if (attachInput) attachInput.disabled = false;
+      setTurnCue(true, "Your turn - enter your response");
       _syncSendEnabled();
       return;
     }
@@ -166,16 +206,18 @@
       if (attachBtn) attachBtn.disabled = true;
       if (attachInput) attachInput.disabled = true;
       if (sendBtn) sendBtn.disabled = true;
+      setTurnCue(false, "");
       return;
     }
 
     if (input) {
       input.disabled = true;
-      input.placeholder = "Wait for your turn";
+      input.placeholder = "wait for your turn";
     }
     if (attachBtn) attachBtn.disabled = true;
     if (attachInput) attachInput.disabled = true;
     if (sendBtn) sendBtn.disabled = true;
+    setTurnCue(false, "");
   }
 
   function _setAwaitingTurn(data) {
@@ -200,6 +242,10 @@
     }
 
     if (status === "awaiting_input") {
+      if ((msg.quorum || "") === "team_choice") {
+        _setWaitingTurn();
+        return;
+      }
       _setAwaitingTurn(msg);
       return;
     }
@@ -343,11 +389,11 @@
 
   /** Append a pre-built bubble element into the messages container. */
   function appendBubble(el) {
-    var container = document.getElementById("remote-chat-messages");
-    if (!container) return;
-    var waiting = container.querySelector(".remote-user-page__waiting");
+    var history = _getHistoryContainer();
+    if (!history) return;
+    var waiting = history.querySelector(".remote-user-page__waiting");
     if (waiting) waiting.remove();
-    container.appendChild(el);
+    history.appendChild(el);
     renderLocalTimes();
     scrollToBottom();
   }
@@ -413,10 +459,10 @@
     if (!text) return;
     var c = document.getElementById("remote-chat-messages");
     if (!c) return;
-    var el = document.createElement("div");
-    el.className = "chat-status-badge chat-status-badge--remote-users";
-    el.textContent = text;
-    c.appendChild(el);
+    c.insertAdjacentHTML(
+      "beforeend",
+      '<div class="chat-status-badge chat-status-badge--remote-users">\u23F3 ' + escapeHtml(text) + "</div>"
+    );
     scrollToBottom();
   }
 
@@ -689,6 +735,20 @@
         appendBubble(m.role === "user" ? buildUserBubble(m) : buildAssistantBubble(m));
       } else if (msg.type === "run_status") {
         _applyRunStatus(msg);
+      } else if (msg.type === "team_choice_turn_requested") {
+        var targetName = (msg.remote_user_name || "").trim();
+        if (targetName && targetName === userName) {
+          _setAwaitingTurn({
+            round: Number(msg.round ?? 0),
+            max_rounds: 0,
+            chat_mode: "team",
+            quorum: "team_choice",
+          });
+        } else {
+          _setWaitingTurn();
+        }
+      } else if (msg.type === "team_choice_turn_submitted" || msg.type === "team_choice_turn_resolved") {
+        _setWaitingTurn();
       } else if (msg.type === "quorum_progress") {
         if (msg.awaiting_host_final) {
           _setWaitingTurn();

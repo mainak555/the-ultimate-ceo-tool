@@ -16,6 +16,7 @@ from server.util import sanitize_identifier
 from .factory import build_model_client
 from .mcp_tools import build_mcp_workbenches, resolve_mcp_servers_for_agent
 from .prompt_builder import resolve_system_prompt
+from .team_choice_proxy_agent import TeamChoiceProxyAgent
 
 logger = logging.getLogger(__name__)
 
@@ -172,23 +173,11 @@ def build_team(project: dict, session_id: str | None = None, remote_users: list 
             mcp_agent_count += 1
         agents.append(AssistantAgent(**agent_kwargs))
 
-    # Add UserProxyAgent placeholders for team_choice quorum.
-    # Each proxy has an async input_func that returns immediately so the run
-    # is never blocked — real remote user input delivery is deferred to a
-    # later phase (Redis pub-sub / WebSocket).
+    # Add team_choice proxies for remote users. These proxies block per turn
+    # until the selected remote user submits text/files/images.
     proxy_count = 0
     if (project.get("human_gate") or {}).get("quorum") == "team_choice" and remote_users:
-        from autogen_agentchat.agents import UserProxyAgent
-
-        def _make_input_func(proxy_name: str):
-            async def _placeholder(prompt: str) -> str:
-                logger.debug(
-                    "agents.proxy.placeholder_input",
-                    extra={"proxy": proxy_name},
-                )
-                return "Continue."
-            return _placeholder
-
+        round_number = int(project.get("_current_round") or 0) or None
         for ru in remote_users:
             raw_name = ru.get("name") or ""
             try:
@@ -196,10 +185,12 @@ def build_team(project: dict, session_id: str | None = None, remote_users: list 
             except ValueError:
                 safe_proxy_name = f"remote_user_{proxy_count}"
             agents.append(
-                UserProxyAgent(
+                TeamChoiceProxyAgent(
                     name=safe_proxy_name,
+                    session_id=session_id or "",
+                    remote_user_name=raw_name,
+                    round_number=round_number,
                     description=ru.get("description") or "Remote participant",
-                    input_func=_make_input_func(safe_proxy_name),
                 )
             )
             proxy_count += 1

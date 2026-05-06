@@ -62,6 +62,7 @@ document.addEventListener("DOMContentLoaded", function () {
   var chatAttachBtn = document.getElementById("chat-attach-btn");
   var chatAttachmentInput = document.getElementById("chat-attachment-input");
   var chatComposeAttachments = document.getElementById("chat-compose-attachments");
+  var chatInputRow = chatInput && chatInput.closest ? chatInput.closest(".chat-input-row") : null;
   var chatProjectBtn = document.getElementById("chat-project-btn");
   var chatGuestShareBtn = document.getElementById("chat-guest-share-btn");
   var activeProjectIdInput = document.getElementById("active-project-id");
@@ -76,6 +77,38 @@ document.addEventListener("DOMContentLoaded", function () {
     window.requestAnimationFrame(function () {
       chatMessages.scrollTop = chatMessages.scrollHeight;
     });
+  }
+
+  function _ensureTurnHint() {
+    if (!chatInput || !chatInput.closest) return null;
+    var panel = chatInput.closest(".chat-input-panel");
+    if (!panel) return null;
+    var hint = panel.querySelector(".chat-turn-hint");
+    if (hint) return hint;
+    hint = document.createElement("div");
+    hint.className = "chat-turn-hint";
+    hint.hidden = true;
+    panel.appendChild(hint);
+    return hint;
+  }
+
+  function _setTurnCue(active, text) {
+    var hint = _ensureTurnHint();
+    if (chatInputRow) {
+      chatInputRow.classList.toggle("chat-input-row--active-turn", !!active);
+    }
+    if (hint) {
+      hint.hidden = !active;
+      hint.textContent = active ? (text || "Your turn - type a response") : "";
+    }
+    if (!active || !chatInputRow) return;
+    chatInputRow.classList.remove("chat-input-row--active-turn-pulse");
+    void chatInputRow.offsetWidth;
+    chatInputRow.classList.add("chat-input-row--active-turn-pulse");
+    if (chatInput) chatInput.focus();
+    setTimeout(function () {
+      if (chatInputRow) chatInputRow.classList.remove("chat-input-row--active-turn-pulse");
+    }, 1200);
   }
 
   function escapeHtml(text) {
@@ -450,11 +483,19 @@ document.addEventListener("DOMContentLoaded", function () {
 
   function appendQuorumInfoBadge(text) {
     if (!text) return;
+    clearQuorumInfoBadges();
     chatMessages.insertAdjacentHTML(
       "beforeend",
-      '<div class="chat-status-badge chat-status-badge--remote-users">' + escapeHtml(text) + '</div>'
+      '<div class="chat-status-badge chat-status-badge--remote-users">\u23F3 ' + escapeHtml(text) + '</div>'
     );
     chatMessages.scrollTop = chatMessages.scrollHeight;
+  }
+
+  function clearQuorumInfoBadges() {
+    if (!chatMessages) return;
+    chatMessages.querySelectorAll(".chat-status-badge--remote-users").forEach(function (el) {
+      el.remove();
+    });
   }
 
   // Re-evaluate Send button enabled state honouring gate mode rules.
@@ -491,6 +532,7 @@ document.addEventListener("DOMContentLoaded", function () {
       chatInput.placeholder = roundText + " \u2014 enter your response\u2026";
     }
     if (chatStopBtn) chatStopBtn.hidden = false;
+    _setTurnCue(true, "Your turn - enter your response");
     _evalSendBtn();
   }
 
@@ -499,6 +541,7 @@ document.addEventListener("DOMContentLoaded", function () {
     _gateData = null;
     if (chatInput) chatInput.placeholder = "Send a message";
     if (chatStopBtn) chatStopBtn.hidden = true;
+    _setTurnCue(false, "");
     _evalSendBtn();
   }
 
@@ -614,6 +657,7 @@ document.addEventListener("DOMContentLoaded", function () {
   var _hostSessionWs = null;
 
   function setRunningState(running) {
+    if (running) _setTurnCue(false, "");
     if (chatInput) { chatInput.disabled = running; }
     if (chatSendBtn) { chatSendBtn.hidden = running; }
     if (chatStopBtn) {
@@ -687,6 +731,7 @@ document.addEventListener("DOMContentLoaded", function () {
   function appendStatusBadge(type) {
     var label = type === "completed" ? "Run completed" : "Run stopped";
     setAgentsWorkingBadge(false);
+    clearQuorumInfoBadges();
     chatMessages.insertAdjacentHTML(
       "beforeend",
       '<div class="chat-status-badge chat-status-badge--' + type + '">' + label + '</div>'
@@ -702,6 +747,7 @@ document.addEventListener("DOMContentLoaded", function () {
       return;
     }
     if (existing) return;
+    clearQuorumInfoBadges();
     chatMessages.insertAdjacentHTML(
       "beforeend",
       '<div class="chat-status-badge chat-status-badge--running">\u2699 Agents at work</div>'
@@ -1009,6 +1055,7 @@ document.addEventListener("DOMContentLoaded", function () {
         var payload = msg.message || msg;
         if (!payload || payload.role !== "user") return;
         if (payload.user_origin === "host") return;
+        clearQuorumInfoBadges();
         appendRemoteUserBubble(payload);
         return;
       }
@@ -1022,6 +1069,7 @@ document.addEventListener("DOMContentLoaded", function () {
       }
 
       if (msg.type === "quorum_committed" && _gateData) {
+        clearQuorumInfoBadges();
         var isFirstWin = msg.quorum === "first_win";
         var shouldAutoStart = isFirstWin;
         _gateData.awaiting_host_final = false;
@@ -1030,6 +1078,18 @@ document.addEventListener("DOMContentLoaded", function () {
           clearGateMode();
           startRun("", []);
         }
+        return;
+      }
+
+      if (msg.type === "team_choice_turn_requested") {
+        var activeName = msg.remote_user_name || "Remote participant";
+        appendQuorumInfoBadge("Waiting for " + activeName + " to respond");
+        return;
+      }
+
+      if (msg.type === "team_choice_turn_submitted" || msg.type === "team_choice_turn_resolved") {
+        clearQuorumInfoBadges();
+        return;
       }
     };
 
