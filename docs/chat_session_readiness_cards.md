@@ -65,6 +65,15 @@ Runtime mapping (`home.js`):
 - Row class: `.chat-oauth-panel__row` with `data-server-name`
 - Authorize action class: `.chat-oauth-authorize-btn`
 
+OAuth row visual-state contract:
+
+- Row container border remains neutral (`$color-border`) in all states.
+- Authorization state is represented only by the status chip modifier class:
+   - `.chat-oauth-panel__status--pending` -> `Pending`
+   - `.chat-oauth-panel__status--authorized` -> `Authorized ✓`
+- Completion detection in runtime logic must not depend on row-level
+   `--authorized` classes.
+
 ### Restart panel
 
 - Root class: `.chat-restart-panel` with `data-session-id`

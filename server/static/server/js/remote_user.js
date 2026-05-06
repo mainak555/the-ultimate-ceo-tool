@@ -82,8 +82,8 @@
     var round = Number(d.round ?? 0);
     var maxRounds = Number(d.max_rounds ?? 0);
     if (!isFinite(round) || round <= 0) return "";
-    if (isFinite(maxRounds) && maxRounds > 0) return "Round " + round + "/" + maxRounds + "-MAX";
-    return "Round " + round + "/N-MAX";
+    if (isFinite(maxRounds) && maxRounds > 0) return "Round " + round + "/" + maxRounds;
+    return "Round " + round;
   }
 
   function _clearGateBadge() {
@@ -307,9 +307,22 @@
           + escapeHtml(ts) + '"></time></span>'
       : "";
 
+    // WS payload uses msg.export.providers; provider list absent when export not yet granted.
+    var providers = (msg.export && msg.export.providers) || msg.providers || null;
+    var discussionId = msg.id || msg.discussion_id || "";
+    // Apply per-agent export_agents filtering (mirrors home.js getVisibleExportProviders).
+    var filteredProviders = _filterProvidersByAgent(providers, agentName);
+
     var el = document.createElement("div");
     el.className = "chat-bubble chat-bubble--ai";
     el.dataset.rawContent = content;
+    el.dataset.discussionId = discussionId;
+    // Store only the filtered providers so _injectExportDropdowns respects export_agents.
+    if (filteredProviders && filteredProviders.length) {
+      el.dataset.exportProviders = JSON.stringify(
+        filteredProviders.map(function (p) { return { name: p.name, label: p.label }; })
+      );
+    }
     el.innerHTML =
       '<div class="chat-bubble__avatar">' + escapeHtml(initial) + "</div>"
       + '<div class="chat-bubble__body">'
@@ -320,11 +333,106 @@
       +   "</div>"
       +   '<div class="chat-bubble__content"></div>'
       +   renderMessageAttachments(msg.attachments || [])
+      +   _buildExportDropdownHtml(filteredProviders, discussionId)
       + "</div>";
 
     el.querySelector(".chat-bubble__content").innerHTML = renderMd(content);
     return el;
   }
+
+  // --------------------------------------------------------------------------
+  // Export helpers
+  // --------------------------------------------------------------------------
+  function getExportKey() { return window._remoteExportKey || ""; }
+
+  /**
+   * Filter providers by agent name using the export_agents allowlist.
+   * An empty allowlist means all agents are allowed (same rule as home.js).
+   */
+  function _filterProvidersByAgent(providers, agentName) {
+    if (!providers || !providers.length) return [];
+    var lower = (agentName || "").toLowerCase();
+    return providers.filter(function (p) {
+      var allowlist = p.export_agents || [];
+      if (!allowlist.length) return true;
+      return allowlist.some(function (name) {
+        return (name || "").toLowerCase() === lower;
+      });
+    });
+  }
+
+  function _buildExportDropdownHtml(providers, discussionId) {
+    if (!getExportKey() || !providers || !providers.length) return "";
+    var sessionId = window._remoteSessionId || "";
+    var html = '<div class="chat-bubble__actions">'
+      + '<div class="export-dropdown" data-export-dropdown>'
+      + '<button type="button" class="btn btn--sm btn--secondary export-dropdown__toggle" aria-expanded="false">'
+      + 'Export <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-left:3px"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>'
+      + '</button>'
+      + '<div class="export-dropdown__menu" hidden>';
+    (providers || []).forEach(function (p) {
+      html += '<button type="button" class="export-dropdown__item"'
+        + ' data-provider="' + escapeHtml(p.name) + '"'
+        + ' data-session-id="' + escapeHtml(sessionId) + '"'
+        + ' data-discussion-id="' + escapeHtml(discussionId || "") + '"'
+        + '>' + escapeHtml(p.label) + '</button>';
+    });
+    html += '</div></div></div>';
+    return html;
+  }
+
+  function openRemoteExportModal(provider, sessionId, discussionId) {
+    var key = getExportKey();
+    if (!key) { alert("Export access not granted."); return; }
+    if (!window.ProviderRegistry || typeof window.ProviderRegistry.openExportModal !== "function") {
+      alert("Export is not available.");
+      return;
+    }
+    window.ProviderRegistry.openExportModal(provider, {
+      provider: provider,
+      sessionId: sessionId,
+      discussionId: discussionId,
+      secretKey: key,
+      csrfToken: window._csrfToken || "",
+      projectId: window._remoteProjectId || "",
+    });
+  }
+
+  function _injectExportDropdowns() {
+    document.querySelectorAll(".chat-bubble--ai").forEach(function (bubble) {
+      if (bubble.querySelector(".chat-bubble__actions")) return;
+      var body = bubble.querySelector(".chat-bubble__body");
+      if (!body) return;
+      var discussionId = bubble.dataset.discussionId || "";
+      var rawProviders = bubble.dataset.exportProviders;
+      var providers;
+      try { providers = rawProviders ? JSON.parse(rawProviders) : null; } catch (_) { providers = null; }
+      // data-export-providers is set server-side with per-agent filtering applied.
+      // Empty or absent means this agent has no providers — do not fall back to the global list.
+      var html = _buildExportDropdownHtml(providers, discussionId);
+      if (html) body.insertAdjacentHTML("beforeend", html);
+    });
+  }
+
+  function _removeExportDropdowns() {
+    document.querySelectorAll(".chat-bubble--ai .chat-bubble__actions").forEach(function (el) {
+      el.remove();
+    });
+  }
+
+  // Delegated click: export dropdown toggle and item
+  document.addEventListener("click", function (event) {
+    var toggle = event.target && event.target.closest ? event.target.closest(".export-dropdown__toggle") : null;
+    if (toggle) {
+      var menu = toggle.closest(".export-dropdown") && toggle.closest(".export-dropdown").querySelector(".export-dropdown__menu");
+      if (menu) menu.hidden = !menu.hidden;
+      return;
+    }
+    var item = event.target && event.target.closest ? event.target.closest(".export-dropdown__item") : null;
+    if (item) {
+      openRemoteExportModal(item.dataset.provider, item.dataset.sessionId, item.dataset.discussionId);
+    }
+  });
 
   /**
    * Build a user bubble matching .chat-bubble--human in chat_session_history.html.
@@ -760,6 +868,12 @@
         showEvictionOverlay();
       } else if (msg.type === "error") {
         showEvictionOverlay();
+      } else if (msg.type === "remote_export_enabled") {
+        window._remoteExportKey = msg.export_key || "";
+        _injectExportDropdowns();
+      } else if (msg.type === "remote_export_disabled") {
+        window._remoteExportKey = "";
+        _removeExportDropdowns();
       }
     };
 

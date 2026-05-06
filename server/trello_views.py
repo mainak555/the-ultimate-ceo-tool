@@ -17,7 +17,7 @@ from . import util
 
 
 def _has_valid_secret(request):
-    """Check the secret key passed in the request headers."""
+    """Check the secret key (admin-only endpoints)."""
     key = request.headers.get("X-App-Secret-Key", "").strip()
     return services.verify_secret_key(key)
 
@@ -107,7 +107,7 @@ def trello_callback(request):
 @require_GET
 def trello_token_status(request, session_id):
     """GET — Check if the session's project has a valid Trello token."""
-    if not _has_valid_secret(request):
+    if not services.has_valid_session_auth(request, session_id):
         return util.json_error("Unauthorized", 403)
 
     # Resolve project from session
@@ -139,7 +139,7 @@ def trello_token_status(request, session_id):
 @require_GET
 def trello_workspaces(request, session_id):
     """GET — List Trello workspaces."""
-    if not _has_valid_secret(request):
+    if not services.has_valid_session_auth(request, session_id):
         return util.json_error("Unauthorized", 403)
 
     try:
@@ -153,7 +153,7 @@ def trello_workspaces(request, session_id):
 @require_GET
 def trello_boards(request, session_id):
     """GET — List boards, optionally filtered by ?workspace=<id>."""
-    if not _has_valid_secret(request):
+    if not services.has_valid_session_auth(request, session_id):
         return util.json_error("Unauthorized", 403)
 
     workspace_id = request.GET.get("workspace", "").strip() or None
@@ -169,7 +169,7 @@ def trello_boards(request, session_id):
 @require_GET
 def trello_lists(request, session_id):
     """GET — List lists for a board (?board=<id>)."""
-    if not _has_valid_secret(request):
+    if not services.has_valid_session_auth(request, session_id):
         return util.json_error("Unauthorized", 403)
 
     board_id = request.GET.get("board", "").strip()
@@ -188,7 +188,7 @@ def trello_lists(request, session_id):
 @require_POST
 def trello_create_board(request, session_id):
     """POST — Create a new Trello board."""
-    if not _has_valid_secret(request):
+    if not services.has_valid_session_auth(request, session_id):
         return util.json_error("Unauthorized", 403)
 
     try:
@@ -214,7 +214,7 @@ def trello_create_board(request, session_id):
 @require_POST
 def trello_create_list(request, session_id):
     """POST — Create a new Trello list on a board."""
-    if not _has_valid_secret(request):
+    if not services.has_valid_session_auth(request, session_id):
         return util.json_error("Unauthorized", 403)
 
     try:
@@ -245,7 +245,7 @@ def trello_create_list(request, session_id):
 @require_POST
 def trello_extract(request, session_id, discussion_id):
     """POST — Run extraction agent against a selected discussion message."""
-    if not _has_valid_secret(request):
+    if not services.has_valid_session_auth(request, session_id):
         return util.json_error("Unauthorized", 403)
 
     try:
@@ -262,7 +262,7 @@ def trello_extract(request, session_id, discussion_id):
 @require_http_methods(["GET", "POST"])
 def trello_export_data(request, session_id, discussion_id):
     """GET/POST — Load or save persisted Trello export JSON for a discussion."""
-    if not _has_valid_secret(request):
+    if not services.has_valid_session_auth(request, session_id):
         return util.json_error("Unauthorized", 403)
 
     if request.method == "GET":
@@ -293,7 +293,7 @@ def trello_export_data(request, session_id, discussion_id):
 @require_GET
 def trello_discussion_reference(request, session_id, discussion_id):
     """GET — Return raw discussion.content markdown for reference rendering."""
-    if not _has_valid_secret(request):
+    if not services.has_valid_session_auth(request, session_id):
         return util.json_error("Unauthorized", 403)
 
     try:
@@ -308,7 +308,7 @@ def trello_discussion_reference(request, session_id, discussion_id):
 @require_POST
 def trello_push(request, session_id):
     """POST — Push extracted items to Trello."""
-    if not _has_valid_secret(request):
+    if not services.has_valid_session_auth(request, session_id):
         return util.json_error("Unauthorized", 403)
 
     try:

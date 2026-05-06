@@ -1087,6 +1087,16 @@ def _remote_user_token_reverse_key(token: str) -> str:
     return f"{_namespace()}:remote_user:token:{token}"
 
 
+def _remote_user_export_key(session_id: str, user_name: str) -> str:
+    """Forward key: session+name → impersonated export key."""
+    return f"{_namespace()}:remote_user:{session_id}:{user_name}:export_key"
+
+
+def _remote_export_reverse_key(export_key: str) -> str:
+    """Reverse key: export_key → {session_id, user_name}."""
+    return f"{_namespace()}:remote_export:key:{export_key}"
+
+
 def _remote_user_status_key(session_id: str, user_name: str) -> str:
     return f"{_namespace()}:remote_user:{session_id}:{user_name}:status"
 
@@ -1140,6 +1150,94 @@ def generate_remote_user_token(session_id: str, user_name: str, project_id: str)
         extra={"session_id": session_id, "user_name": user_name},
     )
     return token
+
+
+def generate_remote_user_export_key(session_id: str, user_name: str) -> str:
+    """Generate a UUID4 impersonated export key for a remote user and store it in Redis.
+
+    The forward key maps session+name → export_key; the reverse key maps
+    export_key → {session_id, user_name}.  Uses the same TTL as remote user tokens.
+    Returns the new export key.
+    """
+    import json as _json
+    from uuid import uuid4 as _uuid4
+
+    export_key = str(_uuid4())
+    ttl = _remote_user_token_ttl()
+    meta = _json.dumps({"session_id": session_id, "user_name": user_name})
+    try:
+        client = _get_client()
+        # Revoke any previously existing export key for this user.
+        old = client.get(_remote_user_export_key(session_id, user_name))
+        pipe = client.pipeline(transaction=False)
+        if old:
+            pipe.delete(_remote_export_reverse_key(old))
+        pipe.set(_remote_user_export_key(session_id, user_name), export_key, ex=ttl)
+        pipe.set(_remote_export_reverse_key(export_key), meta, ex=ttl)
+        pipe.execute()
+    except Exception as exc:  # noqa: BLE001
+        raise SessionCoordinationError("Unable to generate remote user export key.") from exc
+    logger.info(
+        "agents.remote_user.export_key_generated",
+        extra={"session_id": session_id, "user_name": user_name},
+    )
+    return export_key
+
+
+def get_remote_user_export_key(session_id: str, user_name: str) -> str | None:
+    """Return the current impersonated export key for a remote user, or None."""
+    try:
+        return _get_client().get(_remote_user_export_key(session_id, user_name))
+    except Exception as exc:  # noqa: BLE001
+        raise SessionCoordinationError("Unable to get remote user export key.") from exc
+
+
+def get_remote_export_key_data(export_key: str) -> dict | None:
+    """Resolve an impersonated export key to its metadata dict, or None if not found."""
+    import json as _json
+
+    try:
+        raw = _get_client().get(_remote_export_reverse_key(export_key))
+    except Exception as exc:  # noqa: BLE001
+        raise SessionCoordinationError("Unable to get remote export key data.") from exc
+    if not raw:
+        return None
+    try:
+        return _json.loads(raw)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def revoke_remote_user_export_key(session_id: str, user_name: str) -> None:
+    """Delete the impersonated export key for a remote user."""
+    try:
+        client = _get_client()
+        export_key = client.get(_remote_user_export_key(session_id, user_name))
+        keys = [_remote_user_export_key(session_id, user_name)]
+        if export_key:
+            keys.append(_remote_export_reverse_key(export_key))
+        client.delete(*keys)
+    except Exception as exc:  # noqa: BLE001
+        raise SessionCoordinationError("Unable to revoke remote user export key.") from exc
+    logger.info(
+        "agents.remote_user.export_key_revoked",
+        extra={"session_id": session_id, "user_name": user_name},
+    )
+
+
+def get_all_remote_user_export_states(session_id: str, user_names: list[str]) -> dict[str, bool]:
+    """Return a mapping of {user_name: has_export_key} for all provided names."""
+    if not user_names:
+        return {}
+    try:
+        client = _get_client()
+        pipe = client.pipeline(transaction=False)
+        for name in user_names:
+            pipe.exists(_remote_user_export_key(session_id, name))
+        results = pipe.execute()
+    except Exception as exc:  # noqa: BLE001
+        raise SessionCoordinationError("Unable to get remote user export states.") from exc
+    return {name: bool(exists) for name, exists in zip(user_names, results)}
 
 
 def generate_guest_token(session_id: str, project_id: str) -> str:
@@ -1440,24 +1538,32 @@ def get_session_quorum(session_id: str) -> str | None:
 
 
 def purge_remote_user_session_keys(session_id: str, user_names: list[str]) -> None:
-    """Delete all token, status, and quorum keys for a session's remote users."""
+    """Delete all token, status, export, and quorum keys for a session's remote users."""
     keys: list[str] = [
         _remote_user_quorum_key(session_id),
         _remote_user_readiness_latch_key(session_id),
     ]
     try:
         client = _get_client()
-        # Collect tokens so we can delete reverse keys too.
+        # Collect tokens and export keys so we can delete reverse keys too.
         pipe = client.pipeline(transaction=False)
         for name in user_names:
             pipe.get(_remote_user_token_key(session_id, name))
-        tokens = pipe.execute()
+        for name in user_names:
+            pipe.get(_remote_user_export_key(session_id, name))
+        results = pipe.execute()
+        tokens = results[: len(user_names)]
+        export_keys = results[len(user_names) :]
 
         for name, token in zip(user_names, tokens):
             keys.append(_remote_user_token_key(session_id, name))
             keys.append(_remote_user_status_key(session_id, name))
             if token:
                 keys.append(_remote_user_token_reverse_key(token))
+        for name, export_key in zip(user_names, export_keys):
+            keys.append(_remote_user_export_key(session_id, name))
+            if export_key:
+                keys.append(_remote_export_reverse_key(export_key))
         client.delete(*keys)
         # Clear team_choice ephemeral keys for this session.
         pattern = f"{_namespace()}:team_choice:{session_id}:*"
@@ -1559,6 +1665,11 @@ __all__ = [
     "get_remote_user_statuses",
     "get_remote_user_token",
     "get_remote_user_token_data",
+    "get_remote_user_export_key",
+    "get_remote_export_key_data",
+    "get_all_remote_user_export_states",
+    "generate_remote_user_export_key",
+    "revoke_remote_user_export_key",
     "get_guest_token",
     "get_guest_token_data",
     "get_run_traceparent",

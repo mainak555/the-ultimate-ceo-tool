@@ -4,6 +4,8 @@ import markdown as _md
 from django import template
 from django.utils.safestring import mark_safe
 
+from server.util import QUORUM_OPTIONS
+
 register = template.Library()
 
 
@@ -29,3 +31,16 @@ def to_json(value):
         return json.dumps(value, indent=2, sort_keys=True, ensure_ascii=False)
     except (TypeError, ValueError):
         return str(value)
+
+
+@register.filter(name="quorum_label")
+def quorum_label(value):
+    """Map quorum value to display label using util.QUORUM_OPTIONS."""
+    key = (value or "").strip()
+    if not key:
+        return ""
+
+    for opt in QUORUM_OPTIONS:
+        if opt.get("value") == key:
+            return opt.get("label") or key
+    return key

@@ -369,17 +369,31 @@ class RemoteUserReadinessConsumer:
             return
 
         # Effective quorum: per-session Redis override takes precedence.
-        from agents.session_coordination import get_remote_user_statuses, get_session_quorum
+        from agents.session_coordination import (
+            get_remote_user_statuses,
+            get_session_quorum,
+            get_all_remote_user_export_states,
+        )
         effective_quorum = await _asyncio.to_thread(get_session_quorum, session_id) or project_quorum
 
         statuses = await _asyncio.to_thread(get_remote_user_statuses, session_id, participant_names)
+        try:
+            export_states = await _asyncio.to_thread(
+                get_all_remote_user_export_states, session_id, participant_names
+            )
+        except Exception:
+            export_states = {}
 
         participant_ignored = sum(1 for n in participant_names if statuses.get(n) == "ignored")
         online_count = sum(1 for n in participant_names if statuses.get(n) == "online")
         required_count = len(participant_names) - participant_ignored
 
         users_state = [
-            {"name": n, "status": statuses.get(n, "offline")}
+            {
+                "name": n,
+                "status": statuses.get(n, "offline"),
+                "export_allowed": bool(export_states.get(n, False)),
+            }
             for n in participant_names
         ]
 
@@ -458,6 +472,9 @@ class RemoteUserReadinessConsumer:
                                 await self._send_json({"type": "complete"})
                                 break
                         elif event_type == "count_update":
+                            await self._send_json(payload)
+                        elif event_type in ("remote_export_enabled", "remote_export_disabled"):
+                            # Forward export enable/disable events to the host readiness WS.
                             await self._send_json(payload)
                         elif event_type == "complete":
                             await self._send_json({"type": "complete"})
@@ -871,17 +888,26 @@ class RemoteChatConsumer:
                             # Forward agent message to the remote user.
                             await self._send_json(payload)
                         elif raw_channel == readiness_channel:
+                            event_type = payload.get("type", "")
                             # Detect eviction: user's token was revoked (ignored).
-                            if payload.get("type") == "update" and payload.get("user_name") == user_name:
+                            if event_type == "update" and payload.get("user_name") == user_name:
                                 if payload.get("status") == "ignored":
                                     await self._send_json({"type": "evict"})
                                     break
-                            elif payload.get("type") in {
+                            elif event_type in {
                                 "team_choice_turn_requested",
                                 "team_choice_turn_submitted",
                                 "team_choice_turn_resolved",
                             }:
                                 await self._send_json(payload)
+                            elif event_type == "remote_export_enabled" and payload.get("user_name") == user_name:
+                                # Forward export key to this specific remote user only.
+                                await self._send_json({
+                                    "type": "remote_export_enabled",
+                                    "export_key": payload.get("export_key", ""),
+                                })
+                            elif event_type == "remote_export_disabled" and payload.get("user_name") == user_name:
+                                await self._send_json({"type": "remote_export_disabled"})
         except asyncio.CancelledError:
             pass
         except Exception:

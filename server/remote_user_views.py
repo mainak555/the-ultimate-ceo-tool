@@ -26,6 +26,7 @@ Remote-user-facing (public, token-gated):
 from __future__ import annotations
 
 import base64
+import json as _json
 import logging
 
 from django.http import JsonResponse
@@ -42,9 +43,12 @@ from agents.session_coordination import (
     get_gate_response,
     get_session_quorum,
     generate_remote_user_token,
+    generate_remote_user_export_key,
+    get_remote_user_export_key,
     get_remote_user_statuses,
     publish_remote_user_event,
     revoke_remote_user_token,
+    revoke_remote_user_export_key,
     set_remote_user_ignored,
     set_remote_user_offline,
     set_remote_user_online,
@@ -55,7 +59,7 @@ from agents.session_coordination import (
     SessionCoordinationError,
 )
 from . import services, util, attachment_service
-from .util import VALID_QUORUM_VALUES
+from .util import VALID_QUORUM_VALUES, build_export_meta, filter_export_providers
 from .views import (
     _append_user_message_and_publish,
     _build_quorum_composed_payload,
@@ -123,6 +127,7 @@ def ignore_remote_user(request, session_id, user_name):
     try:
         # Revoke the token so any active remote WebSocket gets evicted.
         revoke_remote_user_token(session_id, user_name)
+        revoke_remote_user_export_key(session_id, user_name)
         set_remote_user_ignored(session_id, user_name)
     except SessionCoordinationError as exc:
         logger.error(
@@ -157,6 +162,66 @@ def unignore_remote_user(request, session_id, user_name):
         return util.json_error("Unable to update remote user status.", 503)
 
     return util.json_response({"status": "offline", "user_name": user_name})
+
+
+@require_POST
+def allow_remote_user_export(request, session_id, user_name):
+    """Enable or disable impersonated export access for a remote user.
+
+    Body: ``{"enable": true}`` or ``{"enable": false}``
+
+    On enable:  generates a new UUID4 export key, stores it in Redis, and
+                publishes a ``remote_export_enabled`` event on the readiness
+                channel so the host WS and the remote user's WS both learn
+                the new key immediately.
+    On disable: revokes the existing export key and publishes
+                ``remote_export_disabled``.
+    """
+    if not _has_valid_secret(request):
+        return util.json_error("Unauthorized", 403)
+
+    session = services.get_chat_session(session_id)
+    if session is None:
+        return util.json_error("Session not found", 404)
+
+    import json as _json
+    try:
+        body = _json.loads(request.body or "{}")
+    except Exception:
+        return util.json_error("Invalid JSON body", 400)
+
+    enable = bool(body.get("enable", True))
+
+    try:
+        if enable:
+            export_key = generate_remote_user_export_key(session_id, user_name)
+            publish_remote_user_event(session_id, {
+                "type": "remote_export_enabled",
+                "user_name": user_name,
+                "export_key": export_key,
+            })
+            logger.info(
+                "agents.remote_user.export_enabled",
+                extra={"session_id": session_id, "user_name": user_name},
+            )
+            return util.json_response({"status": "export_enabled", "user_name": user_name})
+        else:
+            revoke_remote_user_export_key(session_id, user_name)
+            publish_remote_user_event(session_id, {
+                "type": "remote_export_disabled",
+                "user_name": user_name,
+            })
+            logger.info(
+                "agents.remote_user.export_disabled",
+                extra={"session_id": session_id, "user_name": user_name},
+            )
+            return util.json_response({"status": "export_disabled", "user_name": user_name})
+    except SessionCoordinationError as exc:
+        logger.error(
+            "agents.remote_user.allow_export_error",
+            extra={"session_id": session_id, "user_name": user_name, "error": str(exc)},
+        )
+        return util.json_error("Unable to update export permission.", 503)
 
 
 # ---------------------------------------------------------------------------
@@ -218,14 +283,49 @@ def remote_user_join(request, token):
         if isinstance(d, dict)
     ]
 
+    # Export context — only populated when the host has granted export access.
+    export_key = ""
+    try:
+        export_key = get_remote_user_export_key(session_id, user_name) or ""
+    except SessionCoordinationError:
+        pass
+
+    export_meta = build_export_meta(project) if project else None
+
+    # Attach visible export providers to each AI discussion for initial render.
+    # Always compute provider lists so data-export-providers is available on every
+    # bubble — _injectExportDropdowns relies on this when WS enables export later.
+    enriched_discussions = []
+    for d in discussions:
+        row = dict(d)
+        row["attachments"] = _enrich_attachments_for_display(session_id, row.get("attachments") or [])
+        if row.get("role") != "user" and export_meta:
+            providers = filter_export_providers(export_meta, row.get("agent_name", ""))
+            row["visible_export_providers"] = providers if export_key else []
+            row["export_providers_json"] = _json.dumps(
+                [{"name": p["name"], "label": p["label"]} for p in providers]
+            )
+        else:
+            row["visible_export_providers"] = []
+            row["export_providers_json"] = "[]"
+        enriched_discussions.append(row)
+
+    # Flat global providers list (unfiltered by agent) for the WS inject fallback.
+    flat_export_providers_json = _json.dumps(
+        [{"name": p["name"], "label": p["label"]} for p in (export_meta.get("providers") or [])]
+    ) if export_meta else "[]"
+
     return render(request, "server/remote_user.html", {
         "token": token,
         "session_id": session_id,
         "user_name": user_name,
         "project_name": project_name,
-        "discussions": discussions,
+        "project_id": str(project.get("_id", "")) if project else "",
+        "discussions": enriched_discussions,
         "session_status": session_status,
         "gate_context": gate_context,
+        "export_key": export_key,
+        "flat_export_providers_json": flat_export_providers_json,
         "error": None,
     })
 

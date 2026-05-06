@@ -47,6 +47,14 @@ Allowed overrides:
 - token-based visual treatment
 - internal card structure that keeps required hooks
 
+OAuth visual-state guardrail:
+
+- Keep `.chat-oauth-panel__row` borders neutral across pending/authorized
+  states.
+- Represent OAuth authorization state via status chip modifiers only
+  (`.chat-oauth-panel__status--pending` / `--authorized`) and matching labels.
+- Do not reintroduce row-level `--authorized` border color classes.
+
 Not allowed overrides:
 
 - removing required selectors or data attributes used by JS restore logic
@@ -78,6 +86,7 @@ Client runtime (`home.js`):
 - Are restore hooks preserved for reload and HTMX swap?
 - Are OAuth/gate semantics untouched unless intentionally migrated end-to-end?
 - Are styles token-based and consistent with chat panel rhythm?
+- Does OAuth readiness use chip-only state indication (no row border state)?
 - Are any behavior changes documented in `docs/chat_session_readiness_cards.md`?
 
 ## Anti-patterns (block in review)

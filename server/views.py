@@ -33,16 +33,11 @@ from core.tracing import context_from_traceparent, start_root_span
 logger = logging.getLogger(__name__)
 
 
-SUPPORTED_EXPORT_PROVIDERS = ("trello", "jira", "pdf", "n8n")
-EXPORT_PROVIDER_LABELS = {
-    "trello": "Trello",
-    "jira": "Jira",
-    "jira_software": "Jira Software",
-    "jira_service_desk": "Jira Service Desk",
-    "jira_business": "Jira Business",
-    "pdf": "PDF",
-    "n8n": "n8n",
-}
+# Export provider constants imported from util — single source of truth.
+from .util import (  # noqa: E402
+    SUPPORTED_EXPORT_PROVIDERS,
+    EXPORT_PROVIDER_LABELS,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -253,12 +248,21 @@ def _parse_mcp_secrets(post_data):
 
 
 def _normalize_export_agents(raw_agents):
-    """Return a clean list of export agent names."""
-    if isinstance(raw_agents, str):
-        raw_agents = [raw_agents] if raw_agents else []
-    if not isinstance(raw_agents, list):
-        return []
-    return [name.strip() for name in raw_agents if isinstance(name, str) and name.strip()]
+    """Delegate to the shared util helper."""
+    from .util import normalize_export_agents
+    return normalize_export_agents(raw_agents)
+
+
+def _build_export_meta(project):
+    """Delegate to the shared util helper."""
+    from .util import build_export_meta
+    return build_export_meta(project)
+
+
+def _filter_export_providers(export_meta, agent_name):
+    """Delegate to the shared util helper."""
+    from .util import filter_export_providers
+    return filter_export_providers(export_meta, agent_name)
 
 
 def _parse_attachment_ids(post_data):
@@ -523,64 +527,6 @@ def _build_quorum_composed_payload(
     if not sections:
         return "", []
     return "## User Replies\n\n" + "\n\n".join(sections), merged_attachment_ids
-
-
-def _build_export_meta(project):
-    """Build provider metadata for export actions from project integrations."""
-    integrations = project.get("integrations") if isinstance(project, dict) else {}
-    if not isinstance(integrations, dict) or not integrations.get("enabled", False):
-        return None
-
-    providers = []
-    for provider_name in SUPPORTED_EXPORT_PROVIDERS:
-        provider_cfg = integrations.get(provider_name)
-        if not isinstance(provider_cfg, dict) or not provider_cfg.get("enabled", False):
-            continue
-
-        if provider_name == "jira":
-            # Emit one entry per enabled Jira sub-type, each with its own export_agents
-            for jira_type in ("software", "service_desk", "business"):
-                type_cfg = provider_cfg.get(jira_type) or {}
-                if not type_cfg.get("enabled", False):
-                    continue
-                sub_key = f"jira_{jira_type}"
-                providers.append({
-                    "name": sub_key,
-                    "label": EXPORT_PROVIDER_LABELS.get(sub_key, sub_key.replace("_", " ").title()),
-                    "export_agents": _normalize_export_agents(type_cfg.get("export_agents")),
-                })
-            continue
-
-        providers.append({
-            "name": provider_name,
-            "label": EXPORT_PROVIDER_LABELS.get(provider_name, provider_name.title()),
-            "export_agents": _normalize_export_agents(provider_cfg.get("export_agents")),
-        })
-
-    if not providers:
-        return None
-
-    return {
-        "enabled": True,
-        "providers": providers,
-    }
-
-
-def _filter_export_providers(export_meta, agent_name):
-    """Return export providers visible for a given agent name."""
-    if not export_meta or not export_meta.get("enabled"):
-        return []
-
-    target = (agent_name or "").strip().lower()
-    visible = []
-    for provider in export_meta.get("providers") or []:
-        allowlist = provider.get("export_agents") or []
-        if not allowlist:
-            visible.append(provider)
-            continue
-        if any((name or "").strip().lower() == target for name in allowlist):
-            visible.append(provider)
-    return visible
 
 
 def _build_history_messages(session, export_meta):

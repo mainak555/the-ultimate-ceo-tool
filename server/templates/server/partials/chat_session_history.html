@@ -217,17 +217,26 @@
     <div>
       <h2 class="project-ctx__name">{{ project.project_name }}</h2>
       {% if project.agents|length == 1 %}
-      <span class="project-ctx__tag">
-        Chat Mode
-        &middot;
-        Human-controlled stop
-      </span>
+      <div class="project-ctx__tag-row">
+        <span class="project-ctx__tag">
+          Chat Mode
+          &middot;
+          Human-controlled stop
+        </span>
+      </div>
       {% else %}
-      <span class="project-ctx__tag">
-        {{ project.team.type|title }}
-        &middot;
-        {{ project.team.max_iterations }} iteration{{ project.team.max_iterations|pluralize }}
-      </span>
+      <div class="project-ctx__tag-row">
+        <span class="project-ctx__tag">
+          {{ project.team.type|title }}
+          &middot;
+          {{ project.team.max_iterations }} iteration{{ project.team.max_iterations|pluralize }}
+        </span>
+        {% if project.human_gate.remote_users|length > 0 %}
+        <span class="project-ctx__tag project-ctx__tag--quorum">
+          {{ project.human_gate.quorum|default:"all"|quorum_label }}
+        </span>
+        {% endif %}
+      </div>
       {% endif %}
     </div>
   </div>
@@ -266,6 +275,18 @@
             <span class="project-ctx__agent-model">Human reviewer</span>
           </div>
         </div>
+
+        {% for remote_user in project.human_gate.remote_users %}
+          <div class="project-ctx__agent-card project-ctx__agent-card--human">
+            <div class="project-ctx__agent-avatar project-ctx__agent-avatar--human">
+              {{ remote_user.name|slice:":1"|upper }}
+            </div>
+            <div class="project-ctx__agent-info">
+              <span class="project-ctx__agent-name">{{ remote_user.name }}</span>
+              <span class="project-ctx__agent-model">Remote participant</span>
+            </div>
+          </div>
+        {% endfor %}
       {% endif %}
 
     </div>

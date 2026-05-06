@@ -91,6 +91,27 @@ This keeps role identity explicit while preserving a unified public-page layout 
 
 Do not add compose controls to guest page.
 
+## Home Project Context Contract
+
+When `chat_session_history.html` renders the Home project context state (no active
+session selected), keep participant and chip behavior aligned with runtime data.
+
+Required behavior:
+
+- Participants cards include all assistant agents.
+- If human gate is enabled, include the human gate owner card.
+- If `human_gate.remote_users` is non-empty, include one card per remote user.
+- Team metadata renders as separate chips in one row:
+	- base chip: team type + max iterations
+	- quorum chip: shown only when remote users exist
+- Quorum chip text must come from `server/util.py::QUORUM_OPTIONS` labels
+	(single source of truth), not hardcoded template strings.
+
+Implementation notes:
+
+- Keep assistant cards as the only clickable cards for prompt viewer behavior.
+- Preserve existing class hooks in `main.scss` for project context cards/chips.
+
 ## Display Name Contract
 
 Chat bubble name labels are viewer-scoped and must remain consistent across

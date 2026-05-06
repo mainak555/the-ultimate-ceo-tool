@@ -140,6 +140,8 @@ Shared markdown rendering for Home and export reference panes must go through `s
 
 `home.js` also handles (home chat page only):
 - Restart controls for sessions with persisted agent state.
+- Project context panel rendering (when no session is selected): Participants cards include assistant agents, the human gate owner (when enabled), and configured remote users.
+- Project context metadata chips: one chip for `team.type` + `max_iterations`; when remote users are configured, a second quorum chip is shown to the right.
 - Chat-session readiness cards (`.chat-status-badge--gate`, `.chat-oauth-panel`, `.chat-restart-panel`) with in-history rendering and restore behavior.
 - Two restart modes: continue from last state, or add context and continue.
 - Human gate: when the SSE `gate` event fires, a non-interactive status badge (`.chat-status-badge--gate`) is appended to chat and the bottom input bar enters **gate mode** — placeholder updates to show the round, Stop button stays visible, Send routes to `sendRespond("continue")`. No separate panel widget is injected.
@@ -205,6 +207,7 @@ The copy button is visible in both interactive and readonly chat surfaces
 
 - **Assistant agents**: each card stores `name`, `model`, `system_prompt`, and `temperature`. The project `objective` is automatically appended to each agent's resolved system prompt at runtime.
 - **Human gate**: optional section with enable toggle, `name` (reviewer label), `quorum` selector, and a repeating list of **Remote Users** (name + description). When the run pauses at a gate, the bottom input bar enters gate mode. Quorum is only applied when at least one remote user is configured; when the list is empty the quorum field is ignored (`"na"`). When remote users are present, the gate waits for the configured quorum of responses before continuing the run.
+- **Home project context quorum chip**: when remote users are present, the header shows a separate quorum chip next to the team/iteration chip. The chip text uses the corresponding label from `server/util.py::QUORUM_OPTIONS` (single source of truth), not hardcoded template text.
 - **Human gate markdown contract**: notes sent via Continue are rendered as markdown in live bubbles and persisted history. This uses the shared markdown renderer path (`window.MarkdownViewer.render()` in `home.js`, `markdownify` in server-rendered history).
 - **Team**: nested config with `type` and `max_iterations`. Supported types:
   - `round_robin` — agents take turns in fixed order.

@@ -123,6 +123,26 @@ In the project **Human Gate** section:
 5. Select the **Quorum** that controls when the run resumes.
 6. Save the configuration.
 
+#### Allowing a remote user to export
+
+When Trello or Jira integrations are enabled on a project, the host can grant
+individual remote users the ability to open the export modal directly from
+agent message bubbles on their page.
+
+In the remote participants readiness card on the home page:
+
+1. Each remote user row shows a **Can Export** checkbox.
+2. Check the box to grant access — a short-lived, per-user export key is generated
+   in Redis and delivered to the remote user's page in real time via WebSocket.
+   Export action buttons appear immediately on all agent message bubbles without
+   a page reload.
+3. Uncheck the box (or click **Ignore**) to revoke access — export buttons
+   disappear on the remote page instantly.
+4. The export key is used for all Trello and Jira session-scoped API calls. The
+   admin `APP_SECRET_KEY` is **never** exposed to the remote user.
+5. Export keys share the same TTL as invite tokens (`REDIS_REMOTE_USER_TOKEN_TTL_SECONDS`,
+   default 6 h) and are automatically purged when the session is deleted.
+
 ---
 
 ### Multi-assistant gate contract (≥ 2 assistants)
@@ -529,6 +549,8 @@ Full documentation: [docs/mcp_integration.md](docs/mcp_integration.md).
 | `OPENAI_API_URL` | Endpoint fallback for `openai` models when `endpoint` is omitted in `agent_models.json` | *(optional)* |
 | `ANTHROPIC_API_KEY` | API key for direct Anthropic models | *(required for `anthropic` models)* |
 | `ANTHROPIC_API_URL` | Endpoint fallback for `anthropic` models when `endpoint` is omitted in `agent_models.json` | *(optional)* |
+| `ANTHROPIC_MAX_RETRIES` | Maximum retry attempts when Anthropic returns HTTP 529 (OverloadedError). Each retry uses exponential backoff starting at `ANTHROPIC_RETRY_BASE_DELAY` seconds. Applies to both `anthropic` and `azure_anthropic` providers. | `2` |
+| `ANTHROPIC_RETRY_BASE_DELAY` | Base delay in seconds for the first Anthropic 529 retry. Subsequent retries double the delay (plus up to 1 s of random jitter). Set to `0` to disable delay (not recommended in production). | `5.0` |
 | `GOOGLE_API_KEY` | API key for direct Google Gemini models | *(required for `google` models)* |
 | `GOOGLE_API_URL` | Endpoint fallback for `google` models when `endpoint` is omitted in `agent_models.json` | *(optional)* |
 | `AZURE_OPENAI_API_KEY` | API key for Azure AI Foundry OpenAI deployments | *(required for `azure_openai` models)* |
