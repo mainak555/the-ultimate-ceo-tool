@@ -1349,7 +1349,7 @@ async def chat_session_run(request, session_id):
             except Exception:  # noqa: BLE001
                 pass
         from autogen_agentchat.base import TaskResult
-        from autogen_agentchat.messages import TextMessage, ToolCallSummaryMessage
+        from autogen_agentchat.messages import MultiModalMessage, TextMessage, ToolCallSummaryMessage
         from agents.runtime import (
             evict_team,
             get_or_build_team,
@@ -1453,6 +1453,20 @@ async def chat_session_run(request, session_id):
             export_meta = _build_export_meta(project)
 
             pending_messages = []
+            remote_user_names = [
+                str(ru.get("name") or "")
+                for ru in ((project.get("human_gate") or {}).get("remote_users") or [])
+                if isinstance(ru, dict) and str(ru.get("name") or "").strip()
+            ]
+            team_choice_proxy_sources = set()
+            if (project.get("human_gate") or {}).get("quorum") == "team_choice":
+                for name in remote_user_names:
+                    try:
+                        team_choice_proxy_sources.add(
+                            util.sanitize_identifier(name, "Remote user name")
+                        )
+                    except ValueError:
+                        continue
 
             async def checkpoint_state() -> None:
                 state = await save_team_state(team)
@@ -1552,7 +1566,7 @@ async def chat_session_run(request, session_id):
             # (pending_messages is only built when task or attachment_ids are
             # present, and both are falsy in this branch) and is NOT shown in the
             # chat UI (the SSE loop only emits TextMessage where source!="user").
-            effective_task: str | None = task_for_agent if task_for_agent else None
+            effective_task = task_for_agent if task_for_agent else None
             if effective_task is None and not is_first_run:
                 effective_task = "Continue."
 
@@ -1615,6 +1629,10 @@ async def chat_session_run(request, session_id):
                             yield _sse("done", done_data)
 
                     elif isinstance(msg, TextMessage) and msg.source != "user":
+                        if msg.source in team_choice_proxy_sources:
+                            # team_choice remote user messages are already persisted
+                            # by remote_user_respond; skip duplicate assistant echo.
+                            continue
                         ts_dt = datetime.now(timezone.utc)  # BSON Date for MongoDB
                         ts_iso = ts_dt.isoformat()           # ISO string for SSE JSON
                         record = {
@@ -1635,6 +1653,10 @@ async def chat_session_run(request, session_id):
                             await asyncio.to_thread(
                                 _publish_session_message_safe, session_id, sse_record
                             )
+
+                    elif isinstance(msg, MultiModalMessage) and msg.source != "user":
+                        if msg.source in team_choice_proxy_sources:
+                            continue
 
                     elif isinstance(msg, ToolCallSummaryMessage) and msg.source != "user":
                         # Emitted when reflect_on_tool_use is False or unavailable.
@@ -1661,8 +1683,8 @@ async def chat_session_run(request, session_id):
                             )
 
                     elif type(msg).__name__ == "UserInputRequestedEvent":
-                        # team_choice quorum: placeholder proxy auto-responds immediately.
-                        # Emit a breadcrumb SSE event for future remote user UI integration.
+                        # team_choice quorum: proxy turn requested.
+                        # Emit a breadcrumb SSE event for remote UI turn gating.
                         yield _sse("remote_input_requested", {
                             "proxy_name": getattr(msg, "source", ""),
                             "request_id": str(getattr(msg, "request_id", "")),

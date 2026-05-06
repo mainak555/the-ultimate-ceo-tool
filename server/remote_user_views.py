@@ -25,6 +25,7 @@ Remote-user-facing (public, token-gated):
 
 from __future__ import annotations
 
+import base64
 import logging
 
 from django.http import JsonResponse
@@ -354,8 +355,25 @@ def remote_user_respond(request, token):
     session = services.get_chat_session(session_id)
     if session is None:
         return util.json_error("Session not found.", 404)
-    if session.get("status") != "awaiting_input":
-        current_status = str(session.get("status") or "")
+    project = services.get_project(session.get("project_id", ""))
+    if project is None:
+        return util.json_error("Project not found.", 404)
+
+    quorum = (project.get("human_gate") or {}).get("quorum") or "na"
+    current_status = str(session.get("status") or "")
+    if quorum == "team_choice":
+        # team_choice turns occur while the run remains active.
+        if current_status not in {"running", "awaiting_input"}:
+            if current_status == "idle":
+                return util.json_response({
+                    "status": "stale",
+                    "message": "This turn is no longer active.",
+                }, status=409)
+            return util.json_error(
+                f"Session is not accepting team_choice responses (status: {session.get('status')}).",
+                409,
+            )
+    elif current_status != "awaiting_input":
         if current_status == "idle":
             return util.json_response({
                 "status": "stale",
@@ -363,11 +381,6 @@ def remote_user_respond(request, token):
             }, status=409)
         return util.json_error(f"Session is not awaiting input (status: {session.get('status')}).", 409)
 
-    project = services.get_project(session.get("project_id", ""))
-    if project is None:
-        return util.json_error("Project not found.", 404)
-
-    quorum = (project.get("human_gate") or {}).get("quorum") or "na"
     gate_name = (project.get("human_gate") or {}).get("name") or "You"
     round_number = int(session.get("current_round") or 1)
 
@@ -458,17 +471,30 @@ def remote_user_respond(request, token):
                 status=409,
             )
 
-        task_text = text + attachment_service.build_attachment_context_block(
+        text_with_context = text + attachment_service.build_attachment_context_block(
             session_id=session_id,
             attachment_ids=attachment_ids,
         )
+        images = attachment_service.load_images_for_agents(
+            session_id=session_id,
+            attachment_ids=attachment_ids,
+        )
+        images_payload = [
+            {
+                "filename": filename,
+                "mime_type": mime_type,
+                "data_b64": base64.b64encode(raw).decode("ascii"),
+            }
+            for filename, raw, mime_type in images
+        ]
         accepted = submit_team_choice_response(
             session_id=session_id,
             request_id=request_id,
             responder_name=responder_name,
             text=text,
             attachment_ids=attachment_ids,
-            task_text=task_text,
+            text_with_context=text_with_context,
+            images=images_payload,
         )
         if not accepted:
             return util.json_response(

@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
-from uuid import uuid4
 from typing import TYPE_CHECKING, Sequence
 
 if TYPE_CHECKING:
@@ -18,6 +16,7 @@ from server.util import sanitize_identifier
 from .factory import build_model_client
 from .mcp_tools import build_mcp_workbenches, resolve_mcp_servers_for_agent
 from .prompt_builder import resolve_system_prompt
+from .team_choice_proxy_agent import TeamChoiceProxyAgent
 
 logger = logging.getLogger(__name__)
 
@@ -174,77 +173,11 @@ def build_team(project: dict, session_id: str | None = None, remote_users: list 
             mcp_agent_count += 1
         agents.append(AssistantAgent(**agent_kwargs))
 
-    # Add UserProxyAgent placeholders for team_choice quorum.
-    # Each proxy blocks until the assigned remote user submits text/files.
-    # The payload is delivered via Redis coordination helpers.
+    # Add team_choice proxies for remote users. These proxies block per turn
+    # until the selected remote user submits text/files/images.
     proxy_count = 0
     if (project.get("human_gate") or {}).get("quorum") == "team_choice" and remote_users:
-        from autogen_agentchat.agents import UserProxyAgent
-        from agents.session_coordination import (
-            SessionCoordinationError,
-            clear_team_choice_active_request,
-            set_team_choice_active_request,
-            wait_for_team_choice_response,
-        )
-
-        def _make_input_func(proxy_name: str, remote_user_name: str):
-            async def _placeholder(prompt: str) -> str:
-                del prompt  # prompt text is not used by the current remote UI.
-                if not session_id:
-                    return "Continue."
-
-                request_id = str(uuid4())
-                round_number = int(project.get("_current_round") or 0) or None
-                try:
-                    await asyncio.to_thread(
-                        set_team_choice_active_request,
-                        session_id,
-                        request_id,
-                        proxy_name,
-                        remote_user_name,
-                        round_number,
-                    )
-                    response = await asyncio.to_thread(
-                        wait_for_team_choice_response,
-                        session_id,
-                        request_id,
-                    )
-                except SessionCoordinationError:
-                    logger.exception(
-                        "agents.proxy.turn_request_failed",
-                        extra={"session_id": session_id, "proxy": proxy_name},
-                    )
-                    return "Continue."
-                finally:
-                    try:
-                        await asyncio.to_thread(
-                            clear_team_choice_active_request,
-                            session_id,
-                            request_id,
-                        )
-                    except SessionCoordinationError:
-                        pass
-
-                if not response:
-                    logger.info(
-                        "agents.proxy.turn_timeout_or_cancel",
-                        extra={"session_id": session_id, "proxy": proxy_name},
-                    )
-                    return "Continue."
-
-                task_text = (response.get("task_text") or "").strip()
-                if task_text:
-                    return task_text
-
-                text = (response.get("text") or "").strip()
-                if text:
-                    return text
-
-                if response.get("attachment_ids"):
-                    return "Attached files provided."
-                return "Continue."
-            return _placeholder
-
+        round_number = int(project.get("_current_round") or 0) or None
         for ru in remote_users:
             raw_name = ru.get("name") or ""
             try:
@@ -252,10 +185,12 @@ def build_team(project: dict, session_id: str | None = None, remote_users: list 
             except ValueError:
                 safe_proxy_name = f"remote_user_{proxy_count}"
             agents.append(
-                UserProxyAgent(
+                TeamChoiceProxyAgent(
                     name=safe_proxy_name,
+                    session_id=session_id or "",
+                    remote_user_name=raw_name,
+                    round_number=round_number,
                     description=ru.get("description") or "Remote participant",
-                    input_func=_make_input_func(safe_proxy_name, raw_name),
                 )
             )
             proxy_count += 1

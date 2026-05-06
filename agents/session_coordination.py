@@ -735,7 +735,8 @@ def submit_team_choice_response(
     responder_name: str,
     text: str,
     attachment_ids: list[str] | None = None,
-    task_text: str | None = None,
+    text_with_context: str | None = None,
+    images: list[dict] | None = None,
 ) -> bool:
     """Store a remote response for the active team_choice request.
 
@@ -752,7 +753,8 @@ def submit_team_choice_response(
         "responder_name": responder_name,
         "text": text or "",
         "attachment_ids": list(attachment_ids or []),
-        "task_text": task_text if task_text is not None else (text or ""),
+        "text_with_context": text_with_context if text_with_context is not None else (text or ""),
+        "images": list(images or []),
         "timestamp": int(time.time()),
     }
 
