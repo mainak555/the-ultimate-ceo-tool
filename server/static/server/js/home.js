@@ -824,7 +824,7 @@ document.addEventListener("DOMContentLoaded", function () {
         + '<span class="chat-oauth-panel__status '
         + (authorized ? "chat-oauth-panel__status--authorized" : "chat-oauth-panel__status--pending") + '">'
         + (authorized ? "Authorized \u2713" : "Pending") + '</span>'
-        + '<button type="button" class="btn btn--primary chat-oauth-authorize-btn" data-server-name="' + safe + '"'
+        + '<button type="button" class="btn btn--sm chat-oauth-authorize-btn" data-server-name="' + safe + '"'
         + (authorized ? " disabled" : "") + '>'
         + (authorized ? "Authorized \u2713" : "Authorize") + '</button>'
         + '</div>';
