@@ -67,11 +67,11 @@
 
   function _roundLabel(data) {
     var d = data || {};
-    var isSingle = d.chat_mode === "single_assistant";
-    var round = Number(d.round || 0);
-    var maxRounds = Number(d.max_rounds || 0);
-    if (isSingle || !maxRounds) return "Round " + round;
-    return "Round " + round + "/" + maxRounds;
+    var round = Number(d.round ?? 0);
+    var maxRounds = Number(d.max_rounds ?? 0);
+    if (!isFinite(round) || round <= 0) return "";
+    if (isFinite(maxRounds) && maxRounds > 0) return "Round " + round + "/" + maxRounds + "-MAX";
+    return "Round " + round + "/N-MAX";
   }
 
   function _clearGateBadge() {
@@ -150,7 +150,7 @@
       var roundText = _roundLabel(_currentGateData || {});
       if (input) {
         input.disabled = false;
-        input.placeholder = roundText + " - enter your response...";
+        input.placeholder = roundText ? (roundText + " - enter your response...") : "enter your response...";
       }
       if (attachBtn) attachBtn.disabled = false;
       if (attachInput) attachInput.disabled = false;
@@ -171,7 +171,7 @@
 
     if (input) {
       input.disabled = true;
-      input.placeholder = "Wait for your turn";
+      input.placeholder = "wait for your turn";
     }
     if (attachBtn) attachBtn.disabled = true;
     if (attachInput) attachInput.disabled = true;
@@ -697,7 +697,7 @@
         var targetName = (msg.remote_user_name || "").trim();
         if (targetName && targetName === userName) {
           _setAwaitingTurn({
-            round: Number(msg.round || 0),
+            round: Number(msg.round ?? 0),
             max_rounds: 0,
             chat_mode: "team",
             quorum: "team_choice",
