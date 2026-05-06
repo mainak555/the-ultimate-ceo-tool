@@ -61,6 +61,18 @@
     if (c) c.scrollTop = c.scrollHeight;
   }
 
+  function _getHistoryContainer() {
+    var container = document.getElementById("remote-chat-messages");
+    if (!container) return null;
+    var history = document.getElementById("remote-chat-history-msgs");
+    if (history) return history;
+    history = document.createElement("div");
+    history.className = "chat-history";
+    history.id = "remote-chat-history-msgs";
+    container.insertAdjacentElement("afterbegin", history);
+    return history;
+  }
+
   function buildCopyBtn() {
     return window.ChatCopyUtils.buildCopyBtnHtml();
   }
@@ -347,11 +359,11 @@
 
   /** Append a pre-built bubble element into the messages container. */
   function appendBubble(el) {
-    var container = document.getElementById("remote-chat-messages");
-    if (!container) return;
-    var waiting = container.querySelector(".remote-user-page__waiting");
+    var history = _getHistoryContainer();
+    if (!history) return;
+    var waiting = history.querySelector(".remote-user-page__waiting");
     if (waiting) waiting.remove();
-    container.appendChild(el);
+    history.appendChild(el);
     renderLocalTimes();
     scrollToBottom();
   }

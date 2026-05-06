@@ -40,6 +40,18 @@
     if (c) c.scrollTop = c.scrollHeight;
   }
 
+  function _getHistoryContainer() {
+    var container = document.getElementById("guest-chat-messages");
+    if (!container) return null;
+    var history = document.getElementById("guest-chat-history-msgs");
+    if (history) return history;
+    history = document.createElement("div");
+    history.className = "chat-history";
+    history.id = "guest-chat-history-msgs";
+    container.insertAdjacentElement("afterbegin", history);
+    return history;
+  }
+
   function buildCopyBtn() {
     return window.ChatCopyUtils.buildCopyBtnHtml();
   }
@@ -67,8 +79,10 @@
   }
 
   function appendMessage(msg) {
-    var box = document.getElementById("guest-chat-messages");
+    var box = _getHistoryContainer();
     if (!box) return;
+    var waiting = box.querySelector(".guest-user-page__waiting");
+    if (waiting) waiting.remove();
     var ts = msg.timestamp || new Date().toISOString();
     var role = (msg.role || "").toLowerCase();
     var contentHtml = renderMd(msg.content || "");
@@ -161,7 +175,8 @@
       try { msg = JSON.parse(event.data); } catch (_) { return; }
 
       if (msg.type === "history") {
-        var hasServerHistory = document.querySelector("#guest-chat-messages .chat-bubble") !== null;
+        var hasServerHistory = document.querySelector("#guest-chat-history-msgs .chat-bubble") !== null
+          || document.querySelector("#guest-chat-messages .chat-bubble") !== null;
         if (hasServerHistory) return;
         (msg.messages || []).forEach(function (m) {
           if (m && m.id) seenMessageIds[m.id] = 1;
