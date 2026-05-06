@@ -31,7 +31,7 @@ from .config_loader import get_model_metadata
 logger = logging.getLogger(__name__)
 
 # Retry configuration — tunable via environment variables.
-_ANTHROPIC_MAX_RETRIES = int(os.getenv("ANTHROPIC_MAX_RETRIES", "3"))
+_ANTHROPIC_MAX_RETRIES = int(os.getenv("ANTHROPIC_MAX_RETRIES", "2"))
 _ANTHROPIC_RETRY_BASE_DELAY = float(os.getenv("ANTHROPIC_RETRY_BASE_DELAY", "5.0"))
 
 
@@ -43,6 +43,41 @@ def _is_overloaded_error(exc: BaseException) -> bool:
     """Return True for Anthropic HTTP 529 OverloadedError (checked by name to avoid
     a hard import from the anthropic package at module load time)."""
     return type(exc).__name__ == "OverloadedError" or getattr(exc, "status_code", None) == 529
+
+
+def _ensure_user_message_last(args: tuple, kwargs: dict) -> tuple[tuple, dict]:
+    """Ensure the message list passed to an Anthropic client does not end with an
+    AssistantMessage.
+
+    Newer Anthropic models (Claude 4+) reject conversations that end with an
+    assistant-role message ("does not support assistant message prefill").  This
+    can happen inside AutoGen group chats when a round-robin or selector team
+    calls the same agent twice in a row without any intervening message being
+    added to that agent's buffer — leaving the model context ending with the
+    agent's own previous AssistantMessage.
+
+    The fix injects a lightweight synthetic UserMessage immediately before the
+    inner client call.  The synthetic message is invisible to the caller (it is
+    not persisted or shown in the UI) but satisfies the Anthropic API constraint.
+    """
+    try:
+        from autogen_core.models import AssistantMessage, UserMessage
+    except ImportError:
+        return args, kwargs
+
+    # Resolve the 'messages' argument whether positional or keyword.
+    if args:
+        messages = args[0]
+        if messages and isinstance(messages[-1], AssistantMessage):
+            messages = list(messages) + [UserMessage(content="Please continue.", source="user")]
+            args = (messages,) + args[1:]
+    elif "messages" in kwargs:
+        messages = kwargs["messages"]
+        if messages and isinstance(messages[-1], AssistantMessage):
+            kwargs = dict(kwargs)
+            kwargs["messages"] = list(messages) + [UserMessage(content="Please continue.", source="user")]
+
+    return args, kwargs
 
 
 class _RetryAnthropicClient:
@@ -62,6 +97,7 @@ class _RetryAnthropicClient:
     # ------------------------------------------------------------------
 
     async def create(self, *args: Any, **kwargs: Any) -> Any:
+        args, kwargs = _ensure_user_message_last(args, kwargs)
         max_retries = _ANTHROPIC_MAX_RETRIES
         base_delay = _ANTHROPIC_RETRY_BASE_DELAY
         last_exc: BaseException | None = None
@@ -87,6 +123,7 @@ class _RetryAnthropicClient:
         raise last_exc  # type: ignore[misc]
 
     async def create_stream(self, *args: Any, **kwargs: Any) -> Any:
+        args, kwargs = _ensure_user_message_last(args, kwargs)
         max_retries = _ANTHROPIC_MAX_RETRIES
         base_delay = _ANTHROPIC_RETRY_BASE_DELAY
         last_exc: BaseException | None = None

@@ -549,7 +549,7 @@ Full documentation: [docs/mcp_integration.md](docs/mcp_integration.md).
 | `OPENAI_API_URL` | Endpoint fallback for `openai` models when `endpoint` is omitted in `agent_models.json` | *(optional)* |
 | `ANTHROPIC_API_KEY` | API key for direct Anthropic models | *(required for `anthropic` models)* |
 | `ANTHROPIC_API_URL` | Endpoint fallback for `anthropic` models when `endpoint` is omitted in `agent_models.json` | *(optional)* |
-| `ANTHROPIC_MAX_RETRIES` | Maximum retry attempts when Anthropic returns HTTP 529 (OverloadedError). Each retry uses exponential backoff starting at `ANTHROPIC_RETRY_BASE_DELAY` seconds. Applies to both `anthropic` and `azure_anthropic` providers. | `3` |
+| `ANTHROPIC_MAX_RETRIES` | Maximum retry attempts when Anthropic returns HTTP 529 (OverloadedError). Each retry uses exponential backoff starting at `ANTHROPIC_RETRY_BASE_DELAY` seconds. Applies to both `anthropic` and `azure_anthropic` providers. | `2` |
 | `ANTHROPIC_RETRY_BASE_DELAY` | Base delay in seconds for the first Anthropic 529 retry. Subsequent retries double the delay (plus up to 1 s of random jitter). Set to `0` to disable delay (not recommended in production). | `5.0` |
 | `GOOGLE_API_KEY` | API key for direct Google Gemini models | *(required for `google` models)* |
 | `GOOGLE_API_URL` | Endpoint fallback for `google` models when `endpoint` is omitted in `agent_models.json` | *(optional)* |

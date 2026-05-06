@@ -129,7 +129,7 @@ Provider client resolution in `agents/factory.py` (builder-per-provider pattern)
 - `azure_openai`    → `AzureOpenAIChatCompletionClient` — Azure AI Foundry OpenAI deployment
 - `azure_anthropic` → `AnthropicChatCompletionClient` wrapped in `_RetryAnthropicClient` with `base_url` — Anthropic model on Azure AI Foundry
 
-`_RetryAnthropicClient` is a transparent proxy that retries `create()` and `create_stream()` on HTTP 529 (`OverloadedError`) using exponential backoff with jitter. All other attribute accesses delegate to the inner client unchanged. Retry count and base delay are configurable via `ANTHROPIC_MAX_RETRIES` (default `3`) and `ANTHROPIC_RETRY_BASE_DELAY` (default `5.0` seconds).
+`_RetryAnthropicClient` is a transparent proxy that retries `create()` and `create_stream()` on HTTP 529 (`OverloadedError`) using exponential backoff with jitter. All other attribute accesses delegate to the inner client unchanged. Retry count and base delay are configurable via `ANTHROPIC_MAX_RETRIES` (default `2`) and `ANTHROPIC_RETRY_BASE_DELAY` (default `5.0` seconds).
 
 To add a new provider, define a `_build_<name>` function in `agents/factory.py` and add one entry to `_PROVIDER_BUILDERS`.
 
