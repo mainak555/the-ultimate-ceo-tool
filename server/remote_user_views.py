@@ -26,6 +26,7 @@ Remote-user-facing (public, token-gated):
 from __future__ import annotations
 
 import base64
+import json as _json
 import logging
 
 from django.http import JsonResponse
@@ -292,15 +293,27 @@ def remote_user_join(request, token):
     export_meta = build_export_meta(project) if project else None
 
     # Attach visible export providers to each AI discussion for initial render.
+    # Always compute provider lists so data-export-providers is available on every
+    # bubble — _injectExportDropdowns relies on this when WS enables export later.
     enriched_discussions = []
     for d in discussions:
         row = dict(d)
         row["attachments"] = _enrich_attachments_for_display(session_id, row.get("attachments") or [])
-        if row.get("role") != "user" and export_key and export_meta:
-            row["visible_export_providers"] = filter_export_providers(export_meta, row.get("agent_name", ""))
+        if row.get("role") != "user" and export_meta:
+            providers = filter_export_providers(export_meta, row.get("agent_name", ""))
+            row["visible_export_providers"] = providers if export_key else []
+            row["export_providers_json"] = _json.dumps(
+                [{"name": p["name"], "label": p["label"]} for p in providers]
+            )
         else:
             row["visible_export_providers"] = []
+            row["export_providers_json"] = "[]"
         enriched_discussions.append(row)
+
+    # Flat global providers list (unfiltered by agent) for the WS inject fallback.
+    flat_export_providers_json = _json.dumps(
+        [{"name": p["name"], "label": p["label"]} for p in (export_meta.get("providers") or [])]
+    ) if export_meta else "[]"
 
     return render(request, "server/remote_user.html", {
         "token": token,
@@ -312,6 +325,7 @@ def remote_user_join(request, token):
         "session_status": session_status,
         "gate_context": gate_context,
         "export_key": export_key,
+        "flat_export_providers_json": flat_export_providers_json,
         "error": None,
     })
 

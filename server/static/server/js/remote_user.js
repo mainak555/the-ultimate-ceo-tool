@@ -307,10 +307,20 @@
           + escapeHtml(ts) + '"></time></span>'
       : "";
 
+    // WS payload uses msg.export.providers; provider list absent when export not yet granted.
+    var providers = (msg.export && msg.export.providers) || msg.providers || null;
+    var discussionId = msg.id || msg.discussion_id || "";
+
     var el = document.createElement("div");
     el.className = "chat-bubble chat-bubble--ai";
     el.dataset.rawContent = content;
-    if (msg.providers) { el.dataset.exportProviders = JSON.stringify(msg.providers); }
+    el.dataset.discussionId = discussionId;
+    // Always store providers on the bubble so _injectExportDropdowns can find them later.
+    if (providers && providers.length) {
+      el.dataset.exportProviders = JSON.stringify(
+        providers.map(function (p) { return { name: p.name, label: p.label }; })
+      );
+    }
     el.innerHTML =
       '<div class="chat-bubble__avatar">' + escapeHtml(initial) + "</div>"
       + '<div class="chat-bubble__body">'
@@ -321,7 +331,7 @@
       +   "</div>"
       +   '<div class="chat-bubble__content"></div>'
       +   renderMessageAttachments(msg.attachments || [])
-      +   _buildExportDropdownHtml(msg.providers, msg.discussion_id || "")
+      +   _buildExportDropdownHtml(providers, discussionId)
       + "</div>";
 
     el.querySelector(".chat-bubble__content").innerHTML = renderMd(content);
@@ -371,7 +381,6 @@
   }
 
   function _injectExportDropdowns() {
-    var sessionId = window._remoteSessionId || "";
     document.querySelectorAll(".chat-bubble--ai").forEach(function (bubble) {
       if (bubble.querySelector(".chat-bubble__actions")) return;
       var body = bubble.querySelector(".chat-bubble__body");
@@ -380,6 +389,10 @@
       var rawProviders = bubble.dataset.exportProviders;
       var providers;
       try { providers = rawProviders ? JSON.parse(rawProviders) : null; } catch (_) { providers = null; }
+      // Fallback to global list for server-rendered bubbles that lack per-agent filtering.
+      if (!providers || !providers.length) {
+        providers = window._remoteExportProviders || null;
+      }
       var html = _buildExportDropdownHtml(providers, discussionId);
       if (html) body.insertAdjacentHTML("beforeend", html);
     });

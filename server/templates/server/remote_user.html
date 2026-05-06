@@ -56,7 +56,10 @@
                 {% endif %}
               </div>
             {% else %}
-              <div class="chat-bubble chat-bubble--ai" data-raw-content="{{ d.content }}">
+              <div class="chat-bubble chat-bubble--ai"
+                   data-raw-content="{{ d.content }}"
+                   data-discussion-id="{{ d.id|default:'' }}"
+                   data-export-providers="{{ d.export_providers_json|default:'[]' }}">
                 <div class="chat-bubble__avatar">{{ d.agent_name|slice:":1"|upper }}</div>
                 <div class="chat-bubble__body">
                   <div class="chat-bubble__meta">
@@ -148,6 +151,7 @@
     window._remoteExportKey = "{{ export_key|default:'' }}";
     window._remoteProjectId = "{{ project_id|default:'' }}";
     window._csrfToken = "{{ csrf_token }}";
+    window._remoteExportProviders = {{ flat_export_providers_json|default:'[]'|safe }};
   </script>
   {% compress js %}
   <script src="{% static 'server/js/chat_copy_utils.js' %}"></script>
