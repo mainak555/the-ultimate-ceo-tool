@@ -818,8 +818,7 @@ document.addEventListener("DOMContentLoaded", function () {
       // Skip if row already exists (idempotent).
       if (panel.querySelector('.chat-oauth-panel__row[data-server-name="' + name.replace(/"/g, '\\"') + '"]')) return;
       var safe = escapeHtml(name);
-      var rowHtml = '<div class="chat-oauth-panel__row'
-        + (authorized ? " chat-oauth-panel__row--authorized" : "") + '" data-server-name="' + safe + '">'
+      var rowHtml = '<div class="chat-oauth-panel__row" data-server-name="' + safe + '">'
         + '<span class="chat-oauth-panel__server">' + safe + '</span>'
         + '<span class="chat-oauth-panel__status '
         + (authorized ? "chat-oauth-panel__status--authorized" : "chat-oauth-panel__status--pending") + '">'
@@ -868,7 +867,6 @@ document.addEventListener("DOMContentLoaded", function () {
     function _markRowAuthorized(name) {
       var row = panel.querySelector('.chat-oauth-panel__row[data-server-name="' + (window.CSS && CSS.escape ? CSS.escape(name) : name) + '"]');
       if (!row) return;
-      row.classList.add("chat-oauth-panel__row--authorized");
       var status = row.querySelector(".chat-oauth-panel__status");
       if (status) {
         status.classList.remove("chat-oauth-panel__status--pending");
@@ -883,7 +881,8 @@ document.addEventListener("DOMContentLoaded", function () {
       var rows = panel.querySelectorAll(".chat-oauth-panel__row");
       if (!rows.length) return false;
       for (var i = 0; i < rows.length; i++) {
-        if (!rows[i].classList.contains("chat-oauth-panel__row--authorized")) return false;
+        var status = rows[i].querySelector(".chat-oauth-panel__status");
+        if (!status || !status.classList.contains("chat-oauth-panel__status--authorized")) return false;
       }
       return true;
     }

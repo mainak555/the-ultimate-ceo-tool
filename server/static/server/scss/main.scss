@@ -2228,10 +2228,6 @@ select.input {
     background: $color-surface;
     border: 1px solid $color-border;
     border-radius: $radius;
-
-    &--authorized {
-      border-color: $color-success;
-    }
   }
 
   &__server {
