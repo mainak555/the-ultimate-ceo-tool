@@ -27,6 +27,7 @@ from agents.session_coordination import (
     set_team_choice_active_request,
     wait_for_team_choice_response,
 )
+from core.tracing import set_payload_attribute, traced_block
 
 logger = logging.getLogger(__name__)
 
@@ -61,37 +62,74 @@ class TeamChoiceProxyAgent(UserProxyAgent):
         del cancellation_token
         # Keep explicit event parity with UserProxyAgent.
         request_id = str(uuid.uuid4())
-        yield UserInputRequestedEvent(request_id=request_id, source=self.name)
+        payload = None
+        with traced_block(
+            "agents.proxy.team_choice_turn",
+            {
+                "session_id": self._session_id,
+                "proxy_name": self.name,
+                "remote_user_name": self._remote_user_name,
+                "round": int(self._round_number or 0),
+                "request_id": request_id,
+            },
+        ) as span:
+            set_payload_attribute(
+                span,
+                "input.value",
+                {
+                    "request_id": request_id,
+                    "proxy_name": self.name,
+                    "remote_user_name": self._remote_user_name,
+                    "round": self._round_number,
+                },
+            )
+            yield UserInputRequestedEvent(request_id=request_id, source=self.name)
 
-        try:
-            await asyncio.to_thread(
-                set_team_choice_active_request,
-                self._session_id,
-                request_id,
-                self.name,
-                self._remote_user_name,
-                self._round_number,
-            )
-            payload = await asyncio.to_thread(
-                wait_for_team_choice_response,
-                self._session_id,
-                request_id,
-            )
-        except SessionCoordinationError:
-            logger.exception(
-                "agents.proxy.turn_request_failed",
-                extra={"session_id": self._session_id, "proxy": self.name},
-            )
-            payload = None
-        finally:
             try:
                 await asyncio.to_thread(
-                    clear_team_choice_active_request,
+                    set_team_choice_active_request,
+                    self._session_id,
+                    request_id,
+                    self.name,
+                    self._remote_user_name,
+                    self._round_number,
+                )
+                payload = await asyncio.to_thread(
+                    wait_for_team_choice_response,
                     self._session_id,
                     request_id,
                 )
             except SessionCoordinationError:
-                pass
+                logger.exception(
+                    "agents.proxy.turn_request_failed",
+                    extra={"session_id": self._session_id, "proxy": self.name},
+                )
+                payload = None
+            finally:
+                try:
+                    await asyncio.to_thread(
+                        clear_team_choice_active_request,
+                        self._session_id,
+                        request_id,
+                    )
+                except SessionCoordinationError:
+                    logger.exception(
+                        "agents.proxy.turn_request_cleanup_failed",
+                        extra={"session_id": self._session_id, "proxy": self.name},
+                    )
+
+            set_payload_attribute(
+                span,
+                "output.value",
+                {
+                    "request_id": request_id,
+                    "has_payload": bool(payload),
+                    "responder_name": str((payload or {}).get("responder_name") or ""),
+                    "text_len": len(str((payload or {}).get("text") or "")),
+                    "attachment_count": len((payload or {}).get("attachment_ids") or []),
+                    "image_count": len((payload or {}).get("images") or []),
+                },
+            )
 
         if not payload:
             yield Response(chat_message=TextMessage(content="Continue.", source=self.name))

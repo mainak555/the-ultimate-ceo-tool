@@ -617,6 +617,7 @@ def _team_choice_turn_channel(session_id: str) -> str:
     return f"{_namespace()}:team_choice:{session_id}:turn_events"
 
 
+@traced_function("agents.session.team_choice_request_set")
 def set_team_choice_active_request(
     session_id: str,
     request_id: str,
@@ -670,6 +671,16 @@ def set_team_choice_active_request(
                 }
             ),
         )
+        logger.info(
+            "agents.session.team_choice_request_set",
+            extra={
+                "session_id": session_id,
+                "request_id": request_id,
+                "proxy_name": proxy_name,
+                "remote_user_name": remote_user_name,
+                "round": payload["round"],
+            },
+        )
     except Exception as exc:  # noqa: BLE001
         raise SessionCoordinationError("Unable to set team_choice active request.") from exc
 
@@ -691,6 +702,7 @@ def get_team_choice_active_request(session_id: str) -> dict | None:
         return None
 
 
+@traced_function("agents.session.team_choice_request_clear")
 def clear_team_choice_active_request(session_id: str, request_id: str | None = None) -> None:
     """Clear active team_choice request and publish turn-closed event."""
     import json as _json
@@ -725,10 +737,20 @@ def clear_team_choice_active_request(session_id: str, request_id: str | None = N
         client = _get_client()
         client.publish(_remote_user_pubsub_channel(session_id), msg)
         client.publish(_team_choice_turn_channel(session_id), msg)
+        logger.info(
+            "agents.session.team_choice_request_cleared",
+            extra={
+                "session_id": session_id,
+                "request_id": ended_payload.get("request_id", ""),
+                "proxy_name": ended_payload.get("proxy_name", ""),
+                "remote_user_name": ended_payload.get("remote_user_name", ""),
+            },
+        )
     except Exception:  # noqa: BLE001
         pass
 
 
+@traced_function("agents.session.team_choice_response_submit")
 def submit_team_choice_response(
     session_id: str,
     request_id: str,
@@ -762,6 +784,14 @@ def submit_team_choice_response(
         client = _get_client()
         claimed = bool(client.set(claim_key, responder_name, ex=ttl, nx=True))
         if not claimed:
+            logger.info(
+                "agents.session.team_choice_response_conflict",
+                extra={
+                    "session_id": session_id,
+                    "request_id": request_id,
+                    "responder_name": responder_name,
+                },
+            )
             return False
         pipe = client.pipeline(transaction=False)
         pipe.set(response_key, _json.dumps(payload), ex=ttl)
@@ -786,11 +816,22 @@ def submit_team_choice_response(
             ),
         )
         pipe.execute()
+        logger.info(
+            "agents.session.team_choice_response_submitted",
+            extra={
+                "session_id": session_id,
+                "request_id": request_id,
+                "responder_name": responder_name,
+                "attachment_count": len(payload["attachment_ids"]),
+                "image_count": len(payload["images"]),
+            },
+        )
         return True
     except Exception as exc:  # noqa: BLE001
         raise SessionCoordinationError("Unable to submit team_choice response.") from exc
 
 
+@traced_function("agents.session.team_choice_response_pop")
 def pop_team_choice_response(session_id: str, request_id: str) -> dict | None:
     """Atomically consume a team_choice response payload for a request."""
     import json as _json
@@ -813,11 +854,21 @@ def pop_team_choice_response(session_id: str, request_id: str) -> dict | None:
         return None
     try:
         payload = _json.loads(raw)
+        if isinstance(payload, dict):
+            logger.info(
+                "agents.session.team_choice_response_popped",
+                extra={
+                    "session_id": session_id,
+                    "request_id": request_id,
+                    "responder_name": payload.get("responder_name", ""),
+                },
+            )
         return payload if isinstance(payload, dict) else None
     except Exception:  # noqa: BLE001
         return None
 
 
+@traced_function("agents.session.team_choice_response_wait")
 def wait_for_team_choice_response(session_id: str, request_id: str) -> dict | None:
     """Wait until a team_choice response is available, cancelled, or timed out."""
     deadline = time.time() + _team_choice_wait_timeout()
@@ -825,11 +876,27 @@ def wait_for_team_choice_response(session_id: str, request_id: str) -> dict | No
 
     while True:
         if is_cancel_signaled(session_id):
+            logger.info(
+                "agents.session.team_choice_wait_cancelled",
+                extra={"session_id": session_id, "request_id": request_id},
+            )
             return None
         response = pop_team_choice_response(session_id, request_id)
         if response is not None:
+            logger.info(
+                "agents.session.team_choice_wait_completed",
+                extra={
+                    "session_id": session_id,
+                    "request_id": request_id,
+                    "responder_name": response.get("responder_name", ""),
+                },
+            )
             return response
         if time.time() >= deadline:
+            logger.warning(
+                "agents.session.team_choice_wait_timeout",
+                extra={"session_id": session_id, "request_id": request_id},
+            )
             return None
         time.sleep(poll_interval)
 

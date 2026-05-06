@@ -497,6 +497,14 @@ def remote_user_respond(request, token):
             images=images_payload,
         )
         if not accepted:
+            logger.info(
+                "agents.remote.team_choice_submit_conflict",
+                extra={
+                    "session_id": session_id,
+                    "request_id": request_id,
+                    "responder_name": responder_name,
+                },
+            )
             return util.json_response(
                 {
                     "status": "locked",
@@ -504,6 +512,17 @@ def remote_user_respond(request, token):
                 },
                 status=409,
             )
+
+        logger.info(
+            "agents.remote.team_choice_submit_accepted",
+            extra={
+                "session_id": session_id,
+                "request_id": request_id,
+                "responder_name": responder_name,
+                "attachment_count": len(attachment_ids),
+                "image_count": len(images_payload),
+            },
+        )
 
         _append_user_message_and_publish(
             session_id=session_id,

@@ -1685,9 +1685,19 @@ async def chat_session_run(request, session_id):
                     elif type(msg).__name__ == "UserInputRequestedEvent":
                         # team_choice quorum: proxy turn requested.
                         # Emit a breadcrumb SSE event for remote UI turn gating.
+                        proxy_name = getattr(msg, "source", "")
+                        request_id = str(getattr(msg, "request_id", ""))
+                        logger.info(
+                            "agents.session.team_choice_turn_requested",
+                            extra={
+                                "session_id": session_id,
+                                "proxy_name": proxy_name,
+                                "request_id": request_id,
+                            },
+                        )
                         yield _sse("remote_input_requested", {
-                            "proxy_name": getattr(msg, "source", ""),
-                            "request_id": str(getattr(msg, "request_id", "")),
+                            "proxy_name": proxy_name,
+                            "request_id": request_id,
                         })
 
             except asyncio.CancelledError:
