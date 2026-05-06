@@ -154,6 +154,33 @@
     var sendBtn = document.getElementById("remote-send-btn");
     var attachBtn = document.getElementById("remote-attach-btn");
     var attachInput = document.getElementById("remote-attach-input");
+    var inputRow = input && input.closest ? input.closest(".chat-input-row") : null;
+
+    function setTurnCue(active, text) {
+      var panel = input && input.closest ? input.closest(".chat-input-panel") : null;
+      var hint = panel ? panel.querySelector(".chat-turn-hint") : null;
+      if (!hint && panel) {
+        hint = document.createElement("div");
+        hint.className = "chat-turn-hint";
+        hint.hidden = true;
+        panel.appendChild(hint);
+      }
+      if (inputRow) {
+        inputRow.classList.toggle("chat-input-row--active-turn", !!active);
+      }
+      if (hint) {
+        hint.hidden = !active;
+        hint.textContent = active ? (text || "Your turn - type a response") : "";
+      }
+      if (!active || !inputRow) return;
+      inputRow.classList.remove("chat-input-row--active-turn-pulse");
+      void inputRow.offsetWidth;
+      inputRow.classList.add("chat-input-row--active-turn-pulse");
+      if (input) input.focus();
+      setTimeout(function () {
+        if (inputRow) inputRow.classList.remove("chat-input-row--active-turn-pulse");
+      }, 1200);
+    }
 
     _composerState = nextState;
     if (gateData) _currentGateData = gateData;
@@ -166,6 +193,7 @@
       }
       if (attachBtn) attachBtn.disabled = false;
       if (attachInput) attachInput.disabled = false;
+      setTurnCue(true, "Your turn - enter your response");
       _syncSendEnabled();
       return;
     }
@@ -178,6 +206,7 @@
       if (attachBtn) attachBtn.disabled = true;
       if (attachInput) attachInput.disabled = true;
       if (sendBtn) sendBtn.disabled = true;
+      setTurnCue(false, "");
       return;
     }
 
@@ -188,6 +217,7 @@
     if (attachBtn) attachBtn.disabled = true;
     if (attachInput) attachInput.disabled = true;
     if (sendBtn) sendBtn.disabled = true;
+    setTurnCue(false, "");
   }
 
   function _setAwaitingTurn(data) {

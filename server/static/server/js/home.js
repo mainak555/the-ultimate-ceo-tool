@@ -62,6 +62,7 @@ document.addEventListener("DOMContentLoaded", function () {
   var chatAttachBtn = document.getElementById("chat-attach-btn");
   var chatAttachmentInput = document.getElementById("chat-attachment-input");
   var chatComposeAttachments = document.getElementById("chat-compose-attachments");
+  var chatInputRow = chatInput && chatInput.closest ? chatInput.closest(".chat-input-row") : null;
   var chatProjectBtn = document.getElementById("chat-project-btn");
   var chatGuestShareBtn = document.getElementById("chat-guest-share-btn");
   var activeProjectIdInput = document.getElementById("active-project-id");
@@ -76,6 +77,38 @@ document.addEventListener("DOMContentLoaded", function () {
     window.requestAnimationFrame(function () {
       chatMessages.scrollTop = chatMessages.scrollHeight;
     });
+  }
+
+  function _ensureTurnHint() {
+    if (!chatInput || !chatInput.closest) return null;
+    var panel = chatInput.closest(".chat-input-panel");
+    if (!panel) return null;
+    var hint = panel.querySelector(".chat-turn-hint");
+    if (hint) return hint;
+    hint = document.createElement("div");
+    hint.className = "chat-turn-hint";
+    hint.hidden = true;
+    panel.appendChild(hint);
+    return hint;
+  }
+
+  function _setTurnCue(active, text) {
+    var hint = _ensureTurnHint();
+    if (chatInputRow) {
+      chatInputRow.classList.toggle("chat-input-row--active-turn", !!active);
+    }
+    if (hint) {
+      hint.hidden = !active;
+      hint.textContent = active ? (text || "Your turn - type a response") : "";
+    }
+    if (!active || !chatInputRow) return;
+    chatInputRow.classList.remove("chat-input-row--active-turn-pulse");
+    void chatInputRow.offsetWidth;
+    chatInputRow.classList.add("chat-input-row--active-turn-pulse");
+    if (chatInput) chatInput.focus();
+    setTimeout(function () {
+      if (chatInputRow) chatInputRow.classList.remove("chat-input-row--active-turn-pulse");
+    }, 1200);
   }
 
   function escapeHtml(text) {
@@ -499,6 +532,7 @@ document.addEventListener("DOMContentLoaded", function () {
       chatInput.placeholder = roundText + " \u2014 enter your response\u2026";
     }
     if (chatStopBtn) chatStopBtn.hidden = false;
+    _setTurnCue(true, "Your turn - enter your response");
     _evalSendBtn();
   }
 
@@ -507,6 +541,7 @@ document.addEventListener("DOMContentLoaded", function () {
     _gateData = null;
     if (chatInput) chatInput.placeholder = "Send a message";
     if (chatStopBtn) chatStopBtn.hidden = true;
+    _setTurnCue(false, "");
     _evalSendBtn();
   }
 
@@ -622,6 +657,7 @@ document.addEventListener("DOMContentLoaded", function () {
   var _hostSessionWs = null;
 
   function setRunningState(running) {
+    if (running) _setTurnCue(false, "");
     if (chatInput) { chatInput.disabled = running; }
     if (chatSendBtn) { chatSendBtn.hidden = running; }
     if (chatStopBtn) {
