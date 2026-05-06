@@ -7,7 +7,7 @@ Required reading before:
 
 - Changing `chat_session_respond`, `event_stream`, or any quorum gate helper
 - Integrating new quorum modes
-- Extending `UserProxyAgent` beyond placeholder (`team_choice` live input)
+- Changing `team_choice` remote-input request/response flow
 
 ---
 
@@ -20,11 +20,13 @@ Implemented now:
     `RemoteUserReadinessConsumer`, `RemoteChatConsumer`).
 - `first_win` and `all` quorum modes use Redis gate responses, winner lock, and
     pending-task handoff for run replay.
+- `team_choice` uses `TeamChoiceProxyAgent` turn requests backed by Redis active-request
+    markers and wait/resume response handoff.
 
 Still deferred:
 
-- `team_choice` live remote input to `UserProxyAgent.input_func` (current
-    placeholder still returns immediate default input).
+- Advanced selector-driven quorum ownership semantics beyond the current
+    per-proxy remote turn contract.
 
 ---
 

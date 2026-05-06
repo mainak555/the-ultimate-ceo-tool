@@ -53,7 +53,7 @@ Converts a single saved agent dict into a runtime spec:
 
 Reads `project["team"]["type"]` and builds the appropriate AutoGen team.
 
-- `remote_users` — list of remote user dicts `{name, description}` taken from the **session snapshot** (`chat_sessions.remote_users`), never directly from the project. Passed in from `get_or_build_team`. When `quorum == "team_choice"` and this list is non-empty, `UserProxyAgent` instances are added after all `AssistantAgent` instances. See [Remote Users & Quorum](#remote-users--quorum) below.
+- `remote_users` — list of remote user dicts `{name, description}` read from the live `project["human_gate"]["remote_users"]` config at run/build boundaries. Passed in from `get_or_build_team`. When `quorum == "team_choice"` and this list is non-empty, `TeamChoiceProxyAgent` instances are added after all `AssistantAgent` instances. See [Remote Users & Quorum](#remote-users--quorum) below.
 
 #### Termination strategy
 
@@ -82,9 +82,9 @@ A project can define `human_gate.remote_users` — additional human participants
 | `"na"` | No remote users (forced automatically by `validate_human_gate` when `remote_users == []`) |
 | `"first_win"` | First responder wins; all subsequent POSTs return 409 |
 | `"all"` | All configured participants must respond before the run resumes; inputs are merged into one composed task |
-| `"team_choice"` | Remote users participate as `UserProxyAgent` nodes inside the AutoGen team; selector routing chooses them as needed |
+| `"team_choice"` | Remote users participate as `TeamChoiceProxyAgent` nodes inside the AutoGen team; selector routing chooses them as needed |
 
-### Session Snapshot Contract
+### Live Project Contract
 
 `remote_users` and `quorum` are **always** read from the live `project["human_gate"]` at runtime. Neither is stored in `chat_sessions`. This means:
 - Team config changes (adding/removing remote users, changing quorum mode) take effect on the next run without creating a new session.
@@ -108,19 +108,23 @@ Scope rules:
 
 ### `quorum == "team_choice"` — UserProxyAgent Wiring
 
-`build_team()` creates one `UserProxyAgent` per remote user when `quorum == "team_choice"` and `remote_users` is non-empty:
+`build_team()` creates one `TeamChoiceProxyAgent` per remote user when `quorum == "team_choice"` and `remote_users` is non-empty:
 
 ```python
-UserProxyAgent(
-    name=safe_name,                            # sanitized with same re.sub as AssistantAgent
-    description=ru["description"] or "Remote participant",
-    input_func=placeholder_input_func,         # async, returns "Continue." immediately
+TeamChoiceProxyAgent(
+   name=safe_name,                            # sanitized with same re.sub as AssistantAgent
+   session_id=session_id,
+   remote_user_name=ru["name"],
+   round_number=project.get("_current_round"),
+   description=ru["description"] or "Remote participant",
 )
 ```
 
-**Phase 1 placeholder**: `input_func` is an async closure that returns `"Continue."` immediately — the run is never blocked. When `UserInputRequestedEvent` appears in the SSE stream, `event_stream()` emits a `remote_input_requested` SSE breadcrumb `{proxy_name, request_id}` for future WebSocket integration.
-
-**Phase 1 limitation**: real remote user input is not delivered to the proxy. Full WebSocket/Redis pub-sub delivery is deferred to a later phase.
+Implemented behavior:
+- The proxy emits `UserInputRequestedEvent` per turn so the runtime can surface `remote_input_requested` SSE breadcrumbs.
+- The proxy writes an active request marker in Redis and blocks on `wait_for_team_choice_response(...)` until the mapped remote user submits input or timeout/fallback applies.
+- Submitted payloads can produce text-only or multimodal proxy messages (images are delivered as `MultiModalMessage` content).
+- If no payload is available, the proxy falls back to `"Continue."` so the run remains resumable.
 
 ### `quorum == "all"` and `quorum == "first_win"` — Gate-Level Quorum
 
@@ -349,7 +353,7 @@ Mode-specific pause behavior:
 - **Multi-assistant (`n_agents >= 2`)**: gate pauses after each full round and completion can occur when `current_round` reaches `max_iterations`.
 - **Single-assistant, no remote users (`n_agents == 1`, `remote_users == []`) — pure chat mode**: gate pauses after every assistant turn and does not auto-complete via `max_iterations`; the human `Stop` action controls termination. Empty Continue (no text, no attachments) is rejected with HTTP 400.
 - **Single-assistant with remote users (`n_agents == 1`, `len(remote_users) >= 1`)**: behaves like multi-assistant — team config is honored and `max_iterations` governs run completion. Empty Continue is allowed. Team Setup is visible in config UI.
-- **`quorum == "team_choice"` with `UserProxyAgent` participants**: proxies are counted in `n_agents`. `AgentMessageTermination` fires after one full round that includes proxy turns. The `is_single_assistant_gate`/`is_single_assistant_chat_mode` check uses `session["remote_users"]` (session snapshot), so this mode is never mistakenly classified as pure single-assistant chat mode.
+- **`quorum == "team_choice"` with `TeamChoiceProxyAgent` participants**: proxies are counted in `n_agents`. `AgentMessageTermination` fires after one full round that includes proxy turns. The `is_single_assistant_gate`/`is_single_assistant_chat_mode` check uses live `project["human_gate"]["remote_users"]` (not `chat_sessions` fields), so this mode is never mistakenly classified as pure single-assistant chat mode.
 - **Remote quorum runtime semantics**:
    - `first_win`: first accepted responder (host or remote) commits the gate round; host UI auto-replays `/run/` from Redis pending-task handoff.
    - `all`: host waits until all expected responders submit, then host final Continue commits and resumes.
