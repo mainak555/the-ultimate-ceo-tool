@@ -1,5 +1,15 @@
-# The Ultimate CEO Tool
-### Turn Vision into Action
+# CouncilAI
+### The Ultimate CEO Tool — Turn Vision into Action
+
+> *Agentic AI for teams, not individuals — where specialized human experts and AI agents govern together.*
+
+<!-- YOUTUBE PLACEHOLDER — replace with your embed link after publishing
+[![CouncilAI — The Ultimate CEO Tool](https://img.youtube.com/vi/VIDEO_ID/maxresdefault.jpg)](https://youtu.be/VIDEO_ID)
+-->
+
+📖 **[Project Charter](PROJECT_CHARTER.md)** — Vision, market thesis, team collaboration model & flowchart
+
+---
 
 Agent-based product roadmap planning tool — OKR to Product Backlog.  
 Django SPA with HTMX, SCSS, and MongoDB (PyMongo).
