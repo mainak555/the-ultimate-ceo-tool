@@ -10,6 +10,7 @@ The goal is to prevent `app.js` from becoming a catch-all file.
 | `server/static/server/js/app.js` | Shared SPA shell behavior across pages | HTMX secret-key header injection, shared helpers, generic cross-page hooks | Feature-specific config/chat/integration workflows |
 | `server/static/server/js/markdown_viewer.js` | Shared markdown rendering utility | Common markdown-to-HTML rendering for Home and export reference panes | Feature-specific modal/session workflows |
 | `server/static/server/js/chat_copy_utils.js` | Shared chat utility for Home/Remote/Guest | Chat bubble copy button HTML, raw-markdown copy payload with attachments, clipboard fallback, copied-state feedback, delegated copy binding | Page-specific chat/session workflow logic |
+| `server/static/server/js/chat_surface_utils.js` | Shared chat rendering utility for Home/Remote/Guest | Attachment chip/message attachment HTML helpers, file-size formatting, file-icon fallback lookup, scroll/history-container helpers | Gate/quorum state machines, run lifecycle, role-label decisions |
 | `server/static/server/js/provider_registry.js` | Shared provider capability registry | Register and resolve provider capabilities (`openExportModal`, `syncConfigState`) | Provider-specific UI behavior |
 | `server/static/server/js/project_config.js` | Config page only (`config_form.html`) | Project-config form state sync, agent-card manipulation, config-page secret-gated controls | Home chat runtime behavior |
 | `server/static/server/js/mcp_json_editor.js` | Config page only (`config_form.html`) | MCP JSON code-editor mount/lifecycle, format/validate controls, textarea sync for submit | MCP schema business validation, server-side transport logic |
@@ -23,11 +24,45 @@ The goal is to prevent `app.js` from becoming a catch-all file.
 
 1. Load only the scripts a page needs.
 2. Keep feature modules independent from each other.
-3. Shared helpers stay in `app.js`; feature modules can expose a small namespace on `window` when needed.
+3. Shared helpers should live in dedicated shared modules (`app.js`, `chat_copy_utils.js`, `chat_surface_utils.js`) rather than feature files; feature modules can expose a small namespace on `window` when needed.
+
+## Reuse-First Rule
+
+When helper logic is used in 2+ chat surfaces (Home, Remote, Guest), it must be
+implemented in `server/static/server/js/chat_surface_utils.js` and consumed from there.
+
+Use shared helper ownership for:
+
+- attachment row/chip HTML rendering
+- file-size formatting
+- file icon fallback resolution
+- generic scroll-to-bottom helpers
+- generic history-container get/create helpers
+- local-time post-render helper calls
+
+Do not move per-surface run/gate/quorum logic into shared utility modules.
+
+## Chat Surface DOM ID Convention
+
+Use surface-prefixed ids consistently:
+
+- Home ids: `chat-*`
+- Remote ids: `remote-chat-*`
+- Guest ids: `guest-chat-*`
+
+Canonical message/history ids:
+
+- Home: `chat-messages`, `chat-history-msgs`
+- Remote: `remote-chat-messages`, `remote-chat-history-msgs`
+- Guest: `guest-chat-messages`, `guest-chat-history-msgs`
+
+Keep one id per semantic role per surface; avoid parallel aliases.
 
 Current template usage:
 - `config.html`: `app.js`, `provider_registry.js`, `markdown_viewer.js`, `config_readonly_markdown.js`, `mcp_json_editor.js`, `project_config.js`, `trello_config.js`, `jira.js`, `jira_config.js`
-- `home.html`: `app.js`, `provider_registry.js`, `markdown_viewer.js`, `home.js`, `trello.js`
+- `home.html`: `app.js`, `provider_registry.js`, `markdown_viewer.js`, `chat_copy_utils.js`, `chat_surface_utils.js`, `home.js`, `trello.js`
+- `remote_user.html`: `chat_copy_utils.js`, `chat_surface_utils.js`, `markdown_viewer.js`, `remote_user.js`
+- `guest_user.html`: `chat_copy_utils.js`, `chat_surface_utils.js`, `markdown_viewer.js`, `guest_user.js`
 
 ## Event Contract
 

@@ -10,68 +10,18 @@
   var ws = null;
   var seenMessageIds = Object.create(null);
 
-  function renderLocalTimes() {
-    document.querySelectorAll(".local-time[data-utc]:not([data-rendered])").forEach(function (el) {
-      var d = new Date(el.dataset.utc);
-      if (!isNaN(d.getTime())) {
-        el.textContent = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-        el.dataset.rendered = "1";
-      }
-    });
-  }
-
-  function scrollToBottom() {
-    var c = document.getElementById("guest-chat-messages");
-    if (c) c.scrollTop = c.scrollHeight;
-  }
-
-  function _getHistoryContainer() {
-    var container = document.getElementById("guest-chat-messages");
-    if (!container) return null;
-    var history = document.getElementById("guest-chat-history-msgs");
-    if (history) return history;
-    history = document.createElement("div");
-    history.className = "chat-history";
-    history.id = "guest-chat-history-msgs";
-    container.insertAdjacentElement("afterbegin", history);
-    return history;
-  }
-
-  function buildCopyBtn() {
-    return window.ChatCopyUtils.buildCopyBtnHtml();
-  }
-
-  function renderMessageAttachments(attachments) {
-    var list = attachments || [];
-    if (!list.length) return "";
-    var html = '<div class="chat-message-attachments">';
-    list.forEach(function (att) {
-      var name = window.MarkdownViewer.escapeHtml(att.filename || "file");
-      var url = att.content_url || "";
-      var iconCls = att.is_image
-        ? "chat-message-attachment__thumb"
-        : "chat-message-attachment__thumb chat-message-attachment__thumb--icon";
-      var thumb = att.thumbnail_url
-        ? '<img class="' + iconCls + '" src="' + att.thumbnail_url + '" alt="' + name + '">'
-        : "";
-      html += '<a class="chat-message-attachment" href="' + url + '" target="_blank" rel="noopener noreferrer">'
-        + thumb
-        + '<span class="chat-message-attachment__name">' + name + '</span>'
-        + "</a>";
-    });
-    html += "</div>";
-    return html;
-  }
-
   function appendMessage(msg) {
-    var box = _getHistoryContainer();
+    var box = window.ChatSurfaceUtils.getOrCreateHistoryContainer("guest-chat-messages", "guest-chat-history-msgs");
     if (!box) return;
     var waiting = box.querySelector(".guest-user-page__waiting");
     if (waiting) waiting.remove();
     var ts = msg.timestamp || new Date().toISOString();
     var role = (msg.role || "").toLowerCase();
     var contentHtml = window.MarkdownViewer.render(msg.content || "");
-    var attachmentsHtml = renderMessageAttachments(msg.attachments || []);
+    var attachmentsHtml = window.ChatSurfaceUtils.renderMessageAttachments(msg.attachments || [], {
+      fallbackIcon: true,
+      fallbackImage: true,
+    });
 
     var html;
     if (role === "user") {
@@ -79,7 +29,7 @@
         + '<div class="chat-bubble__meta">'
         + '<span class="chat-bubble__name">' + window.MarkdownViewer.escapeHtml(msg.agent_name || "User") + '</span>'
         + '<span class="chat-bubble__time"><time class="local-time" data-utc="' + ts + '">' + ts + '</time></span>'
-        + buildCopyBtn()
+        + window.ChatCopyUtils.buildCopyBtnHtml()
         + '</div>'
         + '<div class="chat-bubble__content">' + contentHtml + '</div>'
         + attachmentsHtml
@@ -93,7 +43,7 @@
         + '<div class="chat-bubble__meta">'
         + '<span class="chat-bubble__name">' + window.MarkdownViewer.escapeHtml(name) + '</span>'
         + '<span class="chat-bubble__time"><time class="local-time" data-utc="' + ts + '">' + ts + '</time></span>'
-        + buildCopyBtn()
+        + window.ChatCopyUtils.buildCopyBtnHtml()
         + '</div>'
         + '<div class="chat-bubble__content">' + contentHtml + '</div>'
         + attachmentsHtml
@@ -103,8 +53,8 @@
 
     box.insertAdjacentHTML("beforeend", html);
     window.MermaidViewer.hydrate(box.lastElementChild || box);
-    renderLocalTimes();
-    scrollToBottom();
+    window.ChatSurfaceUtils.renderLocalTimes();
+    window.ChatSurfaceUtils.scrollToBottom("#guest-chat-messages");
   }
 
   function setAgentsWorkingBadge(show) {
@@ -117,7 +67,7 @@
     }
     if (existing) return;
     c.insertAdjacentHTML("beforeend", '<div class="chat-status-badge chat-status-badge--running">\u2699 Agents at work</div>');
-    scrollToBottom();
+    window.ChatSurfaceUtils.scrollToBottom("#guest-chat-messages");
   }
 
   function appendTerminalStatusBadge(type) {
@@ -129,7 +79,7 @@
     setAgentsWorkingBadge(false);
     var label = type === "completed" ? "Run completed" : "Run stopped";
     c.insertAdjacentHTML("beforeend", '<div class="chat-status-badge chat-status-badge--' + type + '">' + label + "</div>");
-    scrollToBottom();
+    window.ChatSurfaceUtils.scrollToBottom("#guest-chat-messages");
   }
 
   function showEvictedOverlay() {
@@ -208,8 +158,8 @@
 
   document.addEventListener("DOMContentLoaded", function () {
     window.MermaidViewer.hydrate(document.getElementById("guest-chat-messages"));
-    renderLocalTimes();
-    scrollToBottom();
+    window.ChatSurfaceUtils.renderLocalTimes();
+    window.ChatSurfaceUtils.scrollToBottom("#guest-chat-messages");
     connect();
   });
 })();

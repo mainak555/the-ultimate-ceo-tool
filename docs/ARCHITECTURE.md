@@ -4,48 +4,53 @@
 
 ```
 product-discovery/
-├── agents/              # Root AutoGen runtime package (model factory, team builder)
-│   └── integrations/    # Jira/Trello export clients + LLM extractor
-├── core/                # Shared cross-cutting infrastructure modules
-│   └── tracing.py       # OpenTelemetry wiring/helpers used by server + agents
-├── agent_models.json    # Shared model catalog keyed by model name
-├── config/              # Django project package (settings, root URLs, WSGI)
-├── server/              # Main Django app
-│   ├── db.py            # MongoDB connection singleton (PyMongo)
-│   ├── model_catalog.py # Shared model catalog + default prompt loader for Django
-│   ├── schemas.py       # Input validation (validate_project, validate_agent)
-│   ├── services.py      # Business logic (CRUD, auth verification)
-│   ├── views.py         # HTMX view controllers (thin, delegates to services)
-│   ├── urls.py          # App URL routing
-│   ├── attachment_service.py # Chat attachment upload, lazy Redis-cache extraction, deletion
-│   ├── storage_backends.py  # Pluggable blob storage (Azure Blob default; Strategy pattern)
-│   ├── trello_client.py # Pure Trello REST API client
-│   ├── trello_service.py# Trello business logic + token lifecycle
-│   ├── trello_views.py  # Trello thin view controllers
-│   ├── trello_urls.py   # Trello URL routing (included under /trello/)
-│   ├── jira_client.py   # Pure Jira REST API client (3 types, ADF wrapper)
-│   ├── jira_service.py  # Jira common facade (credential resolution, shared persistence, dispatch)
-│   ├── jira_software_service.py      # Jira Software type-specific business logic
-│   ├── jira_service_desk_service.py  # Jira Service Desk type-specific business logic
-│   ├── jira_business_service.py      # Jira Business type-specific business logic
-│   ├── jira_views.py    # Jira thin view controllers
-│   ├── jira_urls.py     # Jira URL routing (included under /jira/)
+├── .agents/                     # Copilot skills and implementation playbooks
+│   └── skills/
+├── agents/                      # Root AutoGen runtime package
+│   ├── integrations/            # Jira/Trello export clients + LLM extractor
+│   ├── mcp_tools.py             # MCP workbench/session wiring
+│   ├── session_coordination.py  # Redis run ownership + remote readiness/export keys
+│   └── team_builder.py          # Team construction + termination wiring
+├── core/                        # Shared cross-cutting infrastructure modules
+│   ├── tracing.py               # OpenTelemetry wiring/helpers used by server + agents
+│   └── http_tracing.py          # Shared outbound HTTP span enrichment helpers
+├── config/                      # Django project package (settings, root URLs, ASGI/WSGI)
+├── deployments/                 # Deployment topologies and Docker artifacts
+│   ├── standalone/
+│   │   └── Dockerfile           # Standalone app image build
+│   ├── compose/
+│   │   ├── docker-compose.yml
+│   │   └── Dockerfile.mcp-gateway
+│   └── k8s/
+├── docs/                        # Project documentation
+├── examples/                    # Example prompts and starter configurations
+├── server/                      # Main Django app
+│   ├── db.py                    # MongoDB connection singleton (PyMongo)
+│   ├── schemas.py               # Input validation
+│   ├── services.py              # Business logic (CRUD, auth verification)
+│   ├── views.py                 # Home/HTMX controllers
+│   ├── remote_user_views.py     # Remote-user page/controllers
+│   ├── guest_views.py           # Guest page/controllers
+│   ├── mcp_views.py             # MCP OAuth/config endpoints
+│   ├── consumers.py             # WebSocket consumers
+│   ├── routing.py               # Channels routing
+│   ├── attachment_service.py    # Upload/extraction/cache/delete pipeline
+│   ├── storage_backends.py      # Pluggable blob storage (Strategy pattern)
 │   ├── templates/server/
-│   │   ├── config.html             # Full SPA shell
+│   │   ├── home.html            # Home/HITL chat shell
+│   │   ├── remote_user.html     # Remote user public shell
+│   │   ├── guest_user.html      # Guest readonly shell
 │   │   └── partials/
-│   │       ├── header.html          # Header bar
-│   │       ├── sidebar.html         # Project list
-│   │       ├── config_form.html     # Create/Edit form
-│   │       ├── config_readonly.html # Read-only view
-│   │       └── _agent_card.html     # Reusable agent card fragment
 │   └── static/server/
-│       ├── scss/        # SCSS source (compiled by django-compressor)
-│       └── js/          # Client-side JS (agent card dynamics)
-├── docs/                # Project documentation
-├── .env                 # Environment variables (gitignored)
-├── Dockerfile           # Production container
-├── requirements.txt     # Python dependencies
-└── manage.py            # Django management
+│       ├── js/                  # Frontend feature/shared modules
+│       └── scss/                # SCSS source (compiled by django-compressor)
+├── staticfiles/                 # Compressed asset cache output
+├── agent_models.json            # Shared model catalog keyed by model name
+├── AGENTS.md                    # Repository policy and rules
+├── chat_session.md              # Chat session/reference notes
+├── README.md                    # User + contributor guide
+├── requirements.txt             # Python dependencies
+└── manage.py                    # Django management entrypoint
 ```
 
 ## Layer Responsibilities
@@ -154,9 +159,17 @@ See [docs/agent_factory.md](agent_factory.md) for the full `agent_models.json` s
 ## Frontend JS Boundaries
 
 - `server/static/server/js/app.js`: shared SPA helpers only (secret header injection, shared helper utilities, generic cross-page hooks).
+- `server/static/server/js/chat_copy_utils.js`: shared chat bubble copy behavior and payload formatting.
+- `server/static/server/js/chat_surface_utils.js`: shared Home/Remote/Guest chat rendering helpers (attachment rows/chips, file-size labels, icon fallback, generic scroll/history-container helpers, local-time post-render shim).
+- `server/static/server/js/markdown_viewer.js`: shared markdown rendering module. Consumed by Home, Trello export popup, Jira export popup, Remote, and Guest. Never duplicate markdown parser logic in feature modules.
+- `server/static/server/js/mermaid_viewer.js`: shared Mermaid hydration helper for rendered markdown diagrams.
 - `server/static/server/js/project_config.js`: project configuration feature behavior only (agent cards, form state sync, config-page secret gating).
+- `server/static/server/js/config_readonly_markdown.js`: config readonly markdown rendering sync for objective/prompts.
 - `server/static/server/js/mcp_json_editor.js`: config-page MCP JSON editor lifecycle only (code-mode editor mount/unmount, format/validate controls, textarea sync).
+- `server/static/server/js/mcp_oauth.js`: shared MCP OAuth popup/bootstrap helpers used by config/home flows.
 - `server/static/server/js/home.js`: home chat feature behavior only (chat runtime UI, SSE rendering, human gate interactions).
+- `server/static/server/js/remote_user.js`: remote-user chat page behavior only (chat bubbles, WebSocket lifecycle, export dropdown injection/removal, attachment handling for gate responses).
+- `server/static/server/js/guest_user.js`: guest readonly page behavior only (history render, WebSocket updates, copy parity).
 - `server/static/server/js/trello_config.js`: Trello project-configuration behavior only (token generation, workspace/board/list cascade, create board/list modal).
 - `server/static/server/js/trello.js`: Trello export modal for chat sessions only.
 - `server/static/server/js/jira_config.js`: Jira project-configuration behavior only (per-type credential verify, project cascade dropdowns).
@@ -165,12 +178,30 @@ See [docs/agent_factory.md](agent_factory.md) for the full `agent_models.json` s
 - `server/static/server/js/jira_software.js`: Jira Software provider registration wrapper only.
 - `server/static/server/js/jira_service_desk.js`: Jira Service Desk provider registration wrapper only.
 - `server/static/server/js/jira_business.js`: Jira Business provider registration wrapper only.
+- `server/static/server/js/export_modal_base.js`: shared export modal shell used by providers.
 - `server/static/server/js/provider_registry.js`: provider capability registry used by shared modules to open export modals and sync provider config without hardcoded provider switches.
-- `server/static/server/js/remote_user.js`: remote-user chat page behavior only (chat bubbles, WebSocket lifecycle, export dropdown injection/removal, attachment handling for gate responses). Owns the `_injectExportDropdowns` / `_removeExportDropdowns` contract and `openRemoteExportModal`.
-- `server/static/server/js/markdown_viewer.js`: shared markdown rendering module. Consumed by Home, Trello export popup, Jira export popup, and the remote-user page. Never duplicate markdown parser logic in feature modules — import from this shared module.
+
+Keep gate/quorum/run-state decisions in feature modules (`home.js`, `remote_user.js`) and keep guest page readonly-only.
 
 When adding new UI behavior, create a dedicated module for a distinct feature surface instead of extending `app.js`.
 See [docs/frontend_js_architecture.md](frontend_js_architecture.md) for the module ownership and event contract.
+
+### Chat Surface ID Naming Convention
+
+Chat surface ids use stable surface-prefixed naming:
+
+- Home: `chat-*`
+- Remote: `remote-chat-*`
+- Guest: `guest-chat-*`
+
+Canonical container ids:
+
+- Home: `chat-messages`, `chat-history-msgs`
+- Remote: `remote-chat-messages`, `remote-chat-history-msgs`
+- Guest: `guest-chat-messages`, `guest-chat-history-msgs`
+
+Do not create multiple ids for the same role in one surface. Prefer shared helper
+parameterization over id unification refactors.
 
 ## Export Provider Architecture
 
@@ -185,14 +216,25 @@ See [docs/frontend_js_architecture.md](frontend_js_architecture.md) for the modu
 
 Repo-local extension skills live under `.agents/skills/`.
 
+- `.agents/skills/chat_surface_shared/SKILL.md` — shared chat markup/class/header contracts across Home/Remote/Guest.
+- `.agents/skills/chat_compose_attachment_contract/SKILL.md` — compose/send/attachment behavior contracts for Home + Remote.
+- `.agents/skills/chat_session_readiness_card/SKILL.md` — readiness card behavior/data-hook contract.
 - `.agents/skills/export_popup_base/SKILL.md` — baseline modal structure and lifecycle.
 - `.agents/skills/export_provider_adapter/SKILL.md` — adapter contract for provider endpoints.
+- `.agents/skills/export_agents_sync/SKILL.md` — export allowlist sync/reset rules on agent rename/remove.
+- `.agents/skills/hierarchical_export_items/SKILL.md` — temp_id/parent_temp_id hierarchy and BFS push contracts.
 - `.agents/skills/jira_layer_separation/SKILL.md` — mandatory Jira module ownership and split-layer checklist.
+- `.agents/skills/key_value_form_pattern/SKILL.md` — standard repeating key/value form-row contract.
 - `.agents/skills/markdown_viewer_reuse/SKILL.md` — shared markdown rendering across Home, export modals, and future providers.
+- `.agents/skills/mcp_tool_integration/SKILL.md` — MCP schema, runtime wiring, redaction, and transport constraints.
+- `.agents/skills/observability_logging/SKILL.md` — logging/tracing contracts for I/O paths.
 - `.agents/skills/ui_consistency_guardrails/SKILL.md` — cross-page visual consistency requirements.
 - `.agents/skills/scss_style_consistency/SKILL.md` — token-only SCSS and shared component style consistency requirements.
 - `.agents/skills/active_session_coordination/SKILL.md` — Redis lease/heartbeat/cancel and Mongo resume-state contract for chat run lifecycle changes.
+- `.agents/skills/remote_user_quorum/SKILL.md` — quorum/event contracts and Redis key model.
 - `.agents/skills/chat_attachment_workflow/SKILL.md` — attachment upload/bind/Redis-cache/vision/delete contract and implementation checklist.
+- `.agents/skills/frontend_shared_utility_reuse/SKILL.md` — shared frontend helper extraction patterns and boundaries.
+- `.agents/skills/datetime_storage/SKILL.md` — BSON datetime storage/read/render consistency contract.
 - `.agents/skills/remote_user_export/SKILL.md` — per-user impersonated export key lifecycle (Redis schema, auth wiring, host/remote UI event contracts, purge behavior).
 
 ## Integration Docs

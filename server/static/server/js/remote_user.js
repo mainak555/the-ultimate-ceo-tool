@@ -31,37 +31,6 @@
   // Helpers
   // --------------------------------------------------------------------------
 
-  function renderLocalTimes() {
-    document.querySelectorAll(".local-time[data-utc]:not([data-rendered])").forEach(function (el) {
-      var d = new Date(el.dataset.utc);
-      if (!isNaN(d.getTime())) {
-        el.textContent = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-        el.dataset.rendered = "1";
-      }
-    });
-  }
-
-  function scrollToBottom() {
-    var c = document.getElementById("remote-chat-messages");
-    if (c) c.scrollTop = c.scrollHeight;
-  }
-
-  function _getHistoryContainer() {
-    var container = document.getElementById("remote-chat-messages");
-    if (!container) return null;
-    var history = document.getElementById("remote-chat-history-msgs");
-    if (history) return history;
-    history = document.createElement("div");
-    history.className = "chat-history";
-    history.id = "remote-chat-history-msgs";
-    container.insertAdjacentElement("afterbegin", history);
-    return history;
-  }
-
-  function buildCopyBtn() {
-    return window.ChatCopyUtils.buildCopyBtnHtml();
-  }
-
   function _roundLabel(data) {
     var d = data || {};
     var round = Number(d.round ?? 0);
@@ -97,7 +66,7 @@
       "beforeend",
       '<div class="chat-status-badge chat-status-badge--' + type + '">' + label + "</div>"
     );
-    scrollToBottom();
+    window.ChatSurfaceUtils.scrollToBottom("#remote-chat-messages");
   }
 
   function _setAgentsWorkingBadge(show) {
@@ -118,7 +87,7 @@
     _clearTerminalStatusBadges();
     if (badge) return;
     c.insertAdjacentHTML("beforeend", '<div class="chat-status-badge chat-status-badge--running">\u2699 Agents at work</div>');
-    scrollToBottom();
+    window.ChatSurfaceUtils.scrollToBottom("#remote-chat-messages");
   }
 
   function _syncSendEnabled() {
@@ -314,10 +283,10 @@
       +   '<div class="chat-bubble__meta">'
       +     '<span class="chat-bubble__name">' + window.MarkdownViewer.escapeHtml(agentName) + "</span>"
       +     timeHtml
-      +     buildCopyBtn()
+      +     window.ChatCopyUtils.buildCopyBtnHtml()
       +   "</div>"
       +   '<div class="chat-bubble__content"></div>'
-      +   renderMessageAttachments(msg.attachments || [])
+      +   window.ChatSurfaceUtils.renderMessageAttachments(msg.attachments || [], { fallbackIcon: true, fallbackImage: true })
       +   _buildExportDropdownHtml(filteredProviders, discussionId)
       + "</div>";
 
@@ -439,58 +408,25 @@
       '<div class="chat-bubble__meta">'
       +   '<span class="chat-bubble__name">' + window.MarkdownViewer.escapeHtml(displayName) + "</span>"
       +   timeHtml
-      +   buildCopyBtn()
+      +   window.ChatCopyUtils.buildCopyBtnHtml()
       + "</div>"
       + '<div class="chat-bubble__content"></div>'
-      + renderMessageAttachments(msg.attachments || []);
+      + window.ChatSurfaceUtils.renderMessageAttachments(msg.attachments || [], { fallbackIcon: true, fallbackImage: true });
 
     el.querySelector(".chat-bubble__content").innerHTML = window.MarkdownViewer.render(content);
     window.MermaidViewer.hydrate(el);
     return el;
   }
 
-  function _iconUrlForFile(filename) {
-    var ext = (filename || "").split(".").pop().toLowerCase();
-    var known = {
-      pdf: 1, doc: 1, docx: 1, xls: 1, xlsx: 1, ppt: 1, pptx: 1,
-      csv: 1, txt: 1, json: 1, xml: 1, md: 1,
-    };
-    var name = known[ext] ? ext : "document";
-    return "/static/server/assets/icons/file-" + name + ".svg";
-  }
-
-  function renderMessageAttachments(attachments) {
-    var list = attachments || [];
-    if (!list.length) return "";
-    var html = '<div class="chat-message-attachments">';
-    list.forEach(function (att) {
-      var name = window.MarkdownViewer.escapeHtml(att.filename || "file");
-      var url = att.content_url || "";
-      var thumbUrl = att.thumbnail_url || (att.is_image ? url : _iconUrlForFile(att.filename || ""));
-      var iconCls = att.is_image
-        ? "chat-message-attachment__thumb"
-        : "chat-message-attachment__thumb chat-message-attachment__thumb--icon";
-      var thumb = thumbUrl
-        ? '<img class="' + iconCls + '" src="' + thumbUrl + '" alt="' + name + '">'
-        : "";
-      html += '<a class="chat-message-attachment" href="' + url + '" target="_blank" rel="noopener noreferrer">'
-        + thumb
-        + '<span class="chat-message-attachment__name">' + name + "</span>"
-        + "</a>";
-    });
-    html += "</div>";
-    return html;
-  }
-
   /** Append a pre-built bubble element into the messages container. */
   function appendBubble(el) {
-    var history = _getHistoryContainer();
+    var history = window.ChatSurfaceUtils.getOrCreateHistoryContainer("remote-chat-messages", "remote-chat-history-msgs");
     if (!history) return;
     var waiting = history.querySelector(".remote-user-page__waiting");
     if (waiting) waiting.remove();
     history.appendChild(el);
-    renderLocalTimes();
-    scrollToBottom();
+    window.ChatSurfaceUtils.renderLocalTimes();
+    window.ChatSurfaceUtils.scrollToBottom("#remote-chat-messages");
   }
 
   // --------------------------------------------------------------------------
@@ -558,15 +494,7 @@
       "beforeend",
       '<div class="chat-status-badge chat-status-badge--remote-users">\u23F3 ' + window.MarkdownViewer.escapeHtml(text) + "</div>"
     );
-    scrollToBottom();
-  }
-
-  function formatBytes(size) {
-    var n = Number(size || 0);
-    if (!n) return "0 B";
-    if (n < 1024) return n + " B";
-    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KB";
-    return (n / (1024 * 1024)).toFixed(1) + " MB";
+    window.ChatSurfaceUtils.scrollToBottom("#remote-chat-messages");
   }
 
   function toUploadRecord(file) {
@@ -577,34 +505,10 @@
       mime_type: file.type || "application/octet-stream",
       size_bytes: file.size || 0,
       is_image: isImg,
-      thumbnail_url: isImg ? "" : _iconUrlForFile(file.name),
+      thumbnail_url: isImg ? "" : window.ChatSurfaceUtils.iconUrlForFile(file.name),
       content_url: "",
       _file: file,
     };
-  }
-
-  function attachmentChipHtml(att, target, index) {
-    var name = window.MarkdownViewer.escapeHtml(att.filename || "file");
-    var url = att.content_url || "";
-    var iconCls = att.is_image
-      ? "chat-attachment-chip__thumb"
-      : "chat-attachment-chip__thumb chat-attachment-chip__thumb--icon";
-    var thumb = att.thumbnail_url
-      ? '<img class="' + iconCls + '" src="' + att.thumbnail_url + '" alt="' + name + '">' 
-      : "";
-    var openTag = url
-      ? '<a class="chat-attachment-chip__file" href="' + url + '" target="_blank" rel="noopener noreferrer">'
-      : '<span class="chat-attachment-chip__file">';
-    var closeTag = url ? "</a>" : "</span>";
-
-    return '<div class="chat-attachment-chip">'
-      + thumb
-      + openTag
-      + '<span class="chat-attachment-chip__name">' + name + "</span>"
-      + '<span class="chat-attachment-chip__meta">' + formatBytes(att.size_bytes) + "</span>"
-      + closeTag
-      + '<button class="chat-attachment-chip__remove" type="button" data-attachment-target="' + target + '" data-attachment-index="' + index + '">&#x00D7;</button>'
-      + "</div>";
   }
 
   function renderComposeAttachments() {
@@ -619,7 +523,7 @@
     }
     attachList.hidden = false;
     attachList.innerHTML = all.map(function (att, idx) {
-      return attachmentChipHtml(att, "compose", idx);
+      return window.ChatSurfaceUtils.renderAttachmentChip(att, "compose", idx);
     }).join("");
     _syncSendEnabled();
   }
@@ -873,8 +777,8 @@
   // --------------------------------------------------------------------------
   document.addEventListener("DOMContentLoaded", function () {
     window.MermaidViewer.hydrate(document.getElementById("remote-chat-messages"));
-    renderLocalTimes();
-    scrollToBottom();
+    window.ChatSurfaceUtils.renderLocalTimes();
+    window.ChatSurfaceUtils.scrollToBottom("#remote-chat-messages");
     initTextarea();
     initAttach();
     _initComposerState();

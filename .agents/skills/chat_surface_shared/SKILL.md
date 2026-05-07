@@ -19,8 +19,36 @@ This skill covers layout/surface contracts only:
 - Header contracts for remote and guest pages
 - SCSS ownership boundaries for page-specific wrapper blocks
 
+This skill also defines cross-surface helper ownership for chat rendering
+primitives that are shared by Home, Remote, and Guest.
+
 For send/enter/attachment interactions, use:
 `../chat_compose_attachment_contract/SKILL.md`.
+
+## Shared Helper Reuse Contract
+
+When a chat helper is used in 2+ chat surfaces, it must live in:
+
+- `server/static/server/js/chat_surface_utils.js`
+
+Approved shared helper categories:
+
+- Attachment row/chip HTML rendering
+- File-size formatting and file-icon fallback
+- Generic scroll-to-bottom helper
+- Generic get/create history container helper
+- Shared local-time re-render shim for dynamic bubble append paths
+
+Not allowed in shared chat helpers:
+
+- Gate/quorum state transitions
+- Per-surface run lifecycle decisions
+- Viewer-relative name-label decisions (`You` vs sender name)
+
+Implementation rule:
+
+- If a helper is duplicated across Home/Remote/Guest, move it to
+	`chat_surface_utils.js` in the same PR that introduces or changes it.
 
 ## Shared Class Reuse Contract
 
@@ -34,6 +62,29 @@ All chat surfaces must reuse shared classes from `server/static/server/scss/main
 - Attachment row: `.chat-message-attachments`, `.chat-message-attachment`
 
 Do not introduce page-specific replacements for these classes.
+
+## Chat Surface DOM ID Naming Convention
+
+Use stable, surface-prefixed ids for chat containers and related controls.
+
+Required prefixes:
+
+- Home surface ids start with `chat-`
+- Remote surface ids start with `remote-chat-`
+- Guest surface ids start with `guest-chat-`
+
+Canonical container/history ids:
+
+- Home: `chat-messages`, `chat-history-msgs`
+- Remote: `remote-chat-messages`, `remote-chat-history-msgs`
+- Guest: `guest-chat-messages`, `guest-chat-history-msgs`
+
+Rules:
+
+- One id per semantic role per surface (no parallel aliases).
+- Prefer keeping existing canonical ids over renaming for stylistic reasons.
+- Shared helper APIs should be parameterized by id/selector rather than forcing
+	id unification across surfaces.
 
 ## Bubble DOM Parity Contract
 

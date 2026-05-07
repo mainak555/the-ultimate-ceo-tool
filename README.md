@@ -63,6 +63,10 @@ Guest page behavior:
 
 Guest links are standalone and do not require remote-user configuration.
 
+Attachment rendering and copy behavior are standardized across Home, Remote, and
+Guest surfaces so users see the same thumbnail/icon fallback and message-copy
+payload format regardless of page.
+
 ---
 
 ### Mode reference
@@ -314,10 +318,26 @@ Use this map to avoid duplicated guidance:
 
 - Policy rules and repository contracts: [AGENTS.md](AGENTS.md)
 - Architecture-level UI contracts: [docs/UI.md](docs/UI.md)
+- Frontend module ownership and reuse boundaries: [docs/frontend_js_architecture.md](docs/frontend_js_architecture.md)
 - Shared chat layout/surface implementation checklist: [`.agents/skills/chat_surface_shared/SKILL.md`](.agents/skills/chat_surface_shared/SKILL.md)
 - Shared compose/send/attachment checklist: [`.agents/skills/chat_compose_attachment_contract/SKILL.md`](.agents/skills/chat_compose_attachment_contract/SKILL.md)
 
 Keep implementation detail in skills and keep AGENTS/docs concise.
+
+### Frontend Standardization Contract (Contributors)
+
+- Reuse-first: if a chat helper is needed in 2+ surfaces, place it in
+	`server/static/server/js/chat_surface_utils.js` instead of duplicating it in
+	`home.js`, `remote_user.js`, or `guest_user.js`.
+- Keep surface-specific run/gate/quorum logic in feature files.
+- DOM id naming convention:
+	- Home ids use `chat-*`
+	- Remote ids use `remote-chat-*`
+	- Guest ids use `guest-chat-*`
+- Keep canonical container/history ids stable:
+	- `chat-messages` / `chat-history-msgs`
+	- `remote-chat-messages` / `remote-chat-history-msgs`
+	- `guest-chat-messages` / `guest-chat-history-msgs`
 
 ---
 
