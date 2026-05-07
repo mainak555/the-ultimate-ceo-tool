@@ -24,21 +24,6 @@ document.addEventListener("DOMContentLoaded", function () {
     return input ? input.value.trim() : "";
   }
 
-  function renderMarkdown(text) {
-    if (window.MarkdownViewer && typeof window.MarkdownViewer.render === "function") {
-      return window.MarkdownViewer.render(text || "");
-    }
-    return (typeof marked !== "undefined")
-      ? marked.parse(text || "")
-      : "<p>" + String(text || "").replace(/</g, "&lt;") + "</p>";
-  }
-
-  function hydrateMermaid(root) {
-    if (window.MermaidViewer && typeof window.MermaidViewer.hydrate === "function") {
-      window.MermaidViewer.hydrate(root || document);
-    }
-  }
-
   var agentPromptModal = document.getElementById("agent-prompt-modal");
   var agentModalTitle = document.getElementById("agent-modal-title");
   var agentModalBody = document.getElementById("agent-modal-body");
@@ -49,8 +34,8 @@ document.addEventListener("DOMContentLoaded", function () {
     if (!agentPromptModal) return;
     if (agentModalTitle) agentModalTitle.textContent = name + " - System Prompt";
     if (agentModalBody) {
-      agentModalBody.innerHTML = renderMarkdown(systemPrompt);
-      hydrateMermaid(agentModalBody);
+      agentModalBody.innerHTML = window.MarkdownViewer.render(systemPrompt);
+      window.MermaidViewer.hydrate(agentModalBody);
     }
     agentPromptModal.hidden = false;
   }
@@ -118,15 +103,6 @@ document.addEventListener("DOMContentLoaded", function () {
     }, 1200);
   }
 
-  function escapeHtml(text) {
-    return String(text || "")
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/\"/g, "&quot;")
-      .replace(/'/g, "&#39;");
-  }
-
   function formatBytes(size) {
     var n = Number(size || 0);
     if (!n) return "0 B";
@@ -147,7 +123,7 @@ document.addEventListener("DOMContentLoaded", function () {
   }
 
   function attachmentChipHtml(att, target, index) {
-    var name = escapeHtml(att.filename || "file");
+    var name = window.MarkdownViewer.escapeHtml(att.filename || "file");
     var url = att.content_url || "";
     var iconCls = att.is_image
       ? "chat-attachment-chip__thumb"
@@ -232,7 +208,7 @@ document.addEventListener("DOMContentLoaded", function () {
     if (!list.length) return "";
     var html = '<div class="chat-message-attachments">';
     list.forEach(function (att) {
-      var name = escapeHtml(att.filename || "file");
+      var name = window.MarkdownViewer.escapeHtml(att.filename || "file");
       var url = att.content_url || "";
       var iconCls = att.is_image
         ? "chat-message-attachment__thumb"
@@ -493,7 +469,7 @@ document.addEventListener("DOMContentLoaded", function () {
     clearQuorumInfoBadges();
     chatMessages.insertAdjacentHTML(
       "beforeend",
-      '<div class="chat-status-badge chat-status-badge--remote-users">\u23F3 ' + escapeHtml(text) + '</div>'
+      '<div class="chat-status-badge chat-status-badge--remote-users">\u23F3 ' + window.MarkdownViewer.escapeHtml(text) + '</div>'
     );
     chatMessages.scrollTop = chatMessages.scrollHeight;
   }
@@ -559,7 +535,7 @@ document.addEventListener("DOMContentLoaded", function () {
     var roundText = isSingle
       ? "Round " + data.round
       : "Round " + data.round + "/" + data.max_rounds;
-    var ctx = escapeHtml(JSON.stringify({
+    var ctx = window.MarkdownViewer.escapeHtml(JSON.stringify({
       round: data.round,
       max_rounds: data.max_rounds || 0,
       chat_mode: data.chat_mode || "",
@@ -568,7 +544,7 @@ document.addEventListener("DOMContentLoaded", function () {
     chatMessages.insertAdjacentHTML(
       "beforeend",
       "<div class=\"chat-status-badge chat-status-badge--gate\" data-gate-context='" + ctx + "'>"
-      + "\u23F8 " + escapeHtml(roundText) + " \u2014 response is required"
+      + "\u23F8 " + window.MarkdownViewer.escapeHtml(roundText) + " \u2014 response is required"
       + "</div>"
     );
     chatMessages.scrollTop = chatMessages.scrollHeight;
@@ -689,7 +665,7 @@ document.addEventListener("DOMContentLoaded", function () {
       msgs = document.getElementById("chat-history-msgs");
     }
     msgs.insertAdjacentHTML("beforeend", html);
-    hydrateMermaid(msgs.lastElementChild || msgs);
+    window.MermaidViewer.hydrate(msgs.lastElementChild || msgs);
     chatMessages.scrollTop = chatMessages.scrollHeight;
   }
 
@@ -701,10 +677,10 @@ document.addEventListener("DOMContentLoaded", function () {
 
   function appendHumanBubble(text, attachments) {
     var ts = new Date().toISOString();
-    var contentHtml = renderMarkdown(text);
+    var contentHtml = window.MarkdownViewer.render(text);
     var attachmentsHtml = renderMessageAttachments(attachments || []);
     appendBubble(
-      '<div class="chat-bubble chat-bubble--human" data-raw-content="' + escapeHtml(text || "") + '">'
+      '<div class="chat-bubble chat-bubble--human" data-raw-content="' + window.MarkdownViewer.escapeHtml(text || "") + '">'
       + '<div class="chat-bubble__meta">'
       + '<span class="chat-bubble__name">You</span>'
       + '<span class="chat-bubble__time"><time class="local-time" data-utc="' + ts + '">' + ts + '</time></span>'
@@ -720,12 +696,12 @@ document.addEventListener("DOMContentLoaded", function () {
   function appendRemoteUserBubble(msg) {
     var ts = msg.timestamp || new Date().toISOString();
     var displayName = msg.agent_name || "Remote User";
-    var contentHtml = renderMarkdown(msg.content || "");
+    var contentHtml = window.MarkdownViewer.render(msg.content || "");
     var attachmentsHtml = renderMessageAttachments(msg.attachments || []);
     appendBubble(
-      '<div class="chat-bubble chat-bubble--human" data-raw-content="' + escapeHtml(msg.content || "") + '">'
+      '<div class="chat-bubble chat-bubble--human" data-raw-content="' + window.MarkdownViewer.escapeHtml(msg.content || "") + '">'
       + '<div class="chat-bubble__meta">'
-      + '<span class="chat-bubble__name">' + escapeHtml(displayName) + '</span>'
+      + '<span class="chat-bubble__name">' + window.MarkdownViewer.escapeHtml(displayName) + '</span>'
       + '<span class="chat-bubble__time"><time class="local-time" data-utc="' + ts + '">' + ts + '</time></span>'
       + _buildCopyBtn()
       + '</div>'
@@ -825,7 +801,7 @@ document.addEventListener("DOMContentLoaded", function () {
       var authorized = typeof srv === "object" && srv.authorized;
       // Skip if row already exists (idempotent).
       if (panel.querySelector('.chat-oauth-panel__row[data-server-name="' + name.replace(/"/g, '\\"') + '"]')) return;
-      var safe = escapeHtml(name);
+      var safe = window.MarkdownViewer.escapeHtml(name);
       var rowHtml = '<div class="chat-oauth-panel__row" data-server-name="' + safe + '">'
         + '<span class="chat-oauth-panel__server">' + safe + '</span>'
         + '<span class="chat-oauth-panel__status '
@@ -852,8 +828,8 @@ document.addEventListener("DOMContentLoaded", function () {
     chatMessages.insertAdjacentHTML(
       "beforeend",
       '<div class="chat-oauth-panel"'
-      + ' data-session-id="' + escapeHtml(sessionId) + '"'
-      + ' data-project-id="' + escapeHtml(projectId) + '">'
+      + ' data-session-id="' + window.MarkdownViewer.escapeHtml(sessionId) + '"'
+      + ' data-project-id="' + window.MarkdownViewer.escapeHtml(projectId) + '">'
       + '<div class="chat-oauth-panel__title">&#x1F510; MCP authorization required</div>'
       + '<p class="chat-oauth-panel__hint">One or more MCP servers used by this project require OAuth authorization for this session. Authorize each server below; the run will resume automatically once all are connected.</p>'
       + '<div class="chat-oauth-panel__rows"><p class="chat-oauth-panel__loading">Connecting\u2026</p></div>'
@@ -1012,9 +988,9 @@ document.addEventListener("DOMContentLoaded", function () {
     chatMessages.insertAdjacentHTML(
       "beforeend",
       '<div class="chat-remote-panel"'
-      + ' data-session-id="' + escapeHtml(sessionId) + '"'
-      + ' data-project-id="' + escapeHtml(projectId) + '"'
-      + ' data-quorum="' + escapeHtml(quorum || "na") + '">'
+      + ' data-session-id="' + window.MarkdownViewer.escapeHtml(sessionId) + '"'
+      + ' data-project-id="' + window.MarkdownViewer.escapeHtml(projectId) + '"'
+      + ' data-quorum="' + window.MarkdownViewer.escapeHtml(quorum || "na") + '">'
       + '<div class="chat-remote-panel__title">&#x1F465; Waiting for remote participants</div>'
       + '<p class="chat-remote-panel__hint">Share the invite link with each participant; the run will resume automatically once all required users are online.</p>'
       + '<div class="chat-remote-panel__rows"><p class="chat-remote-panel__loading">Connecting\u2026</p></div>'
@@ -1122,7 +1098,7 @@ document.addEventListener("DOMContentLoaded", function () {
 
       if (rowsContainer.querySelector('[data-remote-user-name="' + name.replace(/"/g, '\\"') + '"]')) return;
 
-      var safe = escapeHtml(name);
+      var safe = window.MarkdownViewer.escapeHtml(name);
       var statusClass = "remote-user-status--" + (status === "online" ? "online" : status === "ignored" ? "ignored" : "offline");
       var statusLabel = status === "online" ? "Online \u2713" : status === "ignored" ? "Ignore" : "Offline";
       var cbDisabled = isTeamChoice ? " disabled" : "";
@@ -1131,13 +1107,13 @@ document.addEventListener("DOMContentLoaded", function () {
       var exportChecked = exportAllowed ? " checked" : "";
       var exportDisabled = (status === "ignored") ? " disabled" : "";
 
-      var rowHtml = '<div class="remote-user-row" data-remote-user-name="' + safe + '" data-status="' + escapeHtml(status) + '">'
+      var rowHtml = '<div class="remote-user-row" data-remote-user-name="' + safe + '" data-status="' + window.MarkdownViewer.escapeHtml(status) + '">'
         + '<input type="checkbox" class="remote-user-row__checkbox" title="Require this user"' + cbChecked + cbDisabled + '>'
         + '<span class="remote-user-row__name">' + safe + '</span>'
         + '<label class="remote-user-row__export-label" title="Allow this user to export from their chat page">'
         + '<input type="checkbox" class="remote-user-row__export-cb"' + exportChecked + exportDisabled + '> Can Export'
         + '</label>'
-        + '<button type="button" class="btn btn--sm btn--secondary remote-user-copy-btn" data-session-id="' + escapeHtml(sessionId) + '" data-user-name="' + safe + '" title="Copy invite link"' + copyDisabled + '>Copy Link</button>'
+        + '<button type="button" class="btn btn--sm btn--secondary remote-user-copy-btn" data-session-id="' + window.MarkdownViewer.escapeHtml(sessionId) + '" data-user-name="' + safe + '" title="Copy invite link"' + copyDisabled + '>Copy Link</button>'
         + '<span class="remote-user-row__status ' + statusClass + '">' + statusLabel + '</span>'
         + '</div>';
       rowsContainer.insertAdjacentHTML("beforeend", rowHtml);
@@ -1181,9 +1157,9 @@ document.addEventListener("DOMContentLoaded", function () {
       return;
     }
 
-    var html = '<div class="chat-remote-panel__quorum-display" data-quorum-value="' + escapeHtml(effectiveQuorum) + '">'
+    var html = '<div class="chat-remote-panel__quorum-display" data-quorum-value="' + window.MarkdownViewer.escapeHtml(effectiveQuorum) + '">'
       + '<img class="chat-remote-panel__quorum-icon" src="/static/server/assets/quorum.png" alt="Quorum">'
-      + '<span class="chat-remote-panel__quorum-value">' + escapeHtml(quorumLabel) + '</span>'
+      + '<span class="chat-remote-panel__quorum-value">' + window.MarkdownViewer.escapeHtml(quorumLabel) + '</span>'
       + '</div>';
     footer.insertAdjacentHTML("afterbegin", html);
   }
@@ -1539,7 +1515,7 @@ document.addEventListener("DOMContentLoaded", function () {
     if (eventName === "message") {
       var ts = data.timestamp || "";
       var initial = (data.agent_name || "A").slice(0, 1).toUpperCase();
-      var contentHtml = renderMarkdown(data.content || "");
+      var contentHtml = window.MarkdownViewer.render(data.content || "");
       var attachmentsHtml = renderMessageAttachments(data.attachments || []);
       var exportHtml = buildExportDropdown(
         data.export,
@@ -1548,7 +1524,7 @@ document.addEventListener("DOMContentLoaded", function () {
         data.id || ""
       );
       appendBubble(
-        '<div class="chat-bubble chat-bubble--ai" data-raw-content="' + escapeHtml(data.content || "") + '">'
+        '<div class="chat-bubble chat-bubble--ai" data-raw-content="' + window.MarkdownViewer.escapeHtml(data.content || "") + '">'
         + '<div class="chat-bubble__avatar">' + initial + '</div>'
         + '<div class="chat-bubble__body">'
         + '<div class="chat-bubble__meta">'
@@ -1826,7 +1802,7 @@ document.addEventListener("DOMContentLoaded", function () {
         appendBubble('<div class="chat-bubble chat-bubble--system">Guest link copied to clipboard.</div>');
       });
     }).catch(function (err) {
-      appendBubble('<div class="chat-bubble chat-bubble--error">Error: ' + escapeHtml(err.message || "Unable to generate guest link.") + '</div>');
+      appendBubble('<div class="chat-bubble chat-bubble--error">Error: ' + window.MarkdownViewer.escapeHtml(err.message || "Unable to generate guest link.") + '</div>');
     }).finally(function () {
       updateChatAuthState();
     });
@@ -1841,7 +1817,7 @@ document.addEventListener("DOMContentLoaded", function () {
 
   document.body.addEventListener("htmx:afterSwap", function () {
     updateChatAuthState();
-    hydrateMermaid(chatMessages);
+    window.MermaidViewer.hydrate(chatMessages);
     // Restore gate mode if the newly loaded session is awaiting_input.
     // The server renders a .chat-status-badge--gate with data-gate-context
     // so we can reconstruct the gate state without an extra API call.
@@ -1946,7 +1922,7 @@ document.addEventListener("DOMContentLoaded", function () {
   });
 
   updateChatAuthState();
-  hydrateMermaid(chatMessages);
+  window.MermaidViewer.hydrate(chatMessages);
 
   // On initial page load, restore gate mode if the session is awaiting_input.
   // htmx:afterSwap covers session switches; this covers first render.
