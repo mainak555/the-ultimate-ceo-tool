@@ -14,6 +14,7 @@
   <script src="https://unpkg.com/htmx.org@1.9.12/dist/htmx.min.js"></script>
   {% django_htmx_script %}
   <script src="https://cdn.jsdelivr.net/npm/marked@15/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
 </head>
 <body hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'>
 
@@ -168,6 +169,7 @@
   <script src="{% static 'server/js/app.js' %}"></script>
   <script src="{% static 'server/js/provider_registry.js' %}"></script>
   <script src="{% static 'server/js/markdown_viewer.js' %}"></script>
+  <script src="{% static 'server/js/mermaid_viewer.js' %}"></script>
   <script src="{% static 'server/js/chat_copy_utils.js' %}"></script>
   <script src="{% static 'server/js/export_modal_base.js' %}"></script>
   <script src="{% static 'server/js/mcp_oauth.js' %}"></script>

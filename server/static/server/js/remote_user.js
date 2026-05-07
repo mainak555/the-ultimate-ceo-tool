@@ -1,5 +1,5 @@
-﻿/**
- * remote_user.js â€” Remote-user standalone chat page
+/**
+ * remote_user.js - Remote-user standalone chat page
  *
  * Responsibilities:
  * 1. On load: POST /remote/join/<token>/online/ to mark user as online.
@@ -30,21 +30,6 @@
   // --------------------------------------------------------------------------
   // Helpers
   // --------------------------------------------------------------------------
-  function escapeHtml(str) {
-    return String(str || "")
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;");
-  }
-
-  /** Render markdown using marked.js (loaded by page via CDN). */
-  function renderMd(text) {
-    if (window.marked && typeof window.marked.parse === "function") {
-      try { return window.marked.parse(text || ""); } catch (_) {}
-    }
-    return escapeHtml(text || "");
-  }
 
   function renderLocalTimes() {
     document.querySelectorAll(".local-time[data-utc]:not([data-rendered])").forEach(function (el) {
@@ -289,7 +274,7 @@
   }
 
   // --------------------------------------------------------------------------
-  // Bubble factories â€” identical DOM structure to chat_session_history.html
+  // Bubble factories - identical DOM structure to chat_session_history.html
   // --------------------------------------------------------------------------
 
   /**
@@ -304,7 +289,7 @@
 
     var timeHtml = ts
       ? '<span class="chat-bubble__time"><time class="local-time" data-utc="'
-          + escapeHtml(ts) + '"></time></span>'
+          + window.MarkdownViewer.escapeHtml(ts) + '"></time></span>'
       : "";
 
     // WS payload uses msg.export.providers; provider list absent when export not yet granted.
@@ -324,10 +309,10 @@
       );
     }
     el.innerHTML =
-      '<div class="chat-bubble__avatar">' + escapeHtml(initial) + "</div>"
+      '<div class="chat-bubble__avatar">' + window.MarkdownViewer.escapeHtml(initial) + "</div>"
       + '<div class="chat-bubble__body">'
       +   '<div class="chat-bubble__meta">'
-      +     '<span class="chat-bubble__name">' + escapeHtml(agentName) + "</span>"
+      +     '<span class="chat-bubble__name">' + window.MarkdownViewer.escapeHtml(agentName) + "</span>"
       +     timeHtml
       +     buildCopyBtn()
       +   "</div>"
@@ -336,7 +321,8 @@
       +   _buildExportDropdownHtml(filteredProviders, discussionId)
       + "</div>";
 
-    el.querySelector(".chat-bubble__content").innerHTML = renderMd(content);
+    el.querySelector(".chat-bubble__content").innerHTML = window.MarkdownViewer.render(content);
+    window.MermaidViewer.hydrate(el);
     return el;
   }
 
@@ -372,10 +358,10 @@
       + '<div class="export-dropdown__menu" hidden>';
     (providers || []).forEach(function (p) {
       html += '<button type="button" class="export-dropdown__item"'
-        + ' data-provider="' + escapeHtml(p.name) + '"'
-        + ' data-session-id="' + escapeHtml(sessionId) + '"'
-        + ' data-discussion-id="' + escapeHtml(discussionId || "") + '"'
-        + '>' + escapeHtml(p.label) + '</button>';
+        + ' data-provider="' + window.MarkdownViewer.escapeHtml(p.name) + '"'
+        + ' data-session-id="' + window.MarkdownViewer.escapeHtml(sessionId) + '"'
+        + ' data-discussion-id="' + window.MarkdownViewer.escapeHtml(discussionId || "") + '"'
+        + '>' + window.MarkdownViewer.escapeHtml(p.label) + '</button>';
     });
     html += '</div></div></div>';
     return html;
@@ -408,7 +394,7 @@
       var providers;
       try { providers = rawProviders ? JSON.parse(rawProviders) : null; } catch (_) { providers = null; }
       // data-export-providers is set server-side with per-agent filtering applied.
-      // Empty or absent means this agent has no providers — do not fall back to the global list.
+      // Empty or absent means this agent has no providers - do not fall back to the global list.
       var html = _buildExportDropdownHtml(providers, discussionId);
       if (html) body.insertAdjacentHTML("beforeend", html);
     });
@@ -444,21 +430,22 @@
     var content = msg.content || "";
     var ts = msg.timestamp || "";
     var timeHtml = ts
-      ? '<span class="chat-bubble__time"><time class="local-time" data-utc="' + escapeHtml(ts) + '"></time></span>'
+      ? '<span class="chat-bubble__time"><time class="local-time" data-utc="' + window.MarkdownViewer.escapeHtml(ts) + '"></time></span>'
       : "";
     var el = document.createElement("div");
     el.className = "chat-bubble chat-bubble--human";
     el.dataset.rawContent = content;
     el.innerHTML =
       '<div class="chat-bubble__meta">'
-      +   '<span class="chat-bubble__name">' + escapeHtml(displayName) + "</span>"
+      +   '<span class="chat-bubble__name">' + window.MarkdownViewer.escapeHtml(displayName) + "</span>"
       +   timeHtml
       +   buildCopyBtn()
       + "</div>"
       + '<div class="chat-bubble__content"></div>'
       + renderMessageAttachments(msg.attachments || []);
 
-    el.querySelector(".chat-bubble__content").innerHTML = renderMd(content);
+    el.querySelector(".chat-bubble__content").innerHTML = window.MarkdownViewer.render(content);
+    window.MermaidViewer.hydrate(el);
     return el;
   }
 
@@ -477,7 +464,7 @@
     if (!list.length) return "";
     var html = '<div class="chat-message-attachments">';
     list.forEach(function (att) {
-      var name = escapeHtml(att.filename || "file");
+      var name = window.MarkdownViewer.escapeHtml(att.filename || "file");
       var url = att.content_url || "";
       var thumbUrl = att.thumbnail_url || (att.is_image ? url : _iconUrlForFile(att.filename || ""));
       var iconCls = att.is_image
@@ -569,7 +556,7 @@
     if (!c) return;
     c.insertAdjacentHTML(
       "beforeend",
-      '<div class="chat-status-badge chat-status-badge--remote-users">\u23F3 ' + escapeHtml(text) + "</div>"
+      '<div class="chat-status-badge chat-status-badge--remote-users">\u23F3 ' + window.MarkdownViewer.escapeHtml(text) + "</div>"
     );
     scrollToBottom();
   }
@@ -597,7 +584,7 @@
   }
 
   function attachmentChipHtml(att, target, index) {
-    var name = escapeHtml(att.filename || "file");
+    var name = window.MarkdownViewer.escapeHtml(att.filename || "file");
     var url = att.content_url || "";
     var iconCls = att.is_image
       ? "chat-attachment-chip__thumb"
@@ -735,7 +722,7 @@
   }
 
   // --------------------------------------------------------------------------
-  // Attach button â€” opens file picker, previews filenames as chips
+  // Attach button - opens file picker, previews filenames as chips
   // --------------------------------------------------------------------------
   function initAttach() {
     var attachBtn   = document.getElementById("remote-attach-btn");
@@ -885,6 +872,7 @@
   // Init
   // --------------------------------------------------------------------------
   document.addEventListener("DOMContentLoaded", function () {
+    window.MermaidViewer.hydrate(document.getElementById("remote-chat-messages"));
     renderLocalTimes();
     scrollToBottom();
     initTextarea();

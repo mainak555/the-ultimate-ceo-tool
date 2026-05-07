@@ -10,21 +10,6 @@
   var ws = null;
   var seenMessageIds = Object.create(null);
 
-  function escapeHtml(str) {
-    return String(str || "")
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/\"/g, "&quot;");
-  }
-
-  function renderMd(text) {
-    if (window.marked && typeof window.marked.parse === "function") {
-      try { return window.marked.parse(text || ""); } catch (_) {}
-    }
-    return escapeHtml(text || "");
-  }
-
   function renderLocalTimes() {
     document.querySelectorAll(".local-time[data-utc]:not([data-rendered])").forEach(function (el) {
       var d = new Date(el.dataset.utc);
@@ -61,7 +46,7 @@
     if (!list.length) return "";
     var html = '<div class="chat-message-attachments">';
     list.forEach(function (att) {
-      var name = escapeHtml(att.filename || "file");
+      var name = window.MarkdownViewer.escapeHtml(att.filename || "file");
       var url = att.content_url || "";
       var iconCls = att.is_image
         ? "chat-message-attachment__thumb"
@@ -85,14 +70,14 @@
     if (waiting) waiting.remove();
     var ts = msg.timestamp || new Date().toISOString();
     var role = (msg.role || "").toLowerCase();
-    var contentHtml = renderMd(msg.content || "");
+    var contentHtml = window.MarkdownViewer.render(msg.content || "");
     var attachmentsHtml = renderMessageAttachments(msg.attachments || []);
 
     var html;
     if (role === "user") {
-      html = '<div class="chat-bubble chat-bubble--human" data-raw-content="' + escapeHtml(msg.content || "") + '">'
+      html = '<div class="chat-bubble chat-bubble--human" data-raw-content="' + window.MarkdownViewer.escapeHtml(msg.content || "") + '">'
         + '<div class="chat-bubble__meta">'
-        + '<span class="chat-bubble__name">' + escapeHtml(msg.agent_name || "User") + '</span>'
+        + '<span class="chat-bubble__name">' + window.MarkdownViewer.escapeHtml(msg.agent_name || "User") + '</span>'
         + '<span class="chat-bubble__time"><time class="local-time" data-utc="' + ts + '">' + ts + '</time></span>'
         + buildCopyBtn()
         + '</div>'
@@ -101,12 +86,12 @@
         + '</div>';
     } else {
       var name = msg.agent_name || "Agent";
-      var avatar = escapeHtml(name.slice(0, 1).toUpperCase());
-      html = '<div class="chat-bubble chat-bubble--ai" data-raw-content="' + escapeHtml(msg.content || "") + '">'
+      var avatar = window.MarkdownViewer.escapeHtml(name.slice(0, 1).toUpperCase());
+      html = '<div class="chat-bubble chat-bubble--ai" data-raw-content="' + window.MarkdownViewer.escapeHtml(msg.content || "") + '">'
         + '<div class="chat-bubble__avatar">' + avatar + '</div>'
         + '<div class="chat-bubble__body">'
         + '<div class="chat-bubble__meta">'
-        + '<span class="chat-bubble__name">' + escapeHtml(name) + '</span>'
+        + '<span class="chat-bubble__name">' + window.MarkdownViewer.escapeHtml(name) + '</span>'
         + '<span class="chat-bubble__time"><time class="local-time" data-utc="' + ts + '">' + ts + '</time></span>'
         + buildCopyBtn()
         + '</div>'
@@ -117,6 +102,7 @@
     }
 
     box.insertAdjacentHTML("beforeend", html);
+    window.MermaidViewer.hydrate(box.lastElementChild || box);
     renderLocalTimes();
     scrollToBottom();
   }
@@ -221,6 +207,7 @@
   window.ChatCopyUtils.bindBubbleCopyHandler(document.body);
 
   document.addEventListener("DOMContentLoaded", function () {
+    window.MermaidViewer.hydrate(document.getElementById("guest-chat-messages"));
     renderLocalTimes();
     scrollToBottom();
     connect();
