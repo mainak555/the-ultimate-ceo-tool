@@ -479,7 +479,8 @@ def _compute_version_bump(existing, cleaned):
 
     Rules:
     - Bump +0.1 when team.type changes.
-    - Bump +0.1 when human_gate.quorum changes FROM "team_choice" to any other value.
+        - Bump +0.1 when human_gate.quorum crosses the "team_choice" boundary
+            in either direction.
     - No bump for any other field changes.
     - Multiple conditions met simultaneously still produce exactly one +0.1 bump.
 
@@ -495,9 +496,11 @@ def _compute_version_bump(existing, cleaned):
 
     existing_quorum = (existing.get("human_gate") or {}).get("quorum") or ""
     new_quorum = (cleaned.get("human_gate") or {}).get("quorum") or ""
-    quorum_departed_team_choice = existing_quorum == "team_choice" and new_quorum != "team_choice"
+    existing_is_team_choice = existing_quorum == "team_choice"
+    new_is_team_choice = new_quorum == "team_choice"
+    quorum_crossed_team_choice_boundary = existing_is_team_choice != new_is_team_choice
 
-    should_bump = team_type_changed or quorum_departed_team_choice
+    should_bump = team_type_changed or quorum_crossed_team_choice_boundary
     if should_bump:
         return round(current_version + 0.1, 1)
     return current_version
