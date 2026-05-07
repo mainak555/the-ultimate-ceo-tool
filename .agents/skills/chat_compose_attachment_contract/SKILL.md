@@ -61,6 +61,19 @@ Composer chips must use shared semantics:
 
 Persisted message attachment rows must remain under bubble content and follow shared classes.
 
+Shared helper ownership contract:
+
+- Reusable attachment-rendering helpers must be implemented in
+	`server/static/server/js/chat_surface_utils.js`.
+- `home.js` and `remote_user.js` should call shared helpers for chip/row markup,
+	file-size labels, and icon fallback instead of duplicating local functions.
+- Keep compose-state and quorum/gate transitions in feature files.
+
+Naming consistency contract:
+
+- Use surface-prefixed ids for compose controls (`chat-*`, `remote-chat-*`).
+- Do not introduce multiple ids for the same compose role inside one surface.
+
 ## Error and Race Contract
 
 - Upload failures must surface clear non-fatal feedback.

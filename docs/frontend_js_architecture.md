@@ -26,6 +26,38 @@ The goal is to prevent `app.js` from becoming a catch-all file.
 2. Keep feature modules independent from each other.
 3. Shared helpers should live in dedicated shared modules (`app.js`, `chat_copy_utils.js`, `chat_surface_utils.js`) rather than feature files; feature modules can expose a small namespace on `window` when needed.
 
+## Reuse-First Rule
+
+When helper logic is used in 2+ chat surfaces (Home, Remote, Guest), it must be
+implemented in `server/static/server/js/chat_surface_utils.js` and consumed from there.
+
+Use shared helper ownership for:
+
+- attachment row/chip HTML rendering
+- file-size formatting
+- file icon fallback resolution
+- generic scroll-to-bottom helpers
+- generic history-container get/create helpers
+- local-time post-render helper calls
+
+Do not move per-surface run/gate/quorum logic into shared utility modules.
+
+## Chat Surface DOM ID Convention
+
+Use surface-prefixed ids consistently:
+
+- Home ids: `chat-*`
+- Remote ids: `remote-chat-*`
+- Guest ids: `guest-chat-*`
+
+Canonical message/history ids:
+
+- Home: `chat-messages`, `chat-history-msgs`
+- Remote: `remote-chat-messages`, `remote-chat-history-msgs`
+- Guest: `guest-chat-messages`, `guest-chat-history-msgs`
+
+Keep one id per semantic role per surface; avoid parallel aliases.
+
 Current template usage:
 - `config.html`: `app.js`, `provider_registry.js`, `markdown_viewer.js`, `config_readonly_markdown.js`, `mcp_json_editor.js`, `project_config.js`, `trello_config.js`, `jira.js`, `jira_config.js`
 - `home.html`: `app.js`, `provider_registry.js`, `markdown_viewer.js`, `chat_copy_utils.js`, `chat_surface_utils.js`, `home.js`, `trello.js`
