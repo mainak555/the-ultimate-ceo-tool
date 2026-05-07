@@ -1,4 +1,9 @@
-# CouncilAI — Project Charter
+<link rel="icon" type="image/png" href="server/static/server/assets/logo.png" />
+
+<h1>
+    <img src="server/static/server/assets/logo.png" alt="CouncilAI logo" width="42" style="vertical-align: middle; margin-right: 10px;" />
+    <span style="vertical-align: middle;">CouncilAI — Project Charter</span>
+</h1>
 
 **The Ultimate CEO Tool**  
 *Where human experts and AI agents govern as one team*

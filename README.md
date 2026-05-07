@@ -1,4 +1,10 @@
-# CouncilAI
+<link rel="icon" type="image/png" href="server/static/server/assets/logo.png" />
+
+<h1>
+	<img src="server/static/server/assets/logo.png" alt="CouncilAI logo" width="42" style="vertical-align: middle; margin-right: 10px;" />
+	<span style="vertical-align: middle;">CouncilAI</span>
+</h1>
+
 ### The Ultimate CEO Tool — Turn Vision into Action
 
 > *Agentic AI for teams, not individuals — where specialized human experts and AI agents govern together.*
