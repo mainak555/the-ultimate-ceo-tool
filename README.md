@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="logo-hd.png" alt="CouncilAI" width="360" />
+  <img src="logo-hd.png" alt="CouncilAI" width="200" />
 </p>
 
 # CouncilAI
