@@ -1,9 +1,8 @@
-<link rel="icon" type="image/png" href="server/static/server/assets/logo.png" />
+<p align="center">
+  <img src="logo-hd.png" alt="CouncilAI" width="360" />
+</p>
 
-<h1>
-	<img src="server/static/server/assets/logo.png" alt="CouncilAI logo" width="42" style="vertical-align: middle; margin-right: 10px;" />
-	<span style="vertical-align: middle;">CouncilAI</span>
-</h1>
+# CouncilAI
 
 ### The Ultimate CEO Tool — Turn Vision into Action
 
