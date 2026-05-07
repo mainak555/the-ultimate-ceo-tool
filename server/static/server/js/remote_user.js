@@ -40,10 +40,19 @@
 
   /** Render markdown using marked.js (loaded by page via CDN). */
   function renderMd(text) {
+    if (window.MarkdownViewer && typeof window.MarkdownViewer.render === "function") {
+      return window.MarkdownViewer.render(text || "");
+    }
     if (window.marked && typeof window.marked.parse === "function") {
       try { return window.marked.parse(text || ""); } catch (_) {}
     }
     return escapeHtml(text || "");
+  }
+
+  function hydrateMermaid(root) {
+    if (window.MermaidViewer && typeof window.MermaidViewer.hydrate === "function") {
+      window.MermaidViewer.hydrate(root || document);
+    }
   }
 
   function renderLocalTimes() {
@@ -337,6 +346,7 @@
       + "</div>";
 
     el.querySelector(".chat-bubble__content").innerHTML = renderMd(content);
+    hydrateMermaid(el);
     return el;
   }
 
@@ -459,6 +469,7 @@
       + renderMessageAttachments(msg.attachments || []);
 
     el.querySelector(".chat-bubble__content").innerHTML = renderMd(content);
+    hydrateMermaid(el);
     return el;
   }
 
@@ -885,6 +896,7 @@
   // Init
   // --------------------------------------------------------------------------
   document.addEventListener("DOMContentLoaded", function () {
+    hydrateMermaid(document.getElementById("remote-chat-messages"));
     renderLocalTimes();
     scrollToBottom();
     initTextarea();

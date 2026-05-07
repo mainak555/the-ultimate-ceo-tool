@@ -33,6 +33,12 @@ document.addEventListener("DOMContentLoaded", function () {
       : "<p>" + String(text || "").replace(/</g, "&lt;") + "</p>";
   }
 
+  function hydrateMermaid(root) {
+    if (window.MermaidViewer && typeof window.MermaidViewer.hydrate === "function") {
+      window.MermaidViewer.hydrate(root || document);
+    }
+  }
+
   var agentPromptModal = document.getElementById("agent-prompt-modal");
   var agentModalTitle = document.getElementById("agent-modal-title");
   var agentModalBody = document.getElementById("agent-modal-body");
@@ -44,6 +50,7 @@ document.addEventListener("DOMContentLoaded", function () {
     if (agentModalTitle) agentModalTitle.textContent = name + " - System Prompt";
     if (agentModalBody) {
       agentModalBody.innerHTML = renderMarkdown(systemPrompt);
+      hydrateMermaid(agentModalBody);
     }
     agentPromptModal.hidden = false;
   }
@@ -682,6 +689,7 @@ document.addEventListener("DOMContentLoaded", function () {
       msgs = document.getElementById("chat-history-msgs");
     }
     msgs.insertAdjacentHTML("beforeend", html);
+    hydrateMermaid(msgs.lastElementChild || msgs);
     chatMessages.scrollTop = chatMessages.scrollHeight;
   }
 
@@ -1833,6 +1841,7 @@ document.addEventListener("DOMContentLoaded", function () {
 
   document.body.addEventListener("htmx:afterSwap", function () {
     updateChatAuthState();
+    hydrateMermaid(chatMessages);
     // Restore gate mode if the newly loaded session is awaiting_input.
     // The server renders a .chat-status-badge--gate with data-gate-context
     // so we can reconstruct the gate state without an extra API call.
@@ -1937,6 +1946,7 @@ document.addEventListener("DOMContentLoaded", function () {
   });
 
   updateChatAuthState();
+  hydrateMermaid(chatMessages);
 
   // On initial page load, restore gate mode if the session is awaiting_input.
   // htmx:afterSwap covers session switches; this covers first render.

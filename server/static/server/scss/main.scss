@@ -1869,6 +1869,18 @@ select.input {
   gap: $space-sm;
   max-width: 92%;
 
+  .chat-bubble__content {
+    .mermaid {
+      max-width: 100%;
+      overflow-x: auto;
+
+      svg {
+        max-width: 100%;
+        height: auto;
+      }
+    }
+  }
+
   &--human {
     align-self: flex-end;
     flex-direction: column;

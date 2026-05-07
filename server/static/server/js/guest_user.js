@@ -19,10 +19,19 @@
   }
 
   function renderMd(text) {
+    if (window.MarkdownViewer && typeof window.MarkdownViewer.render === "function") {
+      return window.MarkdownViewer.render(text || "");
+    }
     if (window.marked && typeof window.marked.parse === "function") {
       try { return window.marked.parse(text || ""); } catch (_) {}
     }
     return escapeHtml(text || "");
+  }
+
+  function hydrateMermaid(root) {
+    if (window.MermaidViewer && typeof window.MermaidViewer.hydrate === "function") {
+      window.MermaidViewer.hydrate(root || document);
+    }
   }
 
   function renderLocalTimes() {
@@ -117,6 +126,7 @@
     }
 
     box.insertAdjacentHTML("beforeend", html);
+    hydrateMermaid(box.lastElementChild || box);
     renderLocalTimes();
     scrollToBottom();
   }
@@ -221,6 +231,7 @@
   window.ChatCopyUtils.bindBubbleCopyHandler(document.body);
 
   document.addEventListener("DOMContentLoaded", function () {
+    hydrateMermaid(document.getElementById("guest-chat-messages"));
     renderLocalTimes();
     scrollToBottom();
     connect();
