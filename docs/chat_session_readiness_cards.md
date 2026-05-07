@@ -17,6 +17,7 @@ Current readiness surfaces:
 - Human gate badge (`.chat-status-badge--gate`)
 - MCP OAuth readiness panel (`.chat-oauth-panel`)
 - Restart readiness panel (`.chat-restart-panel`)
+- Remote participants panel (`.chat-remote-panel`)
 
 ## Core Pattern (mandatory)
 
@@ -32,12 +33,14 @@ Server-rendered mapping (`chat_session_history.html`):
 
 - `awaiting_input` -> `.chat-status-badge.chat-status-badge--gate`
 - `awaiting_mcp_oauth` -> `.chat-oauth-panel`
+- `awaiting_remote_users` -> `.chat-remote-panel`
 - `completed|stopped` with `has_agent_state=true` -> `.chat-restart-panel`
 
 Runtime mapping (`home.js`):
 
 - `event: gate` -> append gate badge and enter gate mode
 - `event: awaiting_mcp_oauth` -> show OAuth readiness panel
+- pre-run HTTP 409 `{status:"awaiting_remote_users"}` -> show remote participants panel
 - `event: done|stopped` -> append status badge and restart panel (when applicable)
 
 ## Mandatory DOM/Data Contract
@@ -62,6 +65,15 @@ Runtime mapping (`home.js`):
 - Row class: `.chat-oauth-panel__row` with `data-server-name`
 - Authorize action class: `.chat-oauth-authorize-btn`
 
+OAuth row visual-state contract:
+
+- Row container border remains neutral (`$color-border`) in all states.
+- Authorization state is represented only by the status chip modifier class:
+   - `.chat-oauth-panel__status--pending` -> `Pending`
+   - `.chat-oauth-panel__status--authorized` -> `Authorized ✓`
+- Completion detection in runtime logic must not depend on row-level
+   `--authorized` classes.
+
 ### Restart panel
 
 - Root class: `.chat-restart-panel` with `data-session-id`
@@ -69,18 +81,44 @@ Runtime mapping (`home.js`):
 - Continue-with-context action: `.chat-restart-btn--with-context`
 - Submit context action: `.chat-restart-btn--submit`
 
+### Remote participants panel
+
+- Root class: `.chat-remote-panel`
+- Data attrs:
+   - `data-session-id`
+   - `data-project-id`
+   - `data-quorum`
+- Rows container: `.chat-remote-panel__rows`
+- Loading marker: `.chat-remote-panel__loading`
+- Row class: `.remote-user-row` with `data-remote-user-name` and `data-status`
+- Require-checkbox class: `.remote-user-row__checkbox`
+- Invite action class: `.remote-user-copy-btn`
+
 ## Lifecycle Contract
 
 1. `startRun()` removes stale readiness surfaces (`.chat-status-badge`,
-   `.chat-restart-panel`, `.chat-oauth-panel`) before initiating a run.
+   `.chat-restart-panel`, `.chat-oauth-panel`, `.chat-remote-panel`) before
+   initiating a run.
 2. OAuth gate can be triggered from:
    - Pre-run HTTP 409: `{status:"awaiting_mcp_oauth", servers:[...]}`
    - Mid-run SSE event `awaiting_mcp_oauth`
-3. OAuth readiness must support:
+3. Remote-user readiness can be triggered from pre-run HTTP 409:
+   - `{status:"awaiting_remote_users", users:[...], quorum:...}`
+4. Deferred readiness latch behavior is mandatory:
+   - If a required remote disconnects while `session.status == "running"`, the
+     current run continues.
+   - The *next* run attempt must be blocked by the existing remote participants
+     panel until required users are online/ignored.
+5. OAuth readiness must support:
    - WS push (`state` / `update` / `complete`)
    - Popup postMessage fallback
-4. On full authorization, the run is replayed automatically.
-5. On `DOMContentLoaded` and `htmx:afterSwap`, readiness state is restored by
+6. On full authorization, the run is replayed automatically.
+7. Quorum replay behavior is mode-specific:
+    - `first_win`: host receives `quorum_committed` and auto-replays the run via
+       `startRun("", [])` (pending task is popped server-side).
+    - `all`: host receives `quorum_progress` updates until all expected responses
+       are present, then host final Continue commits and resumes.
+8. On `DOMContentLoaded` and `htmx:afterSwap`, readiness state is restored by
    scanning server-rendered cards in history.
 
 ## UI Override Policy (allowed)
@@ -117,3 +155,4 @@ Do not change without full contract migration:
 - `docs/mcp_integration.md`
 - `.agents/skills/active_session_coordination/SKILL.md`
 - `.agents/skills/mcp_tool_integration/SKILL.md`
+- `.agents/skills/remote_user_quorum/SKILL.md`

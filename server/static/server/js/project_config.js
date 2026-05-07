@@ -233,9 +233,20 @@ document.addEventListener("DOMContentLoaded", function () {
     return container.querySelectorAll(".agent-card").length;
   }
 
+  function getRemoteUserCount() {
+    var container = document.getElementById("remote-users-container");
+    if (!container) return 0;
+    return container.querySelectorAll(".agent-card").length;
+  }
+
   function syncSingleAssistantMode() {
     var assistantCount = getAssistantCount();
+    var remoteUserCount = getRemoteUserCount();
     var isSingleAssistant = assistantCount === 1;
+    // True only when there are NO remote users: pure single-assistant chat mode
+    // (unlimited Human Gate continuation). With remote users, team config is
+    // visible and honored (max_iterations + normal gate resume apply).
+    var isSingleAssistantChatMode = isSingleAssistant && remoteUserCount === 0;
 
     var humanGateEnabled = document.getElementById("human-gate-enabled");
     var humanGateDefaultHint = document.getElementById("human-gate-default-hint");
@@ -264,23 +275,25 @@ document.addEventListener("DOMContentLoaded", function () {
     }
 
     if (humanGateDefaultHint) {
-      humanGateDefaultHint.hidden = isSingleAssistant;
+      humanGateDefaultHint.hidden = isSingleAssistantChatMode;
     }
     if (humanGateSingleHint) {
-      humanGateSingleHint.hidden = !isSingleAssistant;
+      humanGateSingleHint.hidden = !isSingleAssistantChatMode;
     }
 
     if (teamFieldset) {
-      teamFieldset.hidden = isSingleAssistant;
+      teamFieldset.hidden = isSingleAssistantChatMode;
       teamFieldset.querySelectorAll("input, select, textarea").forEach(function (field) {
-        field.disabled = isSingleAssistant;
+        field.disabled = isSingleAssistantChatMode;
       });
     }
     if (teamDisabledHint) {
-      teamDisabledHint.hidden = !isSingleAssistant;
+      teamDisabledHint.hidden = !isSingleAssistantChatMode;
     }
 
-    if (isSingleAssistant && teamTypeSelect && teamTypeSelect.value === "selector") {
+    // Selector is invalid only in pure single-assistant chat mode (1 agent, no remote users).
+    // With remote users present, selector is valid and must not be reset.
+    if (isSingleAssistantChatMode && teamTypeSelect && teamTypeSelect.value === "selector") {
       teamTypeSelect.value = "round_robin";
     }
   }
@@ -375,6 +388,26 @@ document.addEventListener("DOMContentLoaded", function () {
     });
   }
 
+  function reindexRemoteUsers() {
+    var container = document.getElementById("remote-users-container");
+    if (!container) return;
+
+    var cards = container.querySelectorAll(".agent-card");
+    cards.forEach(function (card, idx) {
+      card.setAttribute("data-remote-user-index", idx);
+
+      var numEl = card.querySelector(".agent-card__number");
+      if (numEl) numEl.textContent = "Remote User #" + (idx + 1);
+
+      card.querySelectorAll("[name]").forEach(function (el) {
+        el.name = el.name.replace(
+          /human_gate\[remote_users\]\[\d+\]/,
+          "human_gate[remote_users][" + idx + "]"
+        );
+      });
+    });
+  }
+
   document.body.addEventListener("click", function (e) {
     if (!e.target.matches("#add-agent-btn")) return;
 
@@ -396,6 +429,26 @@ document.addEventListener("DOMContentLoaded", function () {
   });
 
   document.body.addEventListener("click", function (e) {
+    if (!e.target.matches("#add-remote-user-btn")) return;
+
+    var container = document.getElementById("remote-users-container");
+    if (!container) return;
+
+    var template = document.getElementById("remote-user-card-template");
+    if (!template) return;
+
+    var cards = container.querySelectorAll(".agent-card");
+    var nextIdx = cards.length;
+
+    var clone = template.content.cloneNode(true);
+    var html = clone.firstElementChild.outerHTML.replace(/__IDX__/g, nextIdx);
+
+    container.insertAdjacentHTML("beforeend", html);
+    reindexRemoteUsers();
+    syncFormState();
+  });
+
+  document.body.addEventListener("click", function (e) {
     if (!e.target.matches(".remove-agent-btn")) return;
 
     var card = e.target.closest(".agent-card");
@@ -409,6 +462,17 @@ document.addEventListener("DOMContentLoaded", function () {
 
     card.remove();
     reindexAgents();
+    syncFormState();
+  });
+
+  document.body.addEventListener("click", function (e) {
+    if (!e.target.matches(".remove-remote-user-btn")) return;
+
+    var card = e.target.closest(".agent-card");
+    if (!card) return;
+
+    card.remove();
+    reindexRemoteUsers();
     syncFormState();
   });
 

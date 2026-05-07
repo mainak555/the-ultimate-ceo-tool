@@ -24,15 +24,6 @@ document.addEventListener("DOMContentLoaded", function () {
     return input ? input.value.trim() : "";
   }
 
-  function renderMarkdown(text) {
-    if (window.MarkdownViewer && typeof window.MarkdownViewer.render === "function") {
-      return window.MarkdownViewer.render(text || "");
-    }
-    return (typeof marked !== "undefined")
-      ? marked.parse(text || "")
-      : "<p>" + String(text || "").replace(/</g, "&lt;") + "</p>";
-  }
-
   var agentPromptModal = document.getElementById("agent-prompt-modal");
   var agentModalTitle = document.getElementById("agent-modal-title");
   var agentModalBody = document.getElementById("agent-modal-body");
@@ -43,7 +34,8 @@ document.addEventListener("DOMContentLoaded", function () {
     if (!agentPromptModal) return;
     if (agentModalTitle) agentModalTitle.textContent = name + " - System Prompt";
     if (agentModalBody) {
-      agentModalBody.innerHTML = renderMarkdown(systemPrompt);
+      agentModalBody.innerHTML = window.MarkdownViewer.render(systemPrompt);
+      window.MermaidViewer.hydrate(agentModalBody);
     }
     agentPromptModal.hidden = false;
   }
@@ -62,7 +54,9 @@ document.addEventListener("DOMContentLoaded", function () {
   var chatAttachBtn = document.getElementById("chat-attach-btn");
   var chatAttachmentInput = document.getElementById("chat-attachment-input");
   var chatComposeAttachments = document.getElementById("chat-compose-attachments");
+  var chatInputRow = chatInput && chatInput.closest ? chatInput.closest(".chat-input-row") : null;
   var chatProjectBtn = document.getElementById("chat-project-btn");
+  var chatGuestShareBtn = document.getElementById("chat-guest-share-btn");
   var activeProjectIdInput = document.getElementById("active-project-id");
   var activeSessionIdInput = document.getElementById("active-session-id");
   var csrfToken = (document.getElementById("csrf-token-value") || {}).value || "";
@@ -70,56 +64,43 @@ document.addEventListener("DOMContentLoaded", function () {
   var composePendingFiles = [];
   var composeUploaded = [];
 
-  function escapeHtml(text) {
-    return String(text || "")
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/\"/g, "&quot;")
-      .replace(/'/g, "&#39;");
+  function _scrollChatToBottom() {
+    if (!chatMessages) return;
+    window.requestAnimationFrame(function () {
+      window.ChatSurfaceUtils.scrollToBottom(chatMessages);
+    });
   }
 
-  function formatBytes(size) {
-    var n = Number(size || 0);
-    if (!n) return "0 B";
-    if (n < 1024) return n + " B";
-    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KB";
-    return (n / (1024 * 1024)).toFixed(1) + " MB";
+  function _ensureTurnHint() {
+    if (!chatInput || !chatInput.closest) return null;
+    var panel = chatInput.closest(".chat-input-panel");
+    if (!panel) return null;
+    var hint = panel.querySelector(".chat-turn-hint");
+    if (hint) return hint;
+    hint = document.createElement("div");
+    hint.className = "chat-turn-hint";
+    hint.hidden = true;
+    panel.appendChild(hint);
+    return hint;
   }
 
-  var _FILE_ICON_EXTS = {
-    pdf: 1, doc: 1, docx: 1, xls: 1, xlsx: 1, ppt: 1, pptx: 1,
-    csv: 1, txt: 1, json: 1, xml: 1, md: 1,
-  };
-
-  function _iconUrlForFile(filename) {
-    var ext = (filename || "").split(".").pop().toLowerCase();
-    var name = _FILE_ICON_EXTS[ext] ? ext : "document";
-    return "/static/server/assets/icons/file-" + name + ".svg";
-  }
-
-  function attachmentChipHtml(att, target, index) {
-    var name = escapeHtml(att.filename || "file");
-    var url = att.content_url || "";
-    var iconCls = att.is_image
-      ? "chat-attachment-chip__thumb"
-      : "chat-attachment-chip__thumb chat-attachment-chip__thumb--icon";
-    var thumb = att.thumbnail_url
-      ? '<img class="' + iconCls + '" src="' + att.thumbnail_url + '" alt="' + name + '">'
-      : "";
-    var openTag = url
-      ? '<a class="chat-attachment-chip__file" href="' + url + '" target="_blank" rel="noopener noreferrer">'
-      : '<span class="chat-attachment-chip__file">';
-    var closeTag = url ? "</a>" : "</span>";
-
-    return '<div class="chat-attachment-chip">'
-      + thumb
-      + openTag
-      + '<span class="chat-attachment-chip__name">' + name + '</span>'
-      + '<span class="chat-attachment-chip__meta">' + formatBytes(att.size_bytes) + '</span>'
-      + closeTag
-      + '<button class="chat-attachment-chip__remove" type="button" data-attachment-target="' + target + '" data-attachment-index="' + index + '">&#x00D7;</button>'
-      + '</div>';
+  function _setTurnCue(active, text) {
+    var hint = _ensureTurnHint();
+    if (chatInputRow) {
+      chatInputRow.classList.toggle("chat-input-row--active-turn", !!active);
+    }
+    if (hint) {
+      hint.hidden = !active;
+      hint.textContent = active ? (text || "Your turn - type a response") : "";
+    }
+    if (!active || !chatInputRow) return;
+    chatInputRow.classList.remove("chat-input-row--active-turn-pulse");
+    void chatInputRow.offsetWidth;
+    chatInputRow.classList.add("chat-input-row--active-turn-pulse");
+    if (chatInput) chatInput.focus();
+    setTimeout(function () {
+      if (chatInputRow) chatInputRow.classList.remove("chat-input-row--active-turn-pulse");
+    }, 1200);
   }
 
   function renderAttachmentList(container, records, target) {
@@ -131,7 +112,7 @@ document.addEventListener("DOMContentLoaded", function () {
     }
     var html = "";
     records.forEach(function (att, idx) {
-      html += attachmentChipHtml(att, target, idx);
+      html += window.ChatSurfaceUtils.renderAttachmentChip(att, target, idx);
     });
     container.innerHTML = html;
     container.hidden = false;
@@ -149,7 +130,7 @@ document.addEventListener("DOMContentLoaded", function () {
       mime_type: file.type || "application/octet-stream",
       size_bytes: file.size || 0,
       is_image: isImg,
-      thumbnail_url: isImg ? "" : _iconUrlForFile(file.name),
+      thumbnail_url: isImg ? "" : window.ChatSurfaceUtils.iconUrlForFile(file.name),
       content_url: "",
       _file: file,
     };
@@ -177,28 +158,6 @@ document.addEventListener("DOMContentLoaded", function () {
         return data.attachments || [];
       });
     });
-  }
-
-  function renderMessageAttachments(attachments) {
-    var list = attachments || [];
-    if (!list.length) return "";
-    var html = '<div class="chat-message-attachments">';
-    list.forEach(function (att) {
-      var name = escapeHtml(att.filename || "file");
-      var url = att.content_url || "";
-      var iconCls = att.is_image
-        ? "chat-message-attachment__thumb"
-        : "chat-message-attachment__thumb chat-message-attachment__thumb--icon";
-      var thumb = att.thumbnail_url
-        ? '<img class="' + iconCls + '" src="' + att.thumbnail_url + '" alt="' + name + '">'
-        : "";
-      html += '<a class="chat-message-attachment" href="' + url + '" target="_blank" rel="noopener noreferrer">'
-        + thumb
-        + '<span class="chat-message-attachment__name">' + name + '</span>'
-        + "</a>";
-    });
-    html += "</div>";
-    return html;
   }
 
   var editSessionModal = document.getElementById("edit-session-modal");
@@ -230,6 +189,12 @@ document.addEventListener("DOMContentLoaded", function () {
     if (chatAttachBtn) {
       chatAttachBtn.disabled = !hasSecret;
       chatAttachBtn.title = hasSecret ? "Attach files" : "Enter the Secret Key to attach files.";
+    }
+    if (chatGuestShareBtn) {
+      chatGuestShareBtn.disabled = !hasSecret;
+      chatGuestShareBtn.title = hasSecret
+        ? "Generate a readonly guest link"
+        : "Enter the Secret Key to generate a guest link.";
     }
     if (chatAttachmentInput) {
       chatAttachmentInput.disabled = !hasSecret;
@@ -423,9 +388,31 @@ document.addEventListener("DOMContentLoaded", function () {
       body: body.toString(),
     }).then(function (r) {
       return r.json().then(function (data) {
-        if (!r.ok) throw new Error(data.error || "Action failed");
+        if (!r.ok) {
+          if (r.status === 409 && data && (data.status === "stale" || data.status === "locked")) {
+            return data;
+          }
+          throw new Error(data.error || data.message || "Action failed");
+        }
         return data;
       });
+    });
+  }
+
+  function appendQuorumInfoBadge(text) {
+    if (!text) return;
+    clearQuorumInfoBadges();
+    chatMessages.insertAdjacentHTML(
+      "beforeend",
+      '<div class="chat-status-badge chat-status-badge--remote-users">\u23F3 ' + window.MarkdownViewer.escapeHtml(text) + '</div>'
+    );
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+  }
+
+  function clearQuorumInfoBadges() {
+    if (!chatMessages) return;
+    chatMessages.querySelectorAll(".chat-status-badge--remote-users").forEach(function (el) {
+      el.remove();
     });
   }
 
@@ -439,12 +426,22 @@ document.addEventListener("DOMContentLoaded", function () {
       chatSendBtn.disabled = !chatInput || !chatInput.value.trim();
       return;
     }
+    if (_gateData && _gateData.quorum === "all") {
+      var hasCompose = composePendingFiles.length > 0 || composeUploaded.length > 0;
+      var hasText = !!(chatInput && chatInput.value.trim());
+      var canFinalizeEmpty = !!_gateData.awaiting_host_final;
+      chatSendBtn.disabled = !(hasText || hasCompose || canFinalizeEmpty);
+      return;
+    }
     chatSendBtn.disabled = false;
   }
 
   // Activate gate mode on the bottom input bar.
   function setGateMode(data) {
     _gateData = data;
+    if (_gateData && typeof _gateData.awaiting_host_final !== "boolean") {
+      _gateData.awaiting_host_final = false;
+    }
     var isSingle = data && data.chat_mode === "single_assistant";
     if (chatInput) {
       var roundText = isSingle
@@ -453,6 +450,7 @@ document.addEventListener("DOMContentLoaded", function () {
       chatInput.placeholder = roundText + " \u2014 enter your response\u2026";
     }
     if (chatStopBtn) chatStopBtn.hidden = false;
+    _setTurnCue(true, "Your turn - enter your response");
     _evalSendBtn();
   }
 
@@ -461,6 +459,7 @@ document.addEventListener("DOMContentLoaded", function () {
     _gateData = null;
     if (chatInput) chatInput.placeholder = "Send a message";
     if (chatStopBtn) chatStopBtn.hidden = true;
+    _setTurnCue(false, "");
     _evalSendBtn();
   }
 
@@ -471,15 +470,16 @@ document.addEventListener("DOMContentLoaded", function () {
     var roundText = isSingle
       ? "Round " + data.round
       : "Round " + data.round + "/" + data.max_rounds;
-    var ctx = escapeHtml(JSON.stringify({
+    var ctx = window.MarkdownViewer.escapeHtml(JSON.stringify({
       round: data.round,
       max_rounds: data.max_rounds || 0,
       chat_mode: data.chat_mode || "",
+      quorum: data.quorum || "na",
     }));
     chatMessages.insertAdjacentHTML(
       "beforeend",
       "<div class=\"chat-status-badge chat-status-badge--gate\" data-gate-context='" + ctx + "'>"
-      + "\u23F8 " + escapeHtml(roundText) + " \u2014 response is required"
+      + "\u23F8 " + window.MarkdownViewer.escapeHtml(roundText) + " \u2014 response is required"
       + "</div>"
     );
     chatMessages.scrollTop = chatMessages.scrollHeight;
@@ -493,6 +493,7 @@ document.addEventListener("DOMContentLoaded", function () {
 
     var text = chatInput ? chatInput.value.trim() : "";
     var hasAttachments = composePendingFiles.length > 0 || composeUploaded.length > 0;
+    var canFinalizeEmpty = !!(_gateData && _gateData.quorum === "all" && _gateData.awaiting_host_final);
 
     // Single-assistant mode: text is mandatory.
     if (_gateData && _gateData.chat_mode === "single_assistant" && !text) {
@@ -503,7 +504,7 @@ document.addEventListener("DOMContentLoaded", function () {
       }
       return;
     }
-    if (!text && !hasAttachments) return;
+    if (!text && !hasAttachments && !canFinalizeEmpty) return;
 
     if (chatSendBtn) chatSendBtn.disabled = true;
     // committed = true once upload succeeded and we've already appended the
@@ -514,13 +515,22 @@ document.addEventListener("DOMContentLoaded", function () {
     ensureComposeAttachmentsUploaded(sessionId).then(function (attachmentIds) {
       committed = true;
       var attachmentsForBubble = composeUploaded.slice();
-      appendHumanBubble(text || "Attached files", attachmentsForBubble);
+      if (text || attachmentsForBubble.length) {
+        appendHumanBubble(text || "Attached files", attachmentsForBubble);
+      }
       if (chatInput) { chatInput.value = ""; chatInput.style.height = "auto"; chatInput.focus(); }
       clearComposeAttachments();
       clearGateMode();
       return sendRespond(sessionId, "continue", text, attachmentIds);
     }).then(function (d) {
-      if (d && d.status === "ok") startRun(d.task || "", d.attachment_ids || []);
+      if (!d) return;
+      if (d.status === "ok") {
+        startRun(d.task || "", d.attachment_ids || []);
+        return;
+      }
+      if (d.status === "stale" || d.status === "locked") {
+        appendQuorumInfoBadge(d.message || "Another participant already continued this run.");
+      }
     }).catch(function (err) {
       if (!committed && chatSendBtn) chatSendBtn.disabled = false;
       appendBubble('<div class="chat-bubble chat-bubble--error">Error: ' + err.message + '</div>');
@@ -562,8 +572,10 @@ document.addEventListener("DOMContentLoaded", function () {
 
   var _activeReader = null;
   var _gateData = null; // non-null while the input bar is in human-gate mode
+  var _hostSessionWs = null;
 
   function setRunningState(running) {
+    if (running) _setTurnCue(false, "");
     if (chatInput) { chatInput.disabled = running; }
     if (chatSendBtn) { chatSendBtn.hidden = running; }
     if (chatStopBtn) {
@@ -578,6 +590,7 @@ document.addEventListener("DOMContentLoaded", function () {
     document.querySelectorAll(".chat-restart-panel__textarea").forEach(function (ta) {
       ta.disabled = running;
     });
+    setAgentsWorkingBadge(running);
   }
 
   function appendBubble(html) {
@@ -587,90 +600,78 @@ document.addEventListener("DOMContentLoaded", function () {
       msgs = document.getElementById("chat-history-msgs");
     }
     msgs.insertAdjacentHTML("beforeend", html);
+    window.MermaidViewer.hydrate(msgs.lastElementChild || msgs);
     chatMessages.scrollTop = chatMessages.scrollHeight;
   }
 
-  var _COPY_ICON = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>';
-  var _CHECK_ICON = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>';
-
-  function _buildCopyBtn() {
-    return '<button type="button" class="chat-bubble__copy-btn" title="Copy message" aria-label="Copy message">' + _COPY_ICON + '</button>';
-  }
-
-  function _getCopyText(bubbleEl) {
-    var md = bubbleEl.dataset.rawContent || "";
-    var attachmentNames = bubbleEl.querySelectorAll(".chat-message-attachment__name");
-    if (attachmentNames.length) {
-      md += "\n\n**Attachments:**\n";
-      attachmentNames.forEach(function (span) {
-        md += "- " + span.textContent.trim() + "\n";
-      });
-    }
-    return md.trim();
-  }
-
-  function _showCopiedFeedback(btn) {
-    btn.innerHTML = _CHECK_ICON;
-    btn.classList.add("chat-bubble__copy-btn--copied");
-    btn.title = "Copied!";
-    setTimeout(function () {
-      btn.innerHTML = _COPY_ICON;
-      btn.classList.remove("chat-bubble__copy-btn--copied");
-      btn.title = "Copy message";
-    }, 2000);
-  }
-
-  function _fallbackCopyText(text, btn) {
-    var ta = document.createElement("textarea");
-    ta.value = text;
-    ta.style.cssText = "position:fixed;top:-9999px;left:-9999px;opacity:0";
-    document.body.appendChild(ta);
-    ta.focus();
-    ta.select();
-    try { document.execCommand("copy"); _showCopiedFeedback(btn); } catch (e) { /* silent */ }
-    document.body.removeChild(ta);
-  }
-
-  document.body.addEventListener("click", function (e) {
-    var btn = e.target.closest(".chat-bubble__copy-btn");
-    if (!btn) return;
-    var bubble = btn.closest(".chat-bubble");
-    if (!bubble) return;
-    var text = _getCopyText(bubble);
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(text).then(function () {
-        _showCopiedFeedback(btn);
-      }).catch(function () {
-        _fallbackCopyText(text, btn);
-      });
-    } else {
-      _fallbackCopyText(text, btn);
-    }
-  });
+  window.ChatCopyUtils.bindBubbleCopyHandler(document.body);
 
   function appendHumanBubble(text, attachments) {
     var ts = new Date().toISOString();
-    var contentHtml = renderMarkdown(text);
-    var attachmentsHtml = renderMessageAttachments(attachments || []);
+    var contentHtml = window.MarkdownViewer.render(text);
+    var attachmentsHtml = window.ChatSurfaceUtils.renderMessageAttachments(attachments || [], {
+      fallbackIcon: true,
+      fallbackImage: true,
+    });
     appendBubble(
-      '<div class="chat-bubble chat-bubble--human" data-raw-content="' + escapeHtml(text || "") + '">'
+      '<div class="chat-bubble chat-bubble--human" data-raw-content="' + window.MarkdownViewer.escapeHtml(text || "") + '">'
       + '<div class="chat-bubble__meta">'
       + '<span class="chat-bubble__name">You</span>'
       + '<span class="chat-bubble__time"><time class="local-time" data-utc="' + ts + '">' + ts + '</time></span>'
-      + _buildCopyBtn()
+      + window.ChatCopyUtils.buildCopyBtnHtml()
       + '</div>'
       + '<div class="chat-bubble__content">' + contentHtml + '</div>'
       + attachmentsHtml
       + '</div>'
     );
-    window.renderLocalTimes();
+    window.ChatSurfaceUtils.renderLocalTimes();
+  }
+
+  function appendRemoteUserBubble(msg) {
+    var ts = msg.timestamp || new Date().toISOString();
+    var displayName = msg.agent_name || "Remote User";
+    var contentHtml = window.MarkdownViewer.render(msg.content || "");
+    var attachmentsHtml = window.ChatSurfaceUtils.renderMessageAttachments(msg.attachments || [], {
+      fallbackIcon: true,
+      fallbackImage: true,
+    });
+    appendBubble(
+      '<div class="chat-bubble chat-bubble--human" data-raw-content="' + window.MarkdownViewer.escapeHtml(msg.content || "") + '">'
+      + '<div class="chat-bubble__meta">'
+      + '<span class="chat-bubble__name">' + window.MarkdownViewer.escapeHtml(displayName) + '</span>'
+      + '<span class="chat-bubble__time"><time class="local-time" data-utc="' + ts + '">' + ts + '</time></span>'
+      + window.ChatCopyUtils.buildCopyBtnHtml()
+      + '</div>'
+      + '<div class="chat-bubble__content">' + contentHtml + '</div>'
+      + attachmentsHtml
+      + '</div>'
+    );
+    window.ChatSurfaceUtils.renderLocalTimes();
   }
 
   function appendStatusBadge(type) {
     var label = type === "completed" ? "Run completed" : "Run stopped";
+    setAgentsWorkingBadge(false);
+    clearQuorumInfoBadges();
     chatMessages.insertAdjacentHTML(
       "beforeend",
       '<div class="chat-status-badge chat-status-badge--' + type + '">' + label + '</div>'
+    );
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+  }
+
+  function setAgentsWorkingBadge(show) {
+    if (!chatMessages) return;
+    var existing = chatMessages.querySelector(".chat-status-badge--running");
+    if (!show) {
+      if (existing) existing.remove();
+      return;
+    }
+    if (existing) return;
+    clearQuorumInfoBadges();
+    chatMessages.insertAdjacentHTML(
+      "beforeend",
+      '<div class="chat-status-badge chat-status-badge--running">\u2699 Agents at work</div>'
     );
     chatMessages.scrollTop = chatMessages.scrollHeight;
   }
@@ -737,14 +738,13 @@ document.addEventListener("DOMContentLoaded", function () {
       var authorized = typeof srv === "object" && srv.authorized;
       // Skip if row already exists (idempotent).
       if (panel.querySelector('.chat-oauth-panel__row[data-server-name="' + name.replace(/"/g, '\\"') + '"]')) return;
-      var safe = escapeHtml(name);
-      var rowHtml = '<div class="chat-oauth-panel__row'
-        + (authorized ? " chat-oauth-panel__row--authorized" : "") + '" data-server-name="' + safe + '">'
+      var safe = window.MarkdownViewer.escapeHtml(name);
+      var rowHtml = '<div class="chat-oauth-panel__row" data-server-name="' + safe + '">'
         + '<span class="chat-oauth-panel__server">' + safe + '</span>'
         + '<span class="chat-oauth-panel__status '
         + (authorized ? "chat-oauth-panel__status--authorized" : "chat-oauth-panel__status--pending") + '">'
         + (authorized ? "Authorized \u2713" : "Pending") + '</span>'
-        + '<button type="button" class="btn btn--primary chat-oauth-authorize-btn" data-server-name="' + safe + '"'
+        + '<button type="button" class="btn btn--sm chat-oauth-authorize-btn" data-server-name="' + safe + '"'
         + (authorized ? " disabled" : "") + '>'
         + (authorized ? "Authorized \u2713" : "Authorize") + '</button>'
         + '</div>';
@@ -756,7 +756,7 @@ document.addEventListener("DOMContentLoaded", function () {
     setRunningState(false);
     _teardownOAuthGate();
 
-    chatMessages.querySelectorAll(".chat-status-badge, .chat-restart-panel, .chat-oauth-panel").forEach(function (el) {
+    chatMessages.querySelectorAll(".chat-status-badge, .chat-restart-panel, .chat-oauth-panel, .chat-remote-panel").forEach(function (el) {
       el.remove();
     });
 
@@ -765,8 +765,8 @@ document.addEventListener("DOMContentLoaded", function () {
     chatMessages.insertAdjacentHTML(
       "beforeend",
       '<div class="chat-oauth-panel"'
-      + ' data-session-id="' + escapeHtml(sessionId) + '"'
-      + ' data-project-id="' + escapeHtml(projectId) + '">'
+      + ' data-session-id="' + window.MarkdownViewer.escapeHtml(sessionId) + '"'
+      + ' data-project-id="' + window.MarkdownViewer.escapeHtml(projectId) + '">'
       + '<div class="chat-oauth-panel__title">&#x1F510; MCP authorization required</div>'
       + '<p class="chat-oauth-panel__hint">One or more MCP servers used by this project require OAuth authorization for this session. Authorize each server below; the run will resume automatically once all are connected.</p>'
       + '<div class="chat-oauth-panel__rows"><p class="chat-oauth-panel__loading">Connecting\u2026</p></div>'
@@ -788,7 +788,6 @@ document.addEventListener("DOMContentLoaded", function () {
     function _markRowAuthorized(name) {
       var row = panel.querySelector('.chat-oauth-panel__row[data-server-name="' + (window.CSS && CSS.escape ? CSS.escape(name) : name) + '"]');
       if (!row) return;
-      row.classList.add("chat-oauth-panel__row--authorized");
       var status = row.querySelector(".chat-oauth-panel__status");
       if (status) {
         status.classList.remove("chat-oauth-panel__status--pending");
@@ -803,7 +802,8 @@ document.addEventListener("DOMContentLoaded", function () {
       var rows = panel.querySelectorAll(".chat-oauth-panel__row");
       if (!rows.length) return false;
       for (var i = 0; i < rows.length; i++) {
-        if (!rows[i].classList.contains("chat-oauth-panel__row--authorized")) return false;
+        var status = rows[i].querySelector(".chat-oauth-panel__status");
+        if (!status || !status.classList.contains("chat-oauth-panel__status--authorized")) return false;
       }
       return true;
     }
@@ -899,6 +899,370 @@ document.addEventListener("DOMContentLoaded", function () {
     if (!_oauthMessageListener) _attachOAuthGateBehavior(panel, sessionId, secretKey);
   });
 
+  // ------------------------------------------------------------------
+  // Remote-user in-history readiness panel
+  // ------------------------------------------------------------------
+
+  var _remoteUserWs = null;
+
+  function _teardownRemoteUserGate() {
+    if (_remoteUserWs) {
+      try { _remoteUserWs.close(); } catch (_) {}
+      _remoteUserWs = null;
+    }
+  }
+
+  function _showRemoteUserGatePanel(sessionId, secretKey, users, quorum, replayTask, replayAttachmentIds) {
+    setRunningState(false);
+    _teardownRemoteUserGate();
+
+    chatMessages.querySelectorAll(".chat-status-badge, .chat-restart-panel, .chat-oauth-panel, .chat-remote-panel").forEach(function (el) {
+      el.remove();
+    });
+
+    var projectId = _resolveProjectId();
+
+    chatMessages.insertAdjacentHTML(
+      "beforeend",
+      '<div class="chat-remote-panel"'
+      + ' data-session-id="' + window.MarkdownViewer.escapeHtml(sessionId) + '"'
+      + ' data-project-id="' + window.MarkdownViewer.escapeHtml(projectId) + '"'
+      + ' data-quorum="' + window.MarkdownViewer.escapeHtml(quorum || "na") + '">'
+      + '<div class="chat-remote-panel__title">&#x1F465; Waiting for remote participants</div>'
+      + '<p class="chat-remote-panel__hint">Share the invite link with each participant; the run will resume automatically once all required users are online.</p>'
+      + '<div class="chat-remote-panel__rows"><p class="chat-remote-panel__loading">Connecting\u2026</p></div>'
+      + '<div class="chat-remote-panel__footer"></div>'
+      + '</div>'
+    );
+
+    var panel = chatMessages.querySelector(".chat-remote-panel");
+    if (!panel) return;
+    panel._replayTask = replayTask || "";
+    panel._replayAttachmentIds = (replayAttachmentIds || []).slice();
+    panel._users = (users || []).slice();
+    _renderRemoteQuorumDisplay(panel, quorum || "na");
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+
+    _attachRemoteUserGateBehavior(panel, sessionId, secretKey);
+  }
+
+  function _teardownHostSessionWs() {
+    if (_hostSessionWs) {
+      try { _hostSessionWs.close(); } catch (_) {}
+      _hostSessionWs = null;
+    }
+  }
+
+  function _connectHostSessionWs(sessionId, secretKey) {
+    if (!sessionId || !secretKey) return;
+    _teardownHostSessionWs();
+    var proto = location.protocol === "https:" ? "wss:" : "ws:";
+    var wsUrl = proto + "//" + location.host + "/ws/session/" + encodeURIComponent(sessionId)
+      + "/?skey=" + encodeURIComponent(secretKey);
+    try {
+      _hostSessionWs = new WebSocket(wsUrl);
+    } catch (_) {
+      _hostSessionWs = null;
+      return;
+    }
+
+    _hostSessionWs.onmessage = function (event) {
+      var msg;
+      try { msg = JSON.parse(event.data); } catch (_) { return; }
+      if (!msg) return;
+
+      if (msg.type === "message") {
+        var payload = msg.message || msg;
+        if (!payload || payload.role !== "user") return;
+        if (payload.user_origin === "host") return;
+        clearQuorumInfoBadges();
+        appendRemoteUserBubble(payload);
+        return;
+      }
+
+      if (msg.type === "quorum_progress") {
+        if (_gateData && _gateData.quorum === "all") {
+          _gateData.awaiting_host_final = !!msg.all_present;
+          _evalSendBtn();
+        }
+        return;
+      }
+
+      if (msg.type === "quorum_committed" && _gateData) {
+        clearQuorumInfoBadges();
+        var isFirstWin = msg.quorum === "first_win";
+        var shouldAutoStart = isFirstWin;
+        _gateData.awaiting_host_final = false;
+        _evalSendBtn();
+        if (shouldAutoStart) {
+          clearGateMode();
+          startRun("", []);
+        }
+        return;
+      }
+
+      if (msg.type === "team_choice_turn_requested") {
+        var activeName = msg.remote_user_name || "Remote participant";
+        appendQuorumInfoBadge("Waiting for " + activeName + " to respond");
+        return;
+      }
+
+      if (msg.type === "team_choice_turn_submitted" || msg.type === "team_choice_turn_resolved") {
+        clearQuorumInfoBadges();
+        return;
+      }
+    };
+
+    _hostSessionWs.onclose = function () {
+      _hostSessionWs = null;
+    };
+  }
+
+  function _renderRemoteUserRows(panel, users, quorum, secretKey) {
+    var rowsContainer = panel.querySelector(".chat-remote-panel__rows");
+    if (!rowsContainer) return;
+    var loading = rowsContainer.querySelector(".chat-remote-panel__loading");
+    if (loading) loading.remove();
+
+    var sessionId = panel.dataset.sessionId || (activeSessionIdInput ? activeSessionIdInput.value.trim() : "");
+    var effectiveQuorum = quorum || panel.dataset.quorum || "na";
+    var isTeamChoice = effectiveQuorum === "team_choice";
+
+    (users || []).forEach(function (u) {
+      var name = typeof u === "string" ? u : (u.name || "");
+      var status = typeof u === "object" ? (u.status || "offline") : "offline";
+      var exportAllowed = typeof u === "object" ? !!u.export_allowed : false;
+
+      if (rowsContainer.querySelector('[data-remote-user-name="' + name.replace(/"/g, '\\"') + '"]')) return;
+
+      var safe = window.MarkdownViewer.escapeHtml(name);
+      var statusClass = "remote-user-status--" + (status === "online" ? "online" : status === "ignored" ? "ignored" : "offline");
+      var statusLabel = status === "online" ? "Online \u2713" : status === "ignored" ? "Ignore" : "Offline";
+      var cbDisabled = isTeamChoice ? " disabled" : "";
+      var cbChecked = (status === "ignored") ? "" : " checked";
+      var copyDisabled = (status === "ignored") ? " disabled" : "";
+      var exportChecked = exportAllowed ? " checked" : "";
+      var exportDisabled = (status === "ignored") ? " disabled" : "";
+
+      var rowHtml = '<div class="remote-user-row" data-remote-user-name="' + safe + '" data-status="' + window.MarkdownViewer.escapeHtml(status) + '">'
+        + '<input type="checkbox" class="remote-user-row__checkbox" title="Require this user"' + cbChecked + cbDisabled + '>'
+        + '<span class="remote-user-row__name">' + safe + '</span>'
+        + '<label class="remote-user-row__export-label" title="Allow this user to export from their chat page">'
+        + '<input type="checkbox" class="remote-user-row__export-cb"' + exportChecked + exportDisabled + '> Can Export'
+        + '</label>'
+        + '<button type="button" class="btn btn--sm btn--secondary remote-user-copy-btn" data-session-id="' + window.MarkdownViewer.escapeHtml(sessionId) + '" data-user-name="' + safe + '" title="Copy invite link"' + copyDisabled + '>Copy Link</button>'
+        + '<span class="remote-user-row__status ' + statusClass + '">' + statusLabel + '</span>'
+        + '</div>';
+      rowsContainer.insertAdjacentHTML("beforeend", rowHtml);
+    });
+  }
+
+  function _updateRemoteUserExportRow(panel, userName, enabled) {
+    if (!panel) return;
+    var rowsContainer = panel.querySelector(".chat-remote-panel__rows");
+    if (!rowsContainer) return;
+    var row = rowsContainer.querySelector('[data-remote-user-name="' + userName.replace(/"/g, '\\"') + '"]');
+    if (!row) return;
+    var cb = row.querySelector(".remote-user-row__export-cb");
+    if (cb) cb.checked = !!enabled;
+  }
+
+  function _humanizeQuorumValue(value) {
+    var normalized = (!value || value === "na") ? "all" : value;
+    return normalized.replace(/_/g, " ").replace(/\b\w/g, function (ch) { return ch.toUpperCase(); });
+  }
+
+  function _resolveQuorumLabel(quorum) {
+    var normalized = (!quorum || quorum === "na") ? "all" : quorum;
+    var allOptions = window._quorumOptions || [];
+    var matched = allOptions.find(function (opt) { return opt && opt.value === normalized; });
+    return matched && matched.label ? matched.label : _humanizeQuorumValue(normalized);
+  }
+
+  function _renderRemoteQuorumDisplay(panel, quorum) {
+    var footer = panel.querySelector(".chat-remote-panel__footer");
+    if (!footer) return;
+
+    var effectiveQuorum = (!quorum || quorum === "na") ? "all" : quorum;
+    var quorumLabel = _resolveQuorumLabel(effectiveQuorum);
+
+    var existingValue = footer.querySelector(".chat-remote-panel__quorum-value");
+    var existingDisplay = footer.querySelector(".chat-remote-panel__quorum-display");
+    if (existingValue && existingDisplay) {
+      existingDisplay.dataset.quorumValue = effectiveQuorum;
+      existingValue.textContent = quorumLabel;
+      return;
+    }
+
+    var html = '<div class="chat-remote-panel__quorum-display" data-quorum-value="' + window.MarkdownViewer.escapeHtml(effectiveQuorum) + '">'
+      + '<img class="chat-remote-panel__quorum-icon" src="/static/server/assets/quorum.png" alt="Quorum">'
+      + '<span class="chat-remote-panel__quorum-value">' + window.MarkdownViewer.escapeHtml(quorumLabel) + '</span>'
+      + '</div>';
+    footer.insertAdjacentHTML("afterbegin", html);
+  }
+
+  function _updateRemoteUserRow(panel, userName, status) {
+    var row = panel.querySelector('[data-remote-user-name="' + (window.CSS && CSS.escape ? CSS.escape(userName) : userName) + '"]');
+    if (!row) return;
+    row.dataset.status = status;
+    var statusEl = row.querySelector(".remote-user-row__status");
+    if (statusEl) {
+      statusEl.className = "remote-user-row__status remote-user-status--" + (status === "online" ? "online" : status === "ignored" ? "ignored" : "offline");
+      statusEl.textContent = status === "online" ? "Online \u2713" : status === "ignored" ? "Ignore" : "Offline";
+    }
+    // Copy link button: disabled when ignored so the token has been revoked.
+    var copyBtn = row.querySelector(".remote-user-copy-btn");
+    if (copyBtn) {
+      copyBtn.disabled = (status === "ignored");
+    }
+    // Checkbox: sync visual state but respect disabled (team_choice) rows.
+    var cb = row.querySelector(".remote-user-row__checkbox");
+    if (cb && !cb.disabled) {
+      cb.checked = (status !== "ignored");
+    }
+  }
+
+  function _attachRemoteUserGateBehavior(panel, sessionId, secretKey) {
+    function _onAllReady() {
+      _teardownRemoteUserGate();
+      var task = panel._replayTask || "";
+      var ids = panel._replayAttachmentIds || [];
+      panel.remove();
+      _doStartRun(sessionId, secretKey, task, ids);
+      setRunningState(true);
+    }
+
+    var proto = location.protocol === "https:" ? "wss:" : "ws:";
+    var wsUrl = proto + "//" + location.host + "/ws/remote-users/" + encodeURIComponent(sessionId)
+      + "/?skey=" + encodeURIComponent(secretKey);
+    try {
+      _remoteUserWs = new WebSocket(wsUrl);
+    } catch (_) {
+      _remoteUserWs = null;
+    }
+
+    if (_remoteUserWs) {
+      _remoteUserWs.onmessage = function (event) {
+        var msg;
+        try { msg = JSON.parse(event.data); } catch (_) { return; }
+        if (!document.body.contains(panel)) { _teardownRemoteUserGate(); return; }
+
+        var quorum = msg.quorum || panel.dataset.quorum || "na";
+        if (msg.type === "state") {
+          // Update panel quorum from server (may reflect Redis override).
+          panel.dataset.quorum = quorum;
+          _renderRemoteUserRows(panel, msg.users || [], quorum, secretKey);
+          _renderRemoteQuorumDisplay(panel, quorum);
+          panel._users = msg.users || [];
+        } else if (msg.type === "update") {
+          if (panel._users && !panel._users.some(function (u) { return u.name === msg.user_name; })) {
+            panel._users.push({name: msg.user_name, status: msg.status});
+            _renderRemoteUserRows(panel, [{name: msg.user_name, status: msg.status}], quorum, secretKey);
+          } else {
+            // Update user_type on existing entry too.
+            if (panel._users) {
+              panel._users.forEach(function (u) {
+                if (u.name === msg.user_name) { u.status = msg.status; }
+              });
+            }
+            _updateRemoteUserRow(panel, msg.user_name, msg.status);
+          }
+        } else if (msg.type === "count_update" || msg.type === "complete") {
+          if (msg.type === "complete") _onAllReady();
+        } else if (msg.type === "remote_export_enabled") {
+          if (panel._users) {
+            panel._users.forEach(function (u) {
+              if (u.name === msg.user_name) { u.export_allowed = true; }
+            });
+          }
+          _updateRemoteUserExportRow(panel, msg.user_name, true);
+        } else if (msg.type === "remote_export_disabled") {
+          if (panel._users) {
+            panel._users.forEach(function (u) {
+              if (u.name === msg.user_name) { u.export_allowed = false; }
+            });
+          }
+          _updateRemoteUserExportRow(panel, msg.user_name, false);
+        }
+      };
+      _remoteUserWs.onerror = function () {
+        if (panel._users && panel._users.length) {
+          _renderRemoteUserRows(panel, panel._users, panel.dataset.quorum || "na", secretKey);
+        }
+      };
+      _remoteUserWs.onclose = function () {
+        if (_remoteUserWs) { _remoteUserWs = null; }
+      };
+    }
+  }
+
+  // Delegated: Copy invite link button
+  document.addEventListener("click", function (event) {
+    var btn = event.target && event.target.closest ? event.target.closest(".remote-user-copy-btn") : null;
+    if (!btn || btn.disabled) return;
+    var sessionId = btn.dataset.sessionId || (activeSessionIdInput ? activeSessionIdInput.value.trim() : "");
+    var userName = btn.dataset.userName;
+    var secretKey = getSecretKey();
+    if (!sessionId || !userName || !secretKey) { alert("Enter the Secret Key first."); return; }
+
+    fetch("/chat/sessions/" + sessionId + "/remote-users/" + encodeURIComponent(userName) + "/invite/", {
+      method: "POST",
+      headers: {"X-App-Secret-Key": secretKey, "X-CSRFToken": csrfToken},
+    }).then(function (r) { return r.json(); }).then(function (d) {
+      if (d.join_url) {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(d.join_url).then(function () {
+            var orig = btn.textContent;
+            btn.textContent = "Copied!";
+            setTimeout(function () { btn.textContent = orig; }, 2000);
+          }).catch(function () { alert(d.join_url); });
+        } else { alert(d.join_url); }
+      } else { alert(d.error || "Failed to generate link."); }
+    }).catch(function () { alert("Error generating invite link."); });
+  });
+
+  // Delegated: checkbox toggle (ignore/unignore)
+  document.addEventListener("change", function (event) {
+    var cb = event.target && event.target.classList && event.target.classList.contains("remote-user-row__checkbox") ? event.target : null;
+    if (!cb) return;
+    var row = cb.closest(".remote-user-row");
+    var panel = cb.closest(".chat-remote-panel");
+    if (!row || !panel) return;
+    var sessionId = panel.dataset.sessionId || (activeSessionIdInput ? activeSessionIdInput.value.trim() : "");
+    var userName = row.dataset.remoteUserName;
+    var secretKey = getSecretKey();
+    if (!sessionId || !userName || !secretKey) return;
+
+    // Sync copy link button state immediately for responsive UI.
+    var copyBtn = row.querySelector(".remote-user-copy-btn");
+    if (copyBtn) copyBtn.disabled = !cb.checked;
+
+    var endpoint = cb.checked ? "unignore" : "ignore";
+    fetch("/chat/sessions/" + sessionId + "/remote-users/" + encodeURIComponent(userName) + "/" + endpoint + "/", {
+      method: "POST",
+      headers: {"X-App-Secret-Key": secretKey, "X-CSRFToken": csrfToken},
+    }).catch(function () { /* non-fatal */ });
+  });
+
+  // Delegated: Can Export checkbox toggle
+  document.addEventListener("change", function (event) {
+    var cb = event.target && event.target.classList && event.target.classList.contains("remote-user-row__export-cb") ? event.target : null;
+    if (!cb) return;
+    var row = cb.closest(".remote-user-row");
+    var panel = cb.closest(".chat-remote-panel");
+    if (!row || !panel) return;
+    var sessionId = panel.dataset.sessionId || (activeSessionIdInput ? activeSessionIdInput.value.trim() : "");
+    var userName = row.dataset.remoteUserName;
+    var secretKey = getSecretKey();
+    if (!sessionId || !userName || !secretKey) return;
+
+    fetch("/chat/sessions/" + sessionId + "/remote-users/" + encodeURIComponent(userName) + "/allow-export/", {
+      method: "POST",
+      headers: {"X-App-Secret-Key": secretKey, "X-CSRFToken": csrfToken, "Content-Type": "application/json"},
+      body: JSON.stringify({"enable": cb.checked}),
+    }).catch(function () { /* non-fatal */ });
+  });
+
   function restartSession(panel, mode, text) {
     var sessionId = panel.dataset.sessionId
       || (activeSessionIdInput ? activeSessionIdInput.value.trim() : "");
@@ -928,21 +1292,22 @@ document.addEventListener("DOMContentLoaded", function () {
       if ((mode || "") === "continue_with_context" && text) {
         appendHumanBubble(text);
       }
-      startRun(data.task || "");
+      if (activeSessionIdInput) activeSessionIdInput.value = sessionId;
+      startRun(data.task || "", [], sessionId);
     }).catch(function (err) {
       setRunningState(false);
       appendBubble('<div class="chat-bubble chat-bubble--error">Error: ' + err.message + '</div>');
     });
   }
 
-  function startRun(task, attachmentIds) {
-    var sessionId = activeSessionIdInput ? activeSessionIdInput.value.trim() : "";
+  function startRun(task, attachmentIds, forceSessionId) {
+    var sessionId = (forceSessionId || (activeSessionIdInput ? activeSessionIdInput.value.trim() : "")).trim();
     if (!sessionId) { return; }
 
     var secretKey = getSecretKey();
     if (!secretKey) { alert("Enter the Secret Key first."); return; }
 
-    chatMessages.querySelectorAll(".chat-status-badge, .chat-restart-panel, .chat-oauth-panel").forEach(function (el) {
+    chatMessages.querySelectorAll(".chat-status-badge, .chat-restart-panel, .chat-oauth-panel, .chat-remote-panel").forEach(function (el) {
       el.remove();
     });
 
@@ -977,6 +1342,10 @@ document.addEventListener("DOMContentLoaded", function () {
         return response.json().then(function (d) {
           if (d && d.status === "awaiting_mcp_oauth") {
             _showOAuthGatePanel(sessionId, secretKey, d.servers || [], task, attachmentIds);
+            return;
+          }
+          if (d && d.status === "awaiting_remote_users") {
+            _showRemoteUserGatePanel(sessionId, secretKey, d.users || [], d.quorum || "na", task, attachmentIds);
             return;
           }
           throw new Error(d.error || "Run failed");
@@ -1083,8 +1452,11 @@ document.addEventListener("DOMContentLoaded", function () {
     if (eventName === "message") {
       var ts = data.timestamp || "";
       var initial = (data.agent_name || "A").slice(0, 1).toUpperCase();
-      var contentHtml = renderMarkdown(data.content || "");
-      var attachmentsHtml = renderMessageAttachments(data.attachments || []);
+      var contentHtml = window.MarkdownViewer.render(data.content || "");
+      var attachmentsHtml = window.ChatSurfaceUtils.renderMessageAttachments(data.attachments || [], {
+        fallbackIcon: true,
+        fallbackImage: true,
+      });
       var exportHtml = buildExportDropdown(
         data.export,
         data.agent_name,
@@ -1092,20 +1464,20 @@ document.addEventListener("DOMContentLoaded", function () {
         data.id || ""
       );
       appendBubble(
-        '<div class="chat-bubble chat-bubble--ai" data-raw-content="' + escapeHtml(data.content || "") + '">'
+        '<div class="chat-bubble chat-bubble--ai" data-raw-content="' + window.MarkdownViewer.escapeHtml(data.content || "") + '">'
         + '<div class="chat-bubble__avatar">' + initial + '</div>'
         + '<div class="chat-bubble__body">'
         + '<div class="chat-bubble__meta">'
         + '<span class="chat-bubble__name">' + (data.agent_name || "Agent") + '</span>'
         + '<span class="chat-bubble__time"><time class="local-time" data-utc="' + ts + '">' + ts + '</time></span>'
-        + _buildCopyBtn()
+        + window.ChatCopyUtils.buildCopyBtnHtml()
         + '</div>'
         + '<div class="chat-bubble__content">' + contentHtml + '</div>'
         + attachmentsHtml
         + exportHtml
         + '</div></div>'
       );
-      window.renderLocalTimes();
+      window.ChatSurfaceUtils.renderLocalTimes();
     } else if (eventName === "gate") {
       setRunningState(false);
       appendGateBadge(data);
@@ -1141,6 +1513,10 @@ document.addEventListener("DOMContentLoaded", function () {
       if (!text && !hasAttachments) return;
 
       function runWithSession(sessionId) {
+        var skey = getSecretKey();
+        if (sessionId && skey) {
+          _connectHostSessionWs(sessionId, skey);
+        }
         // Disable Send immediately to prevent double-submit during the async upload.
         // chatInput stays enabled so the user can keep typing.
         chatSendBtn.disabled = true;
@@ -1333,6 +1709,45 @@ document.addEventListener("DOMContentLoaded", function () {
     if (activeSessionIdInput) activeSessionIdInput.value = "";
   });
 
+  document.body.addEventListener("click", function (e) {
+    var btn = e.target.closest("#chat-guest-share-btn");
+    if (!btn) return;
+
+    var secretKey = getSecretKey();
+    if (!secretKey) {
+      alert("Enter the Secret Key first.");
+      return;
+    }
+
+    var sessionId = activeSessionIdInput ? activeSessionIdInput.value.trim() : "";
+    if (!sessionId) {
+      alert("Select a chat session before generating a guest link.");
+      return;
+    }
+
+    btn.disabled = true;
+    fetch("/chat/sessions/" + encodeURIComponent(sessionId) + "/guest/invite/", {
+      method: "POST",
+      headers: {
+        "X-App-Secret-Key": secretKey,
+        "X-CSRFToken": csrfToken,
+      },
+    }).then(function (r) {
+      return r.json().then(function (data) {
+        if (!r.ok) throw new Error(data.error || "Unable to generate guest link.");
+        return data;
+      });
+    }).then(function (data) {
+      return window.ChatCopyUtils.copyTextToClipboard(data.join_url || "", btn).then(function () {
+        appendBubble('<div class="chat-bubble chat-bubble--system">Guest link copied to clipboard.</div>');
+      });
+    }).catch(function (err) {
+      appendBubble('<div class="chat-bubble chat-bubble--error">Error: ' + window.MarkdownViewer.escapeHtml(err.message || "Unable to generate guest link.") + '</div>');
+    }).finally(function () {
+      updateChatAuthState();
+    });
+  });
+
   document.body.addEventListener("htmx:beforeRequest", function (e) {
     var elt = e.detail && e.detail.elt;
     if (!elt) return;
@@ -1342,6 +1757,7 @@ document.addEventListener("DOMContentLoaded", function () {
 
   document.body.addEventListener("htmx:afterSwap", function () {
     updateChatAuthState();
+    window.MermaidViewer.hydrate(chatMessages);
     // Restore gate mode if the newly loaded session is awaiting_input.
     // The server renders a .chat-status-badge--gate with data-gate-context
     // so we can reconstruct the gate state without an extra API call.
@@ -1366,11 +1782,38 @@ document.addEventListener("DOMContentLoaded", function () {
         _attachOAuthGateBehavior(oauthPanel, oauthSessionId, oauthSecretKey);
       }
     }
+    // Reconnect WS for server-rendered awaiting_remote_users panels (session switch).
+    var remotePanel = chatMessages && chatMessages.querySelector(".chat-remote-panel");
+    if (remotePanel && !_remoteUserWs) {
+      var remotePanelSessionId = remotePanel.dataset.sessionId || (activeSessionIdInput ? activeSessionIdInput.value.trim() : "");
+      var remotePanelSecretKey = getSecretKey();
+      if (remotePanelSessionId && remotePanelSecretKey) {
+        // Render quorum display immediately from data-quorum (server-injected);
+        // the WS state message will update it once connected.
+        _renderRemoteQuorumDisplay(remotePanel, remotePanel.dataset.quorum || "na");
+        _attachRemoteUserGateBehavior(remotePanel, remotePanelSessionId, remotePanelSecretKey);
+      }
+    }
+    var sid = activeSessionIdInput ? activeSessionIdInput.value.trim() : "";
+    var skey = getSecretKey();
+    if (sid && skey) {
+      _connectHostSessionWs(sid, skey);
+    } else {
+      _teardownHostSessionWs();
+    }
+    _scrollChatToBottom();
   });
 
   document.body.addEventListener("input", function (e) {
     if (e.target.id === "global-secret-key") {
       updateChatAuthState();
+      var sid = activeSessionIdInput ? activeSessionIdInput.value.trim() : "";
+      var skey = getSecretKey();
+      if (sid && skey) {
+        _connectHostSessionWs(sid, skey);
+      } else {
+        _teardownHostSessionWs();
+      }
     }
   });
 
@@ -1419,6 +1862,7 @@ document.addEventListener("DOMContentLoaded", function () {
   });
 
   updateChatAuthState();
+  window.MermaidViewer.hydrate(chatMessages);
 
   // On initial page load, restore gate mode if the session is awaiting_input.
   // htmx:afterSwap covers session switches; this covers first render.
@@ -1439,4 +1883,22 @@ document.addEventListener("DOMContentLoaded", function () {
       _attachOAuthGateBehavior(initialOAuthPanel, initOAuthSessionId, initOAuthSecretKey);
     }
   }
+  // On initial page load, connect WS for server-rendered awaiting_remote_users panels.
+  var initialRemotePanel = chatMessages && chatMessages.querySelector(".chat-remote-panel");
+  if (initialRemotePanel) {
+    var initRemoteSessionId = initialRemotePanel.dataset.sessionId || (activeSessionIdInput ? activeSessionIdInput.value.trim() : "");
+    var initRemoteSecretKey = getSecretKey();
+    if (initRemoteSessionId && initRemoteSecretKey) {
+      // Render quorum display immediately from data-quorum (server-injected);
+      // the WS state message will update it once connected.
+      _renderRemoteQuorumDisplay(initialRemotePanel, initialRemotePanel.dataset.quorum || "na");
+      _attachRemoteUserGateBehavior(initialRemotePanel, initRemoteSessionId, initRemoteSecretKey);
+    }
+  }
+  var initSid = activeSessionIdInput ? activeSessionIdInput.value.trim() : "";
+  var initSecret = getSecretKey();
+  if (initSid && initSecret) {
+    _connectHostSessionWs(initSid, initSecret);
+  }
+  _scrollChatToBottom();
 });

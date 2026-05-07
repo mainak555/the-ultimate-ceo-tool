@@ -4,7 +4,7 @@
     project  ? visual project context setter
     neither  ? generic welcome
 {% endcomment %}
-{% load md_extras %}
+{% load md_extras static %}
 
 {% if session %}
 
@@ -95,6 +95,9 @@
 {% endif %}
 
 {# ---- Status badges / gate panel rendered on page reload ---- #}
+{% if session.status == "running" %}
+  <div class="chat-status-badge chat-status-badge--running">&#x2699; Agents at work</div>
+{% else %}
 {% if session.status == "completed" %}
   <div class="chat-status-badge chat-status-badge--completed">&#x2705; Run completed</div>
 {% else %}
@@ -104,9 +107,10 @@
 {% if session.status == "awaiting_input" %}
 {% if project %}
   <div class="chat-status-badge chat-status-badge--gate"
-       data-gate-context='{"round": {{ session.current_round }}, "max_rounds": {{ project.team.max_iterations|default:0 }}, "chat_mode": "{% if project.agents|length == 1 %}single_assistant{% endif %}"}'>
+      data-gate-context='{"round": {{ session.current_round }}, "max_rounds": {{ project.team.max_iterations|default:0 }}, "chat_mode": "{% if project.agents|length == 1 %}single_assistant{% endif %}", "quorum": "{{ session_quorum|default:project.human_gate.quorum|default:'na' }}"}'>
     &#x23F8; Round {{ session.current_round }}{% if project.agents|length != 1 %}/{{ project.team.max_iterations }}{% endif %} &mdash; response is required
   </div>
+{% endif %}
 {% endif %}
 {% endif %}
 {% endif %}
@@ -128,8 +132,53 @@
   </div>
 {% endif %}
 
+{% if session.status == "awaiting_remote_users" %}
+  <div class="chat-remote-panel"
+       data-session-id="{{ session.session_id }}"
+       data-project-id="{{ session.project_id }}"
+       data-quorum="{{ session_quorum|default:'na' }}">
+    <div class="chat-remote-panel__title">&#x1F465; Waiting for remote participants</div>
+    <p class="chat-remote-panel__hint">
+      This session requires remote users to join before the run can start.
+      Share the invite link with each participant; the run will resume automatically
+      once all required users are online.
+    </p>
+    <div class="chat-remote-panel__rows">
+      <p class="chat-remote-panel__loading">Connecting&hellip;</p>
+    </div>
+    <div class="chat-remote-panel__footer">
+      <div class="chat-remote-panel__quorum-display" data-quorum-value="{{ session_quorum|default:'na' }}">
+        <img class="chat-remote-panel__quorum-icon" src="{% static 'server/assets/quorum.png' %}" alt="Quorum">        
+        <span class="chat-remote-panel__quorum-value">
+          {% if session_quorum == 'first_win' %}
+            First Win
+          {% else %}
+            {% if session_quorum == 'team_choice' %}
+              Team Choice
+            {% else %}
+              All
+            {% endif %}
+          {% endif %}
+        </span>
+      </div>
+    </div>
+  </div>
+{% endif %}
+
 {% if session.has_agent_state %}
 {% if session.status == "completed" or session.status == "stopped" %}
+{% if project and session.project_version != project.version %}
+  <div class="chat-version-mismatch-panel">
+    <div class="chat-version-mismatch-panel__title">&#x26A0; Cannot resume &mdash; configuration changed</div>
+    <p class="chat-version-mismatch-panel__hint">
+      This session was started with project version
+      <strong>v{{ session.project_version|floatformat:1 }}</strong>, but the project
+      is now at <strong>v{{ project.version|floatformat:1 }}</strong>.
+      Resuming from a different configuration version is not supported.
+      Start a new session to continue with the current configuration.
+    </p>
+  </div>
+{% else %}
   <div class="chat-restart-panel" data-session-id="{{ session.session_id }}">
     <div class="chat-restart-panel__title">Restart from saved agent state</div>
     <p class="chat-restart-panel__hint">
@@ -156,6 +205,7 @@
   </div>
 {% endif %}
 {% endif %}
+{% endif %}
 
 {% else %}
 {% if project %}
@@ -167,17 +217,26 @@
     <div>
       <h2 class="project-ctx__name">{{ project.project_name }}</h2>
       {% if project.agents|length == 1 %}
-      <span class="project-ctx__tag">
-        Chat Mode
-        &middot;
-        Human-controlled stop
-      </span>
+      <div class="project-ctx__tag-row">
+        <span class="project-ctx__tag">
+          Chat Mode
+          &middot;
+          Human-controlled stop
+        </span>
+      </div>
       {% else %}
-      <span class="project-ctx__tag">
-        {{ project.team.type|title }}
-        &middot;
-        {{ project.team.max_iterations }} iteration{{ project.team.max_iterations|pluralize }}
-      </span>
+      <div class="project-ctx__tag-row">
+        <span class="project-ctx__tag">
+          {{ project.team.type|title }}
+          &middot;
+          {{ project.team.max_iterations }} iteration{{ project.team.max_iterations|pluralize }}
+        </span>
+        {% if project.human_gate.remote_users|length > 0 %}
+        <span class="project-ctx__tag project-ctx__tag--quorum">
+          {{ project.human_gate.quorum|default:"all"|quorum_label }}
+        </span>
+        {% endif %}
+      </div>
       {% endif %}
     </div>
   </div>
@@ -216,6 +275,18 @@
             <span class="project-ctx__agent-model">Human reviewer</span>
           </div>
         </div>
+
+        {% for remote_user in project.human_gate.remote_users %}
+          <div class="project-ctx__agent-card project-ctx__agent-card--human">
+            <div class="project-ctx__agent-avatar project-ctx__agent-avatar--human">
+              {{ remote_user.name|slice:":1"|upper }}
+            </div>
+            <div class="project-ctx__agent-info">
+              <span class="project-ctx__agent-name">{{ remote_user.name }}</span>
+              <span class="project-ctx__agent-model">Remote participant</span>
+            </div>
+          </div>
+        {% endfor %}
       {% endif %}
 
     </div>

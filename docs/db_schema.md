@@ -15,7 +15,7 @@ exact same name through every layer listed below:
 | **Templates** | `server/templates/server/partials/config_form.html`, `config_readonly.html`, `_agent_card.html` | `name="team[<name>]"` / `project.team.<name>` |
 | **Runtime** | `agents/team_builder.py` — `build_team()`, `build_agent_runtime_spec()` | `team_cfg.get("<name>")` / `agent_config.get("<name>")` |
 
-Cross-references: [docs/API.md](API.md) (form fields + HTTP schema), [AGENTS.md](../AGENTS.md) rules 1–5, [docs/trello_integration.md](trello_integration.md), [docs/jira_integration.md](jira_integration.md), [docs/mcp_integration.md](mcp_integration.md).
+Cross-references: [docs/API.md](API.md) (HTTP endpoint contracts — **not** a schema source; schema lives here), [AGENTS.md](../AGENTS.md) rules 1–5, [docs/trello_integration.md](trello_integration.md), [docs/jira_integration.md](jira_integration.md), [docs/mcp_integration.md](mcp_integration.md).
 
 ---
 
@@ -26,6 +26,7 @@ Cross-references: [docs/API.md](API.md) (form fields + HTTP schema), [AGENTS.md]
   // ── Top-level ─────────────────────────────────────────────────────────────
   "project_name": "string (unique, used as URL slug)",
   "objective":    "string — injected into every agent system prompt and selector system prompt at runtime",
+  "version":      1.0,  // float — server-managed; set to 1.0 on create, bumped +0.1 on update ONLY when team.type changes or human_gate.quorum departs team_choice (via _compute_version_bump()), bumped to next integer on clone (e.g. 1.x → 2.0)
   "created_at":   "datetime (UTC BSON Date — set on insert, never overwritten)",
   "updated_at":   "datetime (UTC BSON Date — stamped on every replace_one)",
 
@@ -47,8 +48,16 @@ Cross-references: [docs/API.md](API.md) (form fields + HTTP schema), [AGENTS.md]
 
   // ── Human gate (optional) ─────────────────────────────────────────────────
   "human_gate": {
-    "enabled":          true,      // bool
-    "name":             "string"  // required when enabled=true
+    "enabled":          true,       // bool
+    "name":             "string",   // required when enabled=true; must be a valid Python identifier
+    "quorum":           "all",      // "all" | "first_win" | "team_choice" | "na"
+                                    // "na" is forced automatically when remote_users is empty
+    "remote_users": [               // [] when no remote users are configured
+      {
+        "name":        "string",    // valid Python identifier; used as AutoGen participant label
+        "description": "string"     // optional plain-text context about the participant's role
+      }
+    ]
   },
 
   // ── Team ──────────────────────────────────────────────────────────────────
@@ -125,6 +134,7 @@ Cross-references: [docs/API.md](API.md) (form fields + HTTP schema), [AGENTS.md]
 {
   "_id": "ObjectId",
   "project_id": "string (project ObjectId hex)",
+  "project_version": 1.0,  // float — snapshot of project.version at session creation time; never updated after insert
   "description": "string",
   "created_at": "datetime",
   "discussions": [
@@ -261,9 +271,14 @@ naming across agent and team layers.
 Stored on `team`, not at the top level. `normalize_project()` falls back to the legacy
 top-level `max_iterations` for backward compatibility with old documents.
 
-When assistant count is exactly 1 (single-assistant chat mode), the persisted
-`team` object may be omitted entirely. Runtime falls back to Round Robin behavior
-and human-gated `Continue`/`Stop` controls loop progression and termination.
+When assistant count is exactly 1 **and no remote users are configured** (pure
+single-assistant chat mode), the persisted `team` object is omitted entirely.
+Runtime falls back to Round Robin behavior and human-gated `Continue`/`Stop`
+controls loop progression and termination.
+
+When assistant count is exactly 1 **and at least one remote user is configured**,
+the `team` object is persisted and its `max_iterations` is honored — the run
+completes when `current_round` reaches that limit, not at Stop only.
 
 ### `integrations.trello.export_agents`
 Stored as a list of agent name strings. An empty list means all agents' messages will show
@@ -289,10 +304,14 @@ The `integrations` root never holds an `export_agent` field in new documents.
 | `agents[].model` | str | must be in `agent_models.json` |
 | `agents[].system_prompt` | str | non-empty |
 | `agents[].temperature` | float | 0.0 ≤ value ≤ 2.0 |
-| `human_gate.name` | str | required when `enabled=true` |
+| `human_gate.name` | str | required when `enabled=true`; must be a valid Python identifier |
+| `human_gate.quorum` | str | `"all"`, `"first_win"`, or `"team_choice"` when remote users present; `"na"` when `remote_users` is empty (set automatically) |
+| `human_gate.remote_users[].name` | str | valid Python identifier after sanitization |
+| `human_gate.remote_users[].description` | str | optional |
 | `team.type` | str | `"round_robin"` or `"selector"` |
 | `team.max_iterations` | int | ≥ 1; ≤ 10 when `human_gate.enabled=false` |
-| `single-assistant rule` | logical | if `len(agents)==1`, then `human_gate.enabled=true` and `team.type != "selector"` |
+| `single-assistant rule` | logical | if `len(agents)==1` and `len(remote_users)==0`, then `human_gate.enabled=true` and `team.type != "selector"`; `team` is not persisted |
+| `single-assistant + remote users rule` | logical | if `len(agents)==1` and `len(remote_users)>=1`, then `team` is persisted and `team.type` must be `round_robin` (selector still requires ≥ 2 agents) |
 | `team.model` | str | required for selector; must be in `agent_models.json` |
 | `team.system_prompt` | str | required for selector; non-empty |
 | `team.temperature` | float | 0.0 ≤ value ≤ 2.0 (default `0.0`) |
@@ -324,3 +343,18 @@ db.project_settings.updateMany(
 
 There is **no automatic backward-compat fallback** in `normalize_project()`. Any document
 that still uses old field names will render empty strings for those fields until migrated.
+
+---
+
+### Backfill `version` for existing documents
+
+All documents written before the `version` field was introduced lack the field.
+`normalize_project()` defaults to `1.0` on read, so existing projects display `v1.0`
+without a migration. To persist the value in MongoDB for completeness:
+
+```js
+db.project_settings.updateMany(
+  { version: { $exists: false } },
+  { $set: { version: 1.0 } }
+);
+```

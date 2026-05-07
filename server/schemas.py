@@ -5,6 +5,7 @@ import re
 from datetime import timezone as _timezone
 
 from .model_catalog import get_agent_model_names
+from .util import sanitize_identifier
 
 TEAM_TYPES = ("round_robin", "selector")
 JIRA_TYPES = ("software", "service_desk", "business")
@@ -260,18 +261,7 @@ def validate_agent(data):
         raise ValueError("Agent 'name' is required.")
 
     # AutoGen requires agent names to be valid Python identifiers.
-    # Sanitise: replace spaces/hyphens with underscores, strip the rest.
-    import re
-    sanitised = re.sub(r"[\s\-]+", "_", name)
-    sanitised = re.sub(r"[^\w]", "", sanitised)
-    if sanitised and sanitised[0].isdigit():
-        sanitised = "_" + sanitised
-    if not sanitised or not sanitised.isidentifier():
-        raise ValueError(
-            f"Agent name '{name}' is not a valid identifier. "
-            "Use only letters, digits, and underscores (no spaces or special characters)."
-        )
-    name = sanitised
+    name = sanitize_identifier(name, "Agent name")
 
     model = (data.get("model") or data.get("model_name") or "").strip()
     available_models = get_agent_model_names()
@@ -335,12 +325,17 @@ def _validate_agent_mcp(data, name):
     return scope, {}
 
 
+VALID_QUORUM = {"all", "first_win", "team_choice"}
+
+
 def validate_human_gate(data):
     """Validate and clean the optional human gate configuration."""
     if not isinstance(data, dict):
         return {
             "enabled": False,
             "name": "",
+            "quorum": "",
+            "remote_users": [],
         }
 
     enabled = bool(data.get("enabled", False))
@@ -350,15 +345,45 @@ def validate_human_gate(data):
         raise ValueError("'human_gate.name' is required when human gate is enabled.")
 
     if not enabled:
-        name = ""
+        return {
+            "enabled": False,
+            "name": "",
+            "quorum": "",
+            "remote_users": [],
+        }
+
+    # Sanitize host/leader name — must be a valid identifier (used as AutoGen participant label)
+    name = sanitize_identifier(name, "human_gate.name")
+
+    # Validate remote_users — sanitize name using same rules as validate_agent()
+    remote_users = []
+    for ru in data.get("remote_users") or []:
+        if not isinstance(ru, dict):
+            continue
+        raw_ru_name = (ru.get("name") or "").strip()
+        if not raw_ru_name:
+            continue
+        remote_users.append({
+            "name": sanitize_identifier(raw_ru_name, "Remote user name"),
+            "description": (ru.get("description") or "").strip(),
+        })
+
+    # Quorum: "na" when no remote users, else validate
+    if not remote_users:
+        quorum = "na"
+    else:
+        raw_quorum = (data.get("quorum") or "all").strip()
+        quorum = raw_quorum if raw_quorum in VALID_QUORUM else "all"
 
     return {
         "enabled": enabled,
         "name": name,
+        "quorum": quorum,
+        "remote_users": remote_users,
     }
 
 
-def validate_team(data, human_gate_enabled, assistant_count=None):
+def validate_team(data, human_gate_enabled, assistant_count=0, remote_user_count=0):
     """Validate and clean team configuration."""
     if not isinstance(data, dict):
         data = {}
@@ -367,7 +392,7 @@ def validate_team(data, human_gate_enabled, assistant_count=None):
     if team_type not in TEAM_TYPES:
         raise ValueError(f"'team.type' must be one of {TEAM_TYPES}.")
 
-    if assistant_count == 1 and team_type == "selector":
+    if assistant_count == 1 and remote_user_count < 1 and team_type == "selector":
         raise ValueError(
             "Single-assistant chat mode does not support Selector team type. "
             "Use Round Robin."
@@ -665,6 +690,7 @@ def validate_project(data):
         data.get("team") or {},
         human_gate["enabled"],
         assistant_count=assistant_count,
+        remote_user_count=len(human_gate["remote_users"])
     )
     integrations = validate_integrations(
         data.get("integrations") or {},
@@ -728,9 +754,13 @@ def validate_project(data):
         "mcp_oauth_configs": mcp_oauth_configs,
     }
 
-    # In single-assistant chat mode, Team Setup is not a persisted contract.
-    # Runtime falls back to Round Robin defaults when team config is absent.
-    if assistant_count >= 2:
+    # Team Setup is persisted when there are 2+ agents, or when there is
+    # exactly 1 agent with at least 1 remote user (team config is visible and
+    # honored in that scenario). Pure single-assistant chat mode (1 agent, no
+    # remote users) does not persist team config; runtime uses Round Robin
+    # defaults with unlimited Human Gate continuation until Stop.
+    remote_users_count = len(human_gate.get("remote_users") or [])
+    if assistant_count >= 2 or (assistant_count == 1 and remote_users_count >= 1):
         cleaned["team"] = team
 
     return cleaned

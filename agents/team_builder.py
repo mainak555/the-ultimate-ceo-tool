@@ -11,9 +11,12 @@ if TYPE_CHECKING:
 from autogen_agentchat.base import TerminationCondition
 from autogen_agentchat.messages import BaseChatMessage as _BaseChatMessage, StopMessage
 
+from server.util import sanitize_identifier
+
 from .factory import build_model_client
 from .mcp_tools import build_mcp_workbenches, resolve_mcp_servers_for_agent
 from .prompt_builder import resolve_system_prompt
+from .team_choice_proxy_agent import TeamChoiceProxyAgent
 
 logger = logging.getLogger(__name__)
 
@@ -117,7 +120,7 @@ def build_agent_runtime_spec(
     }
 
 
-def build_team(project: dict, session_id: str | None = None):
+def build_team(project: dict, session_id: str | None = None, remote_users: list | None = None):
     """
     Build an AutoGen team from a normalized project config.
 
@@ -133,8 +136,6 @@ def build_team(project: dict, session_id: str | None = None):
         ExternalTermination instance is stashed in project["_runtime"]["external_termination"]
         so runtime.py can call .set() on it when stop is requested.
     """
-    import re
-
     from autogen_agentchat.agents import AssistantAgent
 
     objective = project.get("objective", "")
@@ -149,11 +150,9 @@ def build_team(project: dict, session_id: str | None = None):
             agent_cfg, project=project, objective=objective, session_id=session_id
         )
         # Ensure name is a valid Python identifier (safety net for legacy docs)
-        safe_name = re.sub(r"[\s\-]+", "_", spec["name"])
-        safe_name = re.sub(r"[^\w]", "", safe_name)
-        if safe_name and safe_name[0].isdigit():
-            safe_name = "_" + safe_name
-        if not safe_name:
+        try:
+            safe_name = sanitize_identifier(spec["name"], "Agent name")
+        except ValueError:
             safe_name = f"agent_{len(agents)}"
         agent_kwargs = {
             "name": safe_name,
@@ -173,6 +172,28 @@ def build_team(project: dict, session_id: str | None = None):
             all_workbenches.extend(wbs)
             mcp_agent_count += 1
         agents.append(AssistantAgent(**agent_kwargs))
+
+    # Add team_choice proxies for remote users. These proxies block per turn
+    # until the selected remote user submits text/files/images.
+    proxy_count = 0
+    if (project.get("human_gate") or {}).get("quorum") == "team_choice" and remote_users:
+        round_number = int(project.get("_current_round") or 0) or None
+        for ru in remote_users:
+            raw_name = ru.get("name") or ""
+            try:
+                safe_proxy_name = sanitize_identifier(raw_name, "Remote user name")
+            except ValueError:
+                safe_proxy_name = f"remote_user_{proxy_count}"
+            agents.append(
+                TeamChoiceProxyAgent(
+                    name=safe_proxy_name,
+                    session_id=session_id or "",
+                    remote_user_name=raw_name,
+                    round_number=round_number,
+                    description=ru.get("description") or "Remote participant",
+                )
+            )
+            proxy_count += 1
 
     # Stash workbenches on the team so runtime can register them after build.
     project.setdefault("_runtime", {})["mcp_workbenches"] = all_workbenches
@@ -223,6 +244,7 @@ def build_team(project: dict, session_id: str | None = None):
                 "human_gate": has_gate,
                 "selector_model": selector_model_name,
                 "mcp_agent_count": mcp_agent_count,
+                "proxy_count": proxy_count,
             },
         )
         return SelectorGroupChat(
@@ -244,6 +266,7 @@ def build_team(project: dict, session_id: str | None = None):
             "max_iterations": max_iter,
             "human_gate": has_gate,
             "mcp_agent_count": mcp_agent_count,
+            "proxy_count": proxy_count,
         },
     )
     return RoundRobinGroupChat(agents, termination_condition=termination)

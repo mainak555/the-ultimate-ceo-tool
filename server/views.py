@@ -11,6 +11,7 @@ import asyncio
 import io
 import json
 import logging
+from typing import Iterable
 from urllib.parse import quote
 from datetime import datetime, timezone
 from uuid import uuid4
@@ -24,6 +25,7 @@ from django.views.decorators.http import require_GET, require_POST, require_http
 from . import services
 from . import attachment_service
 from . import util
+from .util import QUORUM_OPTIONS
 from .logging_utils import bind_request_id, clear_request_id, get_request_id
 from core.tracing import context_from_traceparent, start_root_span
 
@@ -31,16 +33,11 @@ from core.tracing import context_from_traceparent, start_root_span
 logger = logging.getLogger(__name__)
 
 
-SUPPORTED_EXPORT_PROVIDERS = ("trello", "jira", "pdf", "n8n")
-EXPORT_PROVIDER_LABELS = {
-    "trello": "Trello",
-    "jira": "Jira",
-    "jira_software": "Jira Software",
-    "jira_service_desk": "Jira Service Desk",
-    "jira_business": "Jira Business",
-    "pdf": "PDF",
-    "n8n": "n8n",
-}
+# Export provider constants imported from util — single source of truth.
+from .util import (  # noqa: E402
+    SUPPORTED_EXPORT_PROVIDERS,
+    EXPORT_PROVIDER_LABELS,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -67,10 +64,28 @@ def _get_form_context(project=None, mode="create", success=None):
             "service_desk": services.get_jira_export_prompt_hint("service_desk"),
             "business": services.get_jira_export_prompt_hint("business"),
         },
+        "quorum_options": QUORUM_OPTIONS,
     }
     if success:
         context["success"] = success
     return context
+
+
+def _parse_form_remote_users(post_data):
+    """
+    Extract remote_users list from the flat POST form data.
+
+    Form fields: human_gate[remote_users][0][name], human_gate[remote_users][0][description], ...
+    """
+    remote_users = []
+    idx = 0
+    while f"human_gate[remote_users][{idx}][name]" in post_data:
+        remote_users.append({
+            "name": post_data.get(f"human_gate[remote_users][{idx}][name]", "").strip(),
+            "description": post_data.get(f"human_gate[remote_users][{idx}][description]", "").strip(),
+        })
+        idx += 1
+    return remote_users
 
 
 def _parse_form_agents(post_data):
@@ -165,6 +180,8 @@ def _build_project_data(post_data, existing_project=None):
         "human_gate": {
             "enabled": human_gate_enabled,
             "name": post_data.get("human_gate[name]", "").strip(),
+            "quorum": post_data.get("human_gate[quorum]", "all").strip(),
+            "remote_users": _parse_form_remote_users(post_data),
         },
         "team": {
             "type": post_data.get("team[type]", "round_robin").strip(),
@@ -231,12 +248,21 @@ def _parse_mcp_secrets(post_data):
 
 
 def _normalize_export_agents(raw_agents):
-    """Return a clean list of export agent names."""
-    if isinstance(raw_agents, str):
-        raw_agents = [raw_agents] if raw_agents else []
-    if not isinstance(raw_agents, list):
-        return []
-    return [name.strip() for name in raw_agents if isinstance(name, str) and name.strip()]
+    """Delegate to the shared util helper."""
+    from .util import normalize_export_agents
+    return normalize_export_agents(raw_agents)
+
+
+def _build_export_meta(project):
+    """Delegate to the shared util helper."""
+    from .util import build_export_meta
+    return build_export_meta(project)
+
+
+def _filter_export_providers(export_meta, agent_name):
+    """Delegate to the shared util helper."""
+    from .util import filter_export_providers
+    return filter_export_providers(export_meta, agent_name)
 
 
 def _parse_attachment_ids(post_data):
@@ -339,62 +365,168 @@ def _build_agent_task_for_run(task_text: str, session_id: str, attachment_ids):
     return MultiModalMessage(content=content, source="user")
 
 
-def _build_export_meta(project):
-    """Build provider metadata for export actions from project integrations."""
-    integrations = project.get("integrations") if isinstance(project, dict) else {}
-    if not isinstance(integrations, dict) or not integrations.get("enabled", False):
-        return None
+def _resolve_gate_expected_names(project: dict, session_id: str, gate_name: str) -> list[str]:
+    """Return quorum participant names for the current gate round.
 
-    providers = []
-    for provider_name in SUPPORTED_EXPORT_PROVIDERS:
-        provider_cfg = integrations.get(provider_name)
-        if not isinstance(provider_cfg, dict) or not provider_cfg.get("enabled", False):
-            continue
+    Remote users marked as ignored for this session are excluded from the
+    required responder list.
+    """
+    remote_users = (project.get("human_gate") or {}).get("remote_users") or []
+    remote_names = [
+        ru["name"]
+        for ru in remote_users
+        if isinstance(ru, dict) and ru.get("name")
+    ]
+    if not remote_names:
+        return [gate_name]
 
-        if provider_name == "jira":
-            # Emit one entry per enabled Jira sub-type, each with its own export_agents
-            for jira_type in ("software", "service_desk", "business"):
-                type_cfg = provider_cfg.get(jira_type) or {}
-                if not type_cfg.get("enabled", False):
-                    continue
-                sub_key = f"jira_{jira_type}"
-                providers.append({
-                    "name": sub_key,
-                    "label": EXPORT_PROVIDER_LABELS.get(sub_key, sub_key.replace("_", " ").title()),
-                    "export_agents": _normalize_export_agents(type_cfg.get("export_agents")),
-                })
-            continue
+    try:
+        from agents.session_coordination import get_remote_user_statuses
+        statuses = get_remote_user_statuses(session_id, remote_names)
+    except Exception:
+        statuses = {}
 
-        providers.append({
-            "name": provider_name,
-            "label": EXPORT_PROVIDER_LABELS.get(provider_name, provider_name.title()),
-            "export_agents": _normalize_export_agents(provider_cfg.get("export_agents")),
-        })
+    active_remote_names = [
+        name for name in remote_names
+        if statuses.get(name, "offline") != "ignored"
+    ]
+    return [gate_name] + active_remote_names
 
-    if not providers:
-        return None
 
-    return {
-        "enabled": True,
-        "providers": providers,
+def _append_user_message_and_publish(
+    *,
+    session_id: str,
+    agent_name: str,
+    text: str,
+    attachment_ids: list[str] | None,
+    origin: str,
+) -> dict:
+    """Persist one user message to discussions and publish it to session pub/sub."""
+    message_id = str(uuid4())
+    attachments = attachment_service.bind_attachments_to_message(
+        session_id=session_id,
+        message_id=message_id,
+        attachment_ids=attachment_ids or [],
+    )
+    display_attachments = _enrich_attachments_for_display(session_id, attachments)
+    ts_dt = datetime.now(timezone.utc)
+    record = {
+        "id": message_id,
+        "agent_name": agent_name,
+        "role": "user",
+        "content": text,
+        "attachments": display_attachments,
+        "timestamp": ts_dt,
     }
+    services.append_messages(session_id, [record])
+
+    sse_record = dict(record)
+    sse_record["timestamp"] = ts_dt.isoformat()
+    sse_record["user_origin"] = origin
+    _publish_session_message_safe(session_id, sse_record)
+    return record
 
 
-def _filter_export_providers(export_meta, agent_name):
-    """Return export providers visible for a given agent name."""
-    if not export_meta or not export_meta.get("enabled"):
-        return []
+def _ordered_quorum_names_for_compose(project: dict, expected_names: Iterable[str], gate_name: str) -> list[str]:
+    """Return composition order: configured remote users first, then gate user."""
+    expected = [name for name in (expected_names or []) if isinstance(name, str) and name.strip()]
+    expected_set = set(expected)
 
-    target = (agent_name or "").strip().lower()
-    visible = []
-    for provider in export_meta.get("providers") or []:
-        allowlist = provider.get("export_agents") or []
-        if not allowlist:
-            visible.append(provider)
+    remote_users = (project.get("human_gate") or {}).get("remote_users") or []
+    ordered: list[str] = []
+
+    for ru in remote_users:
+        if not isinstance(ru, dict):
             continue
-        if any((name or "").strip().lower() == target for name in allowlist):
-            visible.append(provider)
-    return visible
+        name = (ru.get("name") or "").strip()
+        if not name or name == gate_name:
+            continue
+        if name in expected_set and name not in ordered:
+            ordered.append(name)
+
+    for name in expected:
+        if name == gate_name:
+            continue
+        if name not in ordered:
+            ordered.append(name)
+
+    if gate_name in expected_set:
+        ordered.append(gate_name)
+    return ordered
+
+
+def _build_quorum_composed_payload(
+    session_id: str,
+    project: dict,
+    expected_names: list[str],
+    responses: dict,
+    gate_name: str,
+    winner_name: str | None = None,
+) -> tuple[str, list[str]]:
+    """Build composed markdown payload and merged attachment ids for quorum runs."""
+    responder_order = [winner_name] if winner_name else _ordered_quorum_names_for_compose(
+        project,
+        expected_names,
+        gate_name,
+    )
+
+    lookup_ids: list[str] = []
+    seen_lookup: set[str] = set()
+    for responder in responder_order:
+        payload = (responses or {}).get(responder) or {}
+        for raw_id in payload.get("attachment_ids") or []:
+            aid = str(raw_id or "").strip()
+            if not aid or aid in seen_lookup:
+                continue
+            lookup_ids.append(aid)
+            seen_lookup.add(aid)
+
+    descriptors = attachment_service.get_attachment_descriptors(
+        session_id=session_id,
+        attachment_ids=lookup_ids,
+    )
+    descriptor_by_id = {d.get("id"): d for d in descriptors}
+
+    sections: list[str] = []
+    merged_attachment_ids: list[str] = []
+    seen_merged: set[str] = set()
+
+    for responder in responder_order:
+        payload = (responses or {}).get(responder) or {}
+        text = (payload.get("text") or "").strip()
+        attachment_ids = [
+            str(raw_id or "").strip()
+            for raw_id in (payload.get("attachment_ids") or [])
+            if str(raw_id or "").strip()
+        ]
+
+        if not text and not attachment_ids:
+            continue
+
+        if responder == gate_name:
+            header = f"### {responder}:"
+        else:
+            header = f"### {responder}:"
+
+        lines = [header]
+        if text:
+            lines.append(text)
+
+        lines.append("attachment references:")
+        for aid in attachment_ids:
+            if aid not in seen_merged:
+                seen_merged.add(aid)
+                merged_attachment_ids.append(aid)
+            descriptor = descriptor_by_id.get(aid) or {}
+            filename = descriptor.get("filename") or aid
+            url = f"/chat/sessions/{session_id}/attachments/{aid}/content/"
+            lines.append(f"- {filename}: {url}")
+
+        sections.append("\n".join(lines))
+
+    if not sections:
+        return "", []
+    return "## User Replies\n\n" + "\n\n".join(sections), merged_attachment_ids
 
 
 def _build_history_messages(session, export_meta):
@@ -431,6 +563,7 @@ def _render_shell(request, projects=None, auto_open_create=False):
         "default_system_prompt": services.get_system_prompt_template(),
         "selector_prompt_hint": services.get_selector_prompt_hint(),
         "trello_export_prompt_hint": services.get_trello_export_prompt_hint(),
+        "quorum_options": QUORUM_OPTIONS,
     })
 
 
@@ -438,7 +571,10 @@ def _render_shell(request, projects=None, auto_open_create=False):
 def index(request):
     """Render the chat home page."""
     projects = services.list_projects()
-    return render(request, "server/home.html", {"projects": projects})
+    return render(request, "server/home.html", {
+        "projects": projects,
+        "quorum_options_json": json.dumps(QUORUM_OPTIONS),
+    })
 
 
 @require_GET
@@ -611,7 +747,7 @@ def chat_session_list(request):
     export_meta = _build_export_meta(project)
     list_html = render_to_string(
         "server/partials/chat_session_list.html",
-        {"sessions": sessions, "project_id": project_id},
+        {"sessions": sessions, "project_id": project_id, "project": project},
         request=request,
     )
     context_html = render_to_string(
@@ -637,6 +773,9 @@ def chat_session_create(request):
     project_id = request.POST.get("project_id", "").strip()
     description = request.POST.get("description", "").strip()
     try:
+        project = services.get_project(project_id)
+        if project is None:
+            return HttpResponse('<div class="alert alert-error">Project not found.</div>', status=404)
         session = services.create_chat_session(project_id, description)
     except ValueError as e:
         return HttpResponse(f'<div class="alert alert-error">{e}</div>', status=400)
@@ -645,11 +784,10 @@ def chat_session_create(request):
     # content (the modal closes via HX-Trigger). OOB swaps update the sidebar
     # list and the main messages panel.
     sessions = services.list_chat_sessions(project_id)
-    project = services.get_project(project_id)
     export_meta = _build_export_meta(project)
     list_html = render_to_string(
         "server/partials/chat_session_list.html",
-        {"sessions": sessions, "project_id": project_id, "active_session_id": session["session_id"]},
+        {"sessions": sessions, "project_id": project_id, "active_session_id": session["session_id"], "project": project},
         request=request,
     )
     history_html = render_to_string(
@@ -686,11 +824,26 @@ def chat_session_detail(request, session_id):
         )
     project = services.get_project(session["project_id"]) if session.get("project_id") else None
     export_meta = _build_export_meta(project)
+
+    # For sessions awaiting remote users, resolve the effective quorum so the
+    # template can embed it in data-quorum and the JS dropdown renders immediately
+    # on session switch / page reload (without waiting for the WS state message).
+    session_quorum = None
+    if session.get("status") == "awaiting_remote_users":
+        try:
+            from agents.session_coordination import get_session_quorum  # noqa: PLC0415
+            session_quorum = get_session_quorum(session_id)
+        except Exception:  # noqa: BLE001
+            pass
+        if not session_quorum and project:
+            session_quorum = (project.get("human_gate") or {}).get("quorum") or "na"
+
     return render(request, "server/partials/chat_session_history.html", {
         "session": session,
         "project": project,
         "history_export_meta": export_meta,
         "history_messages": _build_history_messages(session, export_meta),
+        "session_quorum": session_quorum or "na",
     })
 
 
@@ -702,6 +855,32 @@ def chat_session_delete(request, session_id):
             '<div class="alert alert-error">Unauthorized.</div>',
             status=403,
         )
+
+    # Best-effort cleanup for ephemeral Redis coordination keys.
+    session = services.get_chat_session(session_id)
+    if session:
+        try:
+            from agents.session_coordination import (
+                purge_remote_user_session_keys,
+                revoke_guest_token,
+            )
+
+            project = services.get_project(session.get("project_id", ""))
+            remote_users_cfg = ((project or {}).get("human_gate") or {}).get("remote_users") or []
+            remote_names = [
+                r.get("name")
+                for r in remote_users_cfg
+                if isinstance(r, dict) and r.get("name")
+            ]
+            if remote_names:
+                purge_remote_user_session_keys(session_id, remote_names)
+            revoke_guest_token(session_id)
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "agents.session.redis_cleanup_failed",
+                extra={"session_id": session_id, "phase": "delete"},
+            )
+
     try:
         services.delete_chat_session(session_id)
     except ValueError as e:
@@ -726,10 +905,11 @@ def chat_session_update(request, session_id):
 
     # Re-render the session list so the sidebar reflects the updated description.
     project_id = session.get("project_id", "")
+    project = services.get_project(project_id)
     sessions = services.list_chat_sessions(project_id)
     list_html = render_to_string(
         "server/partials/chat_session_list.html",
-        {"sessions": sessions, "project_id": project_id, "active_session_id": session["session_id"]},
+        {"sessions": sessions, "project_id": project_id, "active_session_id": session["session_id"], "project": project},
         request=request,
     )
     oob_list = f'<div id="chat-history-list" hx-swap-oob="innerHTML">{list_html}</div>'
@@ -752,6 +932,35 @@ def chat_session_update(request, session_id):
 def _sse(event: str, data: dict) -> str:
     """Format a single SSE frame."""
     return f"event: {event}\ndata: {util.json_dumps(data)}\n\n"
+
+
+def _publish_session_message_safe(session_id: str, sse_record: dict) -> None:
+    """Publish an agent message to the session pub/sub channel for remote users.
+
+    Failures are silently swallowed — remote user display is advisory only
+    and must never block the host SSE stream.
+    """
+    try:
+        from agents.session_coordination import publish_session_message
+        publish_session_message(session_id, {"type": "message", "message": sse_record})
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _publish_session_event_safe(session_id: str, event_name: str, payload: dict | None = None) -> None:
+    """Publish a non-message session event for remote user live UI sync.
+
+    Event publishing is best-effort and must never block the host run stream.
+    """
+    try:
+        from agents.session_coordination import publish_session_message
+        publish_session_message(session_id, {
+            "type": "run_status",
+            "event": event_name,
+            **(payload or {}),
+        })
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _friendly_run_error(exc: Exception) -> str:
@@ -859,7 +1068,7 @@ async def chat_session_run(request, session_id):
     if session is None:
         return util.json_error("Session not found", 404)
 
-    valid_states = ("idle", "awaiting_input", "awaiting_mcp_oauth")
+    valid_states = ("idle", "awaiting_input", "awaiting_mcp_oauth", "awaiting_remote_users")
     if session["status"] not in valid_states:
         return util.json_error(f"Session is currently '{session['status']}'", 409)
 
@@ -881,13 +1090,15 @@ async def chat_session_run(request, session_id):
     if is_first_run and not task and not attachment_ids:
         return util.json_error("'task' is required to start a conversation.", 400)
 
-    # Single-assistant chat mode: empty Continue is invalid (no new context for agent).
-    # Attachments alone are not sufficient — a text message is required.
-    is_single_assistant_gate = (
+    # Single-assistant chat mode (unlimited continuation) only applies
+    # when there are no remote users. When remote users are present,
+    # the team config (max_iterations) is honored instead.
+    is_single_assistant_chat_mode = (
         project.get("human_gate", {}).get("enabled", False)
         and len(project.get("agents") or []) == 1
+        and not (project.get("human_gate") or {}).get("remote_users")
     )
-    if is_single_assistant_gate and not is_first_run and not task:
+    if is_single_assistant_chat_mode and not is_first_run and not task:
         return util.json_error("A message is required to continue.", 400)
 
     # MCP OAuth pre-run gate: any reachable MCP server that requires OAuth and
@@ -920,6 +1131,66 @@ async def chat_session_run(request, session_id):
             status=409,
         )
 
+    # Remote-user pre-run gate: when remote users are configured, all must
+    # be online (or host-ignored) before the run starts.
+    remote_users_cfg = (project.get("human_gate") or {}).get("remote_users") or []
+    if remote_users_cfg:
+        from agents.session_coordination import (
+            clear_remote_user_readiness_latch,
+            has_remote_user_readiness_latch,
+        )
+        readiness_latched = False
+        try:
+            readiness_latched = await asyncio.to_thread(
+                has_remote_user_readiness_latch,
+                session_id,
+            )
+        except Exception:  # noqa: BLE001
+            readiness_latched = False
+
+        pending_remote = await asyncio.to_thread(
+            services.compute_pending_remote_users, project, session_id
+        )
+        if pending_remote is None and readiness_latched:
+            try:
+                await asyncio.to_thread(clear_remote_user_readiness_latch, session_id)
+            except Exception:  # noqa: BLE001
+                pass
+
+        if pending_remote is not None:
+            all_names = [r["name"] for r in remote_users_cfg if isinstance(r, dict) and r.get("name")]
+            from agents.session_coordination import (
+                get_remote_user_statuses,
+                get_session_quorum,
+            )
+            statuses = await asyncio.to_thread(get_remote_user_statuses, session_id, all_names)
+            online_count = sum(1 for s in statuses.values() if s == "online")
+            ignored_count = sum(1 for s in statuses.values() if s == "ignored")
+            required_count = len(all_names) - ignored_count
+            await asyncio.to_thread(services.set_session_awaiting_remote_users, session_id)
+            project_quorum = (project.get("human_gate") or {}).get("quorum", "na")
+            effective_quorum = await asyncio.to_thread(get_session_quorum, session_id) or project_quorum
+            logger.info(
+                "agents.remote_user.gate_blocked",
+                extra={
+                    "session_id": session_id,
+                    "pending_count": len(pending_remote),
+                    "pending_users": pending_remote,
+                },
+            )
+            return JsonResponse(
+                {
+                    "status": "awaiting_remote_users",
+                    "users": [
+                        {"name": n, "status": statuses.get(n, "offline")} for n in all_names
+                    ],
+                    "required_count": required_count,
+                    "online_count": online_count,
+                    "quorum": effective_quorum,
+                },
+                status=409,
+            )
+
     from agents.session_coordination import (
         SessionCoordinationError,
         acquire_run_lease,
@@ -927,10 +1198,20 @@ async def chat_session_run(request, session_id):
         ensure_redis_available,
         get_heartbeat_interval_seconds,
         get_instance_id,
+        get_session_quorum,
         is_cancel_signaled,
         release_run_lease,
         renew_run_lease,
     )
+
+    # Apply per-session quorum override (set via dropdown in the waiting panel).
+    _quorum_override = await asyncio.to_thread(get_session_quorum, session_id)
+    if _quorum_override and (project.get("human_gate") or {}).get("remote_users"):
+        import copy as _copy
+        project = _copy.deepcopy(project)
+        if project.get("human_gate") is None:
+            project["human_gate"] = {}
+        project["human_gate"]["quorum"] = _quorum_override
 
     owner_id = get_instance_id()
 
@@ -962,6 +1243,7 @@ async def chat_session_run(request, session_id):
                     extra={"session_id": session_id, "phase": "release_conflict"},
                 )
             return util.json_error("Session status changed before run start.", 409)
+        _publish_session_event_safe(session_id, "running", {"status": "running"})
         # Clean up the OAuth readiness counter — it is no longer needed once running.
         from agents.session_coordination import delete_mcp_oauth_readiness
         await asyncio.to_thread(delete_mcp_oauth_readiness, session_id)
@@ -1013,7 +1295,7 @@ async def chat_session_run(request, session_id):
             except Exception:  # noqa: BLE001
                 pass
         from autogen_agentchat.base import TaskResult
-        from autogen_agentchat.messages import TextMessage, ToolCallSummaryMessage
+        from autogen_agentchat.messages import MultiModalMessage, TextMessage, ToolCallSummaryMessage
         from agents.runtime import (
             evict_team,
             get_or_build_team,
@@ -1049,66 +1331,88 @@ async def chat_session_run(request, session_id):
                     return
 
         try:
-            try:
-                team, _, cache_miss = get_or_build_team(session_id, project)
-                if cache_miss:
-                    saved_state = await asyncio.to_thread(services.get_agent_state, session_id)
-                    if saved_state:
-                        try:
-                            await load_team_state(team, saved_state)
-                        except Exception:
-                            evict_team(session_id)
-                            await asyncio.to_thread(services.set_session_status, session_id, "stopped")
-                            yield _sse("error", {"message": "Unable to restart: state version mismatch."})
-                            return
-            except Exception as exc:
-                evict_team(session_id)
-                # If the failure is a missing/expired MCP OAuth token,
-                # re-park the session in awaiting_oauth and surface the same
-                # in-history authorization card via an SSE event so the
-                # frontend swap path is identical to the pre-run gate.
-                pending_oauth_mid = await asyncio.to_thread(
-                    services.compute_pending_oauth_servers, raw_project, session_id
+            team, _, cache_miss = get_or_build_team(
+                session_id,
+                project,
+                remote_users=(project.get("human_gate") or {}).get("remote_users") or [],
+            )
+            if cache_miss:
+                saved_state = await asyncio.to_thread(services.get_agent_state, session_id)
+                if saved_state:
+                    try:
+                        await load_team_state(team, saved_state)
+                    except Exception:
+                        evict_team(session_id)
+                        await asyncio.to_thread(services.set_session_status, session_id, "stopped")
+                        _publish_session_event_safe(session_id, "stopped", {"status": "stopped"})
+                        yield _sse("error", {"message": "Unable to restart: state version mismatch."})
+                        return
+        except Exception as exc:
+            evict_team(session_id)
+            # If the failure is a missing/expired MCP OAuth token,
+            # re-park the session in awaiting_oauth and surface the same
+            # in-history authorization card via an SSE event so the
+            # frontend swap path is identical to the pre-run gate.
+            pending_oauth_mid = await asyncio.to_thread(
+                services.compute_pending_oauth_servers, raw_project, session_id
+            )
+            if pending_oauth_mid:
+                all_oauth_mid = await asyncio.to_thread(
+                    services.list_all_reachable_oauth_servers, raw_project
                 )
-                if pending_oauth_mid:
-                    all_oauth_mid = await asyncio.to_thread(
-                        services.list_all_reachable_oauth_servers, raw_project
-                    )
-                    authorized_count_mid = max(0, len(all_oauth_mid) - len(pending_oauth_mid))
-                    from agents.session_coordination import init_mcp_oauth_readiness
-                    await asyncio.to_thread(
-                        init_mcp_oauth_readiness, session_id, authorized_count_mid
-                    )
-                    await asyncio.to_thread(
-                        services.set_session_awaiting_oauth, session_id, pending_oauth_mid
-                    )
-                    logger.info(
-                        "agents.mcp.oauth_gate_blocked_midrun",
-                        extra={
-                            "session_id": session_id,
-                            "server_count": len(pending_oauth_mid),
-                            "server_names": pending_oauth_mid,
-                        },
-                    )
-                    yield _sse("awaiting_mcp_oauth", {"servers": pending_oauth_mid})
-                    return
-                await asyncio.to_thread(services.set_session_status, session_id, "idle")
-                yield _sse("error", {"message": str(exc)})
+                authorized_count_mid = max(0, len(all_oauth_mid) - len(pending_oauth_mid))
+                from agents.session_coordination import init_mcp_oauth_readiness
+                await asyncio.to_thread(
+                    init_mcp_oauth_readiness, session_id, authorized_count_mid
+                )
+                await asyncio.to_thread(
+                    services.set_session_awaiting_oauth, session_id, pending_oauth_mid
+                )
+                _publish_session_event_safe(
+                    session_id,
+                    "awaiting_mcp_oauth",
+                    {"status": "awaiting_mcp_oauth"},
+                )
+                logger.info(
+                    "agents.mcp.oauth_gate_blocked_midrun",
+                    extra={
+                        "session_id": session_id,
+                        "server_count": len(pending_oauth_mid),
+                        "server_names": pending_oauth_mid,
+                    },
+                )
+                yield _sse("awaiting_mcp_oauth", {"servers": pending_oauth_mid})
                 return
-
+            await asyncio.to_thread(services.set_session_status, session_id, "idle")
+            _publish_session_event_safe(session_id, "idle", {"status": "idle"})
+            yield _sse("error", {"message": str(exc)})
+            return
+        
+        try:            
             # Issue a fresh cancellation token for this run
             cancel_token = reset_cancel_token(session_id)
 
             has_gate = project.get("human_gate", {}).get("enabled", False)
             max_iter = project.get("team", {}).get("max_iterations", 5)
-            is_single_assistant_chat_mode = (
-                has_gate and len(project.get("agents") or []) == 1
-            )
-
+            
             # Export integration metadata for client-side export actions.
             export_meta = _build_export_meta(project)
 
             pending_messages = []
+            remote_user_names = [
+                str(ru.get("name") or "")
+                for ru in ((project.get("human_gate") or {}).get("remote_users") or [])
+                if isinstance(ru, dict) and str(ru.get("name") or "").strip()
+            ]
+            team_choice_proxy_sources = set()
+            if (project.get("human_gate") or {}).get("quorum") == "team_choice":
+                for name in remote_user_names:
+                    try:
+                        team_choice_proxy_sources.add(
+                            util.sanitize_identifier(name, "Remote user name")
+                        )
+                    except ValueError:
+                        continue
 
             async def checkpoint_state() -> None:
                 state = await save_team_state(team)
@@ -1124,8 +1428,29 @@ async def chat_session_run(request, session_id):
                         extra={"session_id": session_id, "error": str(_exc)},
                     )
 
+            # Check for a quorum-composed task pre-persisted at respond time.
+            # When present: ordered per-user discussion entries were already
+            # inserted in chat_session_respond; run the agent with the stored
+            # task without adding a duplicate human discussion entry.
+            from agents.session_coordination import pop_pending_task as _pop_pending_task
+            _pending = await asyncio.to_thread(_pop_pending_task, session_id)
+
             # Persist the human's message (initial task or gate notes) to discussions.
-            if task or attachment_ids:
+            if _pending is not None:
+                _pending_task_text = _pending.get("task") or ""
+                _pending_attachment_ids = _pending.get("attachment_ids") or []
+                _text_with_context = _pending_task_text + await asyncio.to_thread(
+                    attachment_service.build_attachment_context_block,
+                    session_id=session_id,
+                    attachment_ids=_pending_attachment_ids,
+                )
+                task_for_agent = await asyncio.to_thread(
+                    _build_agent_task_for_run,
+                    _text_with_context,
+                    session_id,
+                    _pending_attachment_ids,
+                )
+            elif task or attachment_ids:
                 human_name = project.get("human_gate", {}).get("name") or "You"
                 human_message_id = str(uuid4())
                 attachments = await asyncio.to_thread(
@@ -1160,6 +1485,16 @@ async def chat_session_run(request, session_id):
                     "attachments": attachments_for_display,
                     "timestamp": datetime.now(timezone.utc),  # BSON Date in MongoDB
                 })
+                if (project.get("human_gate") or {}).get("remote_users"):
+                    _publish_session_message_safe(session_id, {
+                        "id": human_message_id,
+                        "agent_name": human_name,
+                        "role": "user",
+                        "content": task,
+                        "attachments": attachments_for_display,
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "user_origin": "host",
+                    })
                 task = task_for_agent
             else:
                 task_for_agent = task
@@ -1177,7 +1512,7 @@ async def chat_session_run(request, session_id):
             # (pending_messages is only built when task or attachment_ids are
             # present, and both are falsy in this branch) and is NOT shown in the
             # chat UI (the SSE loop only emits TextMessage where source!="user").
-            effective_task: str | None = task_for_agent if task_for_agent else None
+            effective_task = task_for_agent if task_for_agent else None
             if effective_task is None and not is_first_run:
                 effective_task = "Continue."
 
@@ -1214,12 +1549,25 @@ async def chat_session_run(request, session_id):
                                 "max_rounds": None if is_single_assistant_chat_mode else max_iter,
                                 "human_name": project["human_gate"]["name"],
                                 "chat_mode": "single_assistant" if is_single_assistant_chat_mode else "team",
+                                "quorum": (project.get("human_gate") or {}).get("quorum") or "na",
                             }
                             if export_meta:
                                 gate_data["export"] = export_meta
+                            _publish_session_event_safe(
+                                session_id,
+                                "awaiting_input",
+                                {
+                                    "status": "awaiting_input",
+                                    "round": gate_data["round"],
+                                    "max_rounds": gate_data["max_rounds"] or 0,
+                                    "chat_mode": gate_data["chat_mode"],
+                                    "quorum": gate_data.get("quorum") or "na",
+                                },
+                            )
                             yield _sse("gate", gate_data)
                         else:
                             await asyncio.to_thread(services.set_session_status, session_id, "completed")
+                            _publish_session_event_safe(session_id, "completed", {"status": "completed"})
                             evict_team(session_id)
                             done_data = {"status": "completed", "round": current_round}
                             if export_meta:
@@ -1227,6 +1575,10 @@ async def chat_session_run(request, session_id):
                             yield _sse("done", done_data)
 
                     elif isinstance(msg, TextMessage) and msg.source != "user":
+                        if msg.source in team_choice_proxy_sources:
+                            # team_choice remote user messages are already persisted
+                            # by remote_user_respond; skip duplicate assistant echo.
+                            continue
                         ts_dt = datetime.now(timezone.utc)  # BSON Date for MongoDB
                         ts_iso = ts_dt.isoformat()           # ISO string for SSE JSON
                         record = {
@@ -1243,6 +1595,14 @@ async def chat_session_run(request, session_id):
                         if export_meta:
                             sse_record["export"] = export_meta
                         yield _sse("message", sse_record)
+                        if (project.get("human_gate") or {}).get("remote_users"):
+                            await asyncio.to_thread(
+                                _publish_session_message_safe, session_id, sse_record
+                            )
+
+                    elif isinstance(msg, MultiModalMessage) and msg.source != "user":
+                        if msg.source in team_choice_proxy_sources:
+                            continue
 
                     elif isinstance(msg, ToolCallSummaryMessage) and msg.source != "user":
                         # Emitted when reflect_on_tool_use is False or unavailable.
@@ -1263,6 +1623,28 @@ async def chat_session_run(request, session_id):
                         if export_meta:
                             sse_record["export"] = export_meta
                         yield _sse("message", sse_record)
+                        if (project.get("human_gate") or {}).get("remote_users"):
+                            await asyncio.to_thread(
+                                _publish_session_message_safe, session_id, sse_record
+                            )
+
+                    elif type(msg).__name__ == "UserInputRequestedEvent":
+                        # team_choice quorum: proxy turn requested.
+                        # Emit a breadcrumb SSE event for remote UI turn gating.
+                        proxy_name = getattr(msg, "source", "")
+                        request_id = str(getattr(msg, "request_id", ""))
+                        logger.info(
+                            "agents.session.team_choice_turn_requested",
+                            extra={
+                                "session_id": session_id,
+                                "proxy_name": proxy_name,
+                                "request_id": request_id,
+                            },
+                        )
+                        yield _sse("remote_input_requested", {
+                            "proxy_name": proxy_name,
+                            "request_id": request_id,
+                        })
 
             except asyncio.CancelledError:
                 if pending_messages:
@@ -1273,6 +1655,7 @@ async def chat_session_run(request, session_id):
                     # Stop should still succeed even if persistence fails here.
                     pass
                 await asyncio.to_thread(services.set_session_status, session_id, "stopped")
+                _publish_session_event_safe(session_id, "stopped", {"status": "stopped"})
                 evict_team(session_id)
                 if lease_lost:
                     yield _sse("error", {"message": "Run lease lost; session stopped."})
@@ -1305,6 +1688,7 @@ async def chat_session_run(request, session_id):
                         extra={"session_id": session_id},
                     )
                 await asyncio.to_thread(services.set_session_status, session_id, "idle")
+                _publish_session_event_safe(session_id, "idle", {"status": "idle"})
                 evict_team(session_id)
                 # AutoGen's BaseGroupChat wraps exceptions as:
                 #   raise RuntimeError(str(message.error))
@@ -1402,6 +1786,12 @@ def chat_session_respond(request, session_id):
         return util.json_error("Session not found", 404)
 
     if session["status"] != "awaiting_input":
+        current_status = str(session.get("status") or "")
+        if current_status == "idle":
+            return util.json_response({
+                "status": "stale",
+                "message": "This gate round is already committed. Waiting for run to resume.",
+            }, status=409)
         return util.json_error(f"Session is not awaiting input (status: {session['status']})", 409)
 
     action = request.POST.get("action", "").strip()
@@ -1411,15 +1801,177 @@ def chat_session_respond(request, session_id):
     if action == "stop":
         from agents.runtime import evict_team
         services.set_session_status(session_id, "stopped")
+        _publish_session_event_safe(session_id, "stopped", {"status": "stopped"})
         evict_team(session_id)
         return HttpResponse(util.json_dumps({"status": "stopped"}), content_type="application/json")
 
     if action == "continue":
-        services.set_session_status(session_id, "idle")
-        return HttpResponse(
-            util.json_dumps({"status": "ok", "task": text, "attachment_ids": attachment_ids}),
-            content_type="application/json",
+        project = services.get_project(session["project_id"])
+        quorum = (project.get("human_gate") or {}).get("quorum") or "na" if project else "na"
+        remote_users = (project.get("human_gate") or {}).get("remote_users") or []
+        gate_name = (project.get("human_gate") or {}).get("name") or "You" if project else "You"
+        round_number = int(session.get("current_round") or 1)
+
+        # No-remote mode: standard gate continue with immediate run resume.
+        if quorum in ("na", "team_choice") or not remote_users:
+            # No quorum — standard gate: gate user responds, run resumes immediately.
+            services.set_session_status(session_id, "idle")
+            return HttpResponse(
+                util.json_dumps({"status": "ok", "task": text, "attachment_ids": attachment_ids}),
+                content_type="application/json",
+            )
+
+        # Quorum path (first_win | all).
+        # Individual Redis keys per responder — no shared hash, no write contention.
+        from agents.session_coordination import (
+            check_all_gate_responses,
+            claim_gate_winner,
+            clear_gate_responses,
+            get_gate_response,
+            publish_remote_user_event,
+            store_gate_response,
+            store_pending_task,
         )
+
+        expected_names = _resolve_gate_expected_names(project, session_id, gate_name)
+
+        # first_win mode: first accepted response commits the round immediately.
+        if quorum == "first_win":
+            # Atomic winner claim: only the first POST proceeds.
+            claimed = claim_gate_winner(session_id, gate_name, round_number=round_number)
+            if not claimed:
+                return util.json_response({
+                    "status": "locked",
+                    "message": "Another participant already continued this run.",
+                }, status=409)
+            store_gate_response(
+                session_id,
+                gate_name,
+                text,
+                attachment_ids,
+                round_number=round_number,
+            )
+            _append_user_message_and_publish(
+                session_id=session_id,
+                agent_name=gate_name,
+                text=text,
+                attachment_ids=attachment_ids,
+                origin="host",
+            )
+            composed_task, merged_attachment_ids = _build_quorum_composed_payload(
+                session_id,
+                project,
+                expected_names,
+                {gate_name: {"text": text, "attachment_ids": attachment_ids}},
+                gate_name,
+                winner_name=gate_name,
+            )
+            if composed_task or merged_attachment_ids:
+                store_pending_task(session_id, composed_task, merged_attachment_ids)
+            clear_gate_responses(session_id, expected_names, round_number=round_number)
+            services.set_session_status(session_id, "idle")
+            publish_remote_user_event(session_id, {
+                "type": "quorum_committed",
+                "round": round_number,
+                "quorum": "first_win",
+                "winner": gate_name,
+            })
+            return HttpResponse(
+                util.json_dumps({
+                    "status": "ok",
+                    "task": "",
+                    "attachment_ids": [],
+                    "pending_task_ready": True,
+                }),
+                content_type="application/json",
+            )
+
+        # all mode: collect every responder, then host explicitly finalizes continue.
+        if quorum == "all":
+            existing_gate = get_gate_response(session_id, gate_name, round_number=round_number) or {}
+            if not existing_gate:
+                store_gate_response(
+                    session_id,
+                    gate_name,
+                    text,
+                    attachment_ids,
+                    round_number=round_number,
+                )
+                if text or attachment_ids:
+                    _append_user_message_and_publish(
+                        session_id=session_id,
+                        agent_name=gate_name,
+                        text=text,
+                        attachment_ids=attachment_ids,
+                        origin="host",
+                    )
+            all_present, responses = check_all_gate_responses(
+                session_id,
+                expected_names,
+                round_number=round_number,
+            )
+            publish_remote_user_event(session_id, {
+                "type": "quorum_progress",
+                "round": round_number,
+                "quorum": "all",
+                "expected": expected_names,
+                "received": list(responses.keys()),
+                "all_present": all_present,
+            })
+            if not all_present:
+                return HttpResponse(
+                    util.json_dumps({"status": "waiting", "received": len(responses), "expected": len(expected_names)}),
+                    status=202,
+                    content_type="application/json",
+                )
+            # Quorum met and host confirmed final continue. Claim winner atomically
+            # to prevent duplicate run starts from racing submits.
+            claimed = claim_gate_winner(session_id, gate_name, round_number=round_number)
+            if not claimed:
+                return HttpResponse(
+                    util.json_dumps({"status": "waiting"}),
+                    status=202,
+                    content_type="application/json",
+                )
+            composed_task, combined_attachment_ids = _build_quorum_composed_payload(
+                session_id,
+                project,
+                expected_names,
+                responses,
+                gate_name,
+            )
+            logger.info(
+                "agents.session.quorum_composed",
+                extra={
+                    "session_id": session_id,
+                    "round": round_number,
+                    "quorum": "all",
+                    "participants": len(expected_names),
+                    "text_segments": composed_task.count("### "),
+                    "attachment_count": len(combined_attachment_ids),
+                },
+            )
+            if composed_task or combined_attachment_ids:
+                store_pending_task(session_id, composed_task, combined_attachment_ids)
+            clear_gate_responses(session_id, expected_names, round_number=round_number)
+            services.set_session_status(session_id, "idle")
+            publish_remote_user_event(session_id, {
+                "type": "quorum_committed",
+                "round": round_number,
+                "quorum": "all",
+                "winner": gate_name,
+            })
+            return HttpResponse(
+                util.json_dumps({
+                    "status": "ok",
+                    "task": "",
+                    "attachment_ids": [],
+                    "pending_task_ready": True,
+                }),
+                content_type="application/json",
+            )
+
+        return util.json_error("Unsupported quorum mode for gate continue.", 409)
 
     return HttpResponse(util.json_dumps({"error": "Invalid action"}), status=400,
                         content_type="application/json")
@@ -1443,6 +1995,19 @@ def chat_session_restart(request, session_id):
     session = services.get_chat_session(session_id)
     if session is None:
         return util.json_error("Session not found", 404)
+
+    # Block resume when the project configuration has changed since this session was created
+    project = services.get_project(session.get("project_id", ""))
+    if project:
+        session_ver = round(float(session.get("project_version") or 1.0), 1)
+        project_ver = round(float(project.get("version") or 1.0), 1)
+        if session_ver != project_ver:
+            return util.json_error(
+                f"Cannot resume: project configuration changed from "
+                f"v{session_ver:.1f} to v{project_ver:.1f}. "
+                "Start a new session to use the current configuration.",
+                409,
+            )
 
     if session.get("status") not in ("completed", "stopped"):
         return util.json_error(f"Session cannot be restarted from status '{session.get('status')}'.", 409)

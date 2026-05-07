@@ -146,6 +146,29 @@ def purge_session_attachment_cache(session_id: str) -> None:
             extra={"session_id": session_id},
         )
 
+
+def purge_single_attachment_cache(session_id: str, attachment_id: str) -> None:
+    """Delete Redis cache entries for one attachment.
+
+    Called when a staged attachment is removed before message bind.
+    Silent on Redis errors.
+    """
+    if not session_id or not attachment_id:
+        return
+    try:
+        r = _get_redis()
+        if r is None:
+            return
+        pipe = r.pipeline(transaction=False)
+        pipe.delete(_att_text_key(session_id, attachment_id))
+        pipe.srem(_att_index_key(session_id), attachment_id)
+        pipe.execute()
+    except Exception:
+        logger.warning(
+            "attachments.cache_single_purge_failed",
+            extra={"session_id": session_id, "attachment_id": attachment_id},
+        )
+
 _ALLOWED_EXTENSIONS = {
     "png", "jpg", "jpeg", "webp", "gif", "bmp", "svg", "heic", "heif", "tif", "tiff",
     "pdf", "txt", "md", "csv", "json", "doc", "docx", "ppt", "pptx", "xls", "xlsx",
@@ -347,6 +370,19 @@ def _get_attachment_docs_for_session(session_id: str, attachment_ids: Iterable[s
     return [index[aid] for aid in wanted if aid in index]
 
 
+@traced_function("service.attachments.get_descriptors")
+def get_attachment_descriptors(*, session_id: str, attachment_ids: Iterable[str]) -> list[dict]:
+    """Return session-scoped attachment descriptors in the same order as attachment_ids."""
+    docs = _get_attachment_docs_for_session(session_id, attachment_ids)
+    return [
+        {
+            **_attachment_descriptor(d),
+            "content_url": f"/chat/sessions/{session_id}/attachments/{d.get('attachment_id', '')}/content/",
+        }
+        for d in docs
+    ]
+
+
 @traced_function("service.attachments.bind_to_message")
 def bind_attachments_to_message(*, session_id: str, message_id: str, attachment_ids: Iterable[str]) -> list[dict]:
     docs = _get_attachment_docs_for_session(session_id, attachment_ids)
@@ -360,18 +396,10 @@ def bind_attachments_to_message(*, session_id: str, message_id: str, attachment_
         {"$set": {"message_id": message_id, "bound_at": util.utc_now()}},
     )
 
-    return [
-        {
-            "id": d.get("attachment_id", ""),
-            "filename": d.get("filename", ""),
-            "mime_type": d.get("mime_type", "application/octet-stream"),
-            "size_bytes": int(d.get("size_bytes") or 0),
-            "is_image": bool(d.get("is_image", False)),
-            "extension": d.get("extension", ""),
-            "content_url": f"/chat/sessions/{session_id}/attachments/{d.get('attachment_id', '')}/content/",
-        }
-        for d in docs
-    ]
+    return get_attachment_descriptors(
+        session_id=session_id,
+        attachment_ids=attachment_ids_clean,
+    )
 
 
 def build_attachment_context_block(*, session_id: str, attachment_ids: Iterable[str]) -> str:
@@ -529,6 +557,57 @@ def get_attachment_content(*, session_id: str, attachment_id: str) -> tuple[byte
     strategy = build_storage_strategy()
     raw = strategy.download_bytes(key=doc.get("blob_key", ""))
     return raw, doc.get("mime_type", "application/octet-stream"), doc.get("filename", "attachment")
+
+
+@traced_function("service.attachments.delete_staged")
+def delete_staged_attachment(*, session_id: str, attachment_id: str) -> bool:
+    """Delete a staged (unbound) attachment for one session.
+
+    Returns False when the attachment is missing, already bound to a message,
+    or session_id is invalid.
+    """
+    if not session_id or not attachment_id:
+        return False
+    try:
+        ObjectId(session_id)
+    except (InvalidId, TypeError):
+        return False
+
+    col = get_collection(ATTACHMENTS_COLLECTION)
+    doc = col.find_one(
+        {
+            "session_id": session_id,
+            "attachment_id": attachment_id,
+            "message_id": None,
+        }
+    )
+    if not doc:
+        return False
+
+    blob_key = (doc.get("blob_key") or "").strip()
+    try:
+        if blob_key:
+            strategy = build_storage_strategy()
+            strategy.delete_prefix(prefix=blob_key)
+    except Exception:
+        logger.exception(
+            "attachments.staged_blob_delete_failed",
+            extra={
+                "session_id": session_id,
+                "attachment_id": attachment_id,
+                "blob_key": blob_key,
+            },
+        )
+        raise ValueError("Failed to delete attachment bytes.")
+
+    col.delete_one({"session_id": session_id, "attachment_id": attachment_id})
+    purge_single_attachment_cache(session_id, attachment_id)
+
+    logger.info(
+        "attachments.staged_deleted",
+        extra={"session_id": session_id, "attachment_id": attachment_id},
+    )
+    return True
 
 
 @traced_function("service.attachments.delete_session")

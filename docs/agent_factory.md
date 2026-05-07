@@ -286,6 +286,38 @@ audio, or embedding models), the correct configuration is to keep
 
 ---
 
+## `_RetryAnthropicClient` — Anthropic Error Guards
+
+Both `anthropic` and `azure_anthropic` builders wrap the raw `AnthropicChatCompletionClient` in `_RetryAnthropicClient`. This transparent proxy intercepts every `create()` and `create_stream()` call and applies two guards **in order**:
+
+### 1. Prefill guard (`_ensure_user_message_last`)
+
+Claude 4+ (and later Anthropic models) reject API requests where the conversation ends with an `assistant`-role message — Anthropic removed support for assistant message "prefill". Inside AutoGen's group-chat machinery this can happen when:
+
+- An agent's message buffer is empty at the point its `GroupChatRequestPublish` is handled (a race condition in high-throughput group chats where the group-topic broadcast of its own previous response has not yet reached its buffer).
+- The `SelectorGroupChat` selects the same agent twice in a row, and the second turn's buffer arrives empty.
+
+`_ensure_user_message_last` inspects the `messages` argument (positional or keyword). If the last element is an `AssistantMessage`, it appends a minimal synthetic `UserMessage(content="Please continue.", source="user")` before forwarding to the inner client.
+
+**The synthetic message is invisible to the application** — it is not persisted to `discussions[]`, not shown in the SSE chat stream, and appears in `agent_state` checkpoints only as a natural model-context entry that represents the resume event.
+
+> **Rule**: never suppress or remove this guard. If a future Anthropic model relaxes the constraint, the guard is a no-op (does nothing when the last message is already a `UserMessage`).
+
+### 2. HTTP 529 retry
+
+When the Anthropic API returns HTTP 529 (`OverloadedError`) — indicating transient server overload — the proxy retries with exponential backoff and random jitter.
+
+| Env Var | Default | Description |
+|---|---|---|
+| `ANTHROPIC_MAX_RETRIES` | `2` | Maximum retry attempts per call |
+| `ANTHROPIC_RETRY_BASE_DELAY` | `5.0` | Base delay (seconds) before first retry; doubles each attempt |
+
+All other errors (4xx client errors, network failures, etc.) propagate immediately without retry.
+
+> **Rule**: do not add inline retry loops for either of these conditions in `team_builder.py`, `runtime.py`, or agent code. `_RetryAnthropicClient` is the single enforcement point for both guards.
+
+---
+
 ## Adding a New Provider
 
 1. **Define a builder** in `agents/factory.py`:

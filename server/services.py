@@ -262,11 +262,24 @@ def normalize_project(project):
     human_gate = {
         "enabled": False,
         "name": "",
+        "quorum": "",
+        "remote_users": [],
     }
     if isinstance(raw_human_gate, dict):
+        raw_ru = raw_human_gate.get("remote_users") or []
+        remote_users = [
+            {
+                "name": (ru.get("name") or "").strip(),
+                "description": (ru.get("description") or "").strip(),
+            }
+            for ru in raw_ru
+            if isinstance(ru, dict) and (ru.get("name") or "").strip()
+        ]
         human_gate = {
             "enabled": bool(raw_human_gate.get("enabled", True)),
             "name": (raw_human_gate.get("name") or "").strip(),
+            "quorum": (raw_human_gate.get("quorum") or "").strip(),
+            "remote_users": remote_users,
         }
 
     raw_team = project.get("team") or {}
@@ -344,6 +357,7 @@ def normalize_project(project):
         "project_id": str(project["_id"]) if project.get("_id") else "",
         "project_name": project.get("project_name", ""),
         "objective": project.get("objective", ""),
+        "version": round(float(project.get("version") or 1.0), 1),
         "created_at": _coerce_dt_to_iso(project.get("created_at")),
         "updated_at": _coerce_dt_to_iso(project.get("updated_at")),
         "agents": assistants,
@@ -418,9 +432,12 @@ def get_project_raw(project_id):
 
 
 @traced_function("service.project.create")
-def create_project(data):
+def create_project(data, initial_version=1.0):
     """
     Validate and insert a new project configuration.
+
+    initial_version controls the starting version float (default 1.0; clones pass a
+    major-bumped value, e.g. 2.0 when cloning a 1.x project).
 
     Returns the created document (with project_id populated).
     Raises ValueError on validation errors or duplicate name.
@@ -433,6 +450,7 @@ def create_project(data):
     now = util.utc_now()
     doc["created_at"] = now
     doc["updated_at"] = now
+    doc["version"] = round(float(initial_version), 1)
     try:
         col.insert_one(doc)
     except DuplicateKeyError:
@@ -453,6 +471,39 @@ def create_project(data):
         },
     )
     return normalized
+
+
+def _compute_version_bump(existing, cleaned):
+    """
+    Single source of truth for project version bump logic on update.
+
+    Rules:
+    - Bump +0.1 when team.type changes.
+        - Bump +0.1 when human_gate.quorum crosses the "team_choice" boundary
+            in either direction.
+    - No bump for any other field changes.
+    - Multiple conditions met simultaneously still produce exactly one +0.1 bump.
+
+    To extend versioning rules, add additional bump conditions here.
+
+    Returns the new version float (rounded to 1 decimal place).
+    """
+    current_version = round(float(existing.get("version") or 1.0), 1)
+
+    existing_team_type = (existing.get("team") or {}).get("type") or "round_robin"
+    new_team_type = (cleaned.get("team") or {}).get("type") or "round_robin"
+    team_type_changed = existing_team_type != new_team_type
+
+    existing_quorum = (existing.get("human_gate") or {}).get("quorum") or ""
+    new_quorum = (cleaned.get("human_gate") or {}).get("quorum") or ""
+    existing_is_team_choice = existing_quorum == "team_choice"
+    new_is_team_choice = new_quorum == "team_choice"
+    quorum_crossed_team_choice_boundary = existing_is_team_choice != new_is_team_choice
+
+    should_bump = team_type_changed or quorum_crossed_team_choice_boundary
+    if should_bump:
+        return round(current_version + 0.1, 1)
+    return current_version
 
 
 @traced_function("service.project.update")
@@ -484,6 +535,8 @@ def update_project(project_id, data):
     # Preserve original created_at; stamp updated_at as BSON Date
     cleaned["created_at"] = existing.get("created_at") or util.utc_now()
     cleaned["updated_at"] = util.utc_now()
+    # Bump version only on structural/behavioral changes — see _compute_version_bump()
+    cleaned["version"] = _compute_version_bump(existing, cleaned)
 
     try:
         result = col.replace_one({"_id": oid}, cleaned)
@@ -613,7 +666,10 @@ def clone_project(project_id):
         "shared_mcp_tools": raw.get("shared_mcp_tools") or {},
         "mcp_secrets": raw.get("mcp_secrets") or {},
     }
-    return create_project(data)
+    # Bump the major version: 1.x → 2.0, 2.x → 3.0, etc.
+    source_version = float(raw.get("version") or 1.0)
+    clone_version = float(int(source_version) + 1)
+    return create_project(data, initial_version=clone_version)
 
 
 # ---------------------------------------------------------------------------
@@ -708,6 +764,7 @@ def normalize_chat_session(doc):
     return {
         "session_id": str(doc["_id"]),
         "project_id": doc.get("project_id", ""),
+        "project_version": round(float(doc.get("project_version") or 1.0), 1),
         "description": doc.get("description", ""),
         "created_at": created_at,
         "discussions": [_normalize_discussion(m) for m in doc.get("discussions", [])],
@@ -748,9 +805,22 @@ def _ensure_discussion_ids(doc, col=None):
 def create_chat_session(project_id, description):
     """Insert a new chat session. Returns the normalized document."""
     cleaned = validate_chat_session({"project_id": project_id, "description": description})
+
+    # Snapshot the current project version at session creation time
+    project_version = 1.0
+    try:
+        proj_oid = ObjectId(cleaned["project_id"])
+        proj_col = get_collection(PROJECT_SETTINGS_COLLECTION)
+        proj_doc = proj_col.find_one({"_id": proj_oid}, {"version": 1})
+        if proj_doc and proj_doc.get("version") is not None:
+            project_version = round(float(proj_doc["version"]), 1)
+    except Exception:
+        pass  # fall back to 1.0 — non-fatal
+
     col = get_collection(CHAT_SESSIONS_COLLECTION)
     doc = {
         "project_id": cleaned["project_id"],
+        "project_version": project_version,
         "description": cleaned["description"],
         "created_at": datetime.now(timezone.utc),
         "discussions": [],
@@ -792,7 +862,7 @@ def try_set_session_running(session_id):
 
     col = get_collection(CHAT_SESSIONS_COLLECTION)
     result = col.update_one(
-        {"_id": oid, "status": {"$in": ["idle", "awaiting_input", "awaiting_mcp_oauth"]}},
+        {"_id": oid, "status": {"$in": ["idle", "awaiting_input", "awaiting_mcp_oauth", "awaiting_remote_users"]}},
         {"$set": {"status": "running"}},
     )
     return result.modified_count == 1
@@ -815,6 +885,53 @@ def set_session_awaiting_oauth(session_id, server_names=None):
         {"_id": oid},
         {"$set": {"status": "awaiting_mcp_oauth"}},
     )
+
+
+@traced_function("service.chat.set_awaiting_remote_users")
+def set_session_awaiting_remote_users(session_id):
+    """Mark a chat session as awaiting remote users to join before the run starts."""
+    try:
+        oid = ObjectId(session_id)
+    except (InvalidId, TypeError):
+        return
+    col = get_collection(CHAT_SESSIONS_COLLECTION)
+    col.update_one(
+        {"_id": oid},
+        {"$set": {"status": "awaiting_remote_users"}},
+    )
+
+
+def compute_pending_remote_users(project, session_id):
+    """Return the list of remote user names still needed before the run can start.
+
+    Reads the current per-user status from Redis.  Users with status 'ignored'
+    are subtracted from required_count.  Returns None when all required users
+    are online (gate passes); returns a list (possibly empty) of still-pending
+    names otherwise.
+
+    ``project`` is the normalized project dict as returned by get_project_raw /
+    get_project — caller must not pass a masked copy.
+    """
+    if not isinstance(project, dict) or not session_id:
+        return None
+    remote_users_cfg = (project.get("human_gate") or {}).get("remote_users") or []
+    if not remote_users_cfg:
+        return None  # No remote users configured — gate not applicable.
+
+    all_names = [r["name"] for r in remote_users_cfg if isinstance(r, dict) and r.get("name")]
+    if not all_names:
+        return None
+
+    from agents.session_coordination import get_remote_user_statuses
+    statuses = get_remote_user_statuses(session_id, all_names)
+
+    pending = [
+        name for name in all_names
+        if statuses.get(name, "offline") not in ("online", "ignored")
+    ]
+    if not pending:
+        return None  # All required users are online/ignored → gate passes.
+    return pending
 
 
 def compute_pending_oauth_servers(raw_project, session_id):
@@ -1157,3 +1274,37 @@ def verify_secret_key(key):
     if not expected:
         return False
     return hmac.compare_digest(key, expected)
+
+
+def verify_session_export_key(key: str, session_id: str) -> bool:
+    """Return True if *key* is a valid impersonated export key scoped to *session_id*.
+
+    Looks up the key in Redis via :func:`get_remote_export_key_data`.  Any
+    Redis/coordination error is treated as an auth failure (returns False).
+    """
+    from agents.session_coordination import (
+        SessionCoordinationError,
+        get_remote_export_key_data,
+    )
+
+    if not key or not session_id:
+        return False
+    try:
+        data = get_remote_export_key_data(key)
+    except SessionCoordinationError:
+        return False
+    return bool(data and data.get("session_id") == session_id)
+
+
+def has_valid_session_auth(request, session_id: str) -> bool:
+    """Return True if the request carries either the admin secret key or a
+    valid per-user export key scoped to *session_id*.
+
+    This is the shared auth guard for session-scoped export endpoints (Trello,
+    Jira, future providers).  Admin-only endpoints must continue to call
+    :func:`verify_secret_key` directly.
+    """
+    key = request.headers.get("X-App-Secret-Key", "").strip()
+    if not key:
+        return False
+    return verify_secret_key(key) or verify_session_export_key(key, session_id)

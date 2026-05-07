@@ -7,7 +7,7 @@
 
 {% if project %}
 <div class="config-readonly">
-  <h2 class="config-readonly__title">{{ project.project_name }}</h2>
+  <h2 class="config-readonly__title">{{ project.project_name }} <small class="config-readonly__version">v{{ project.version|floatformat:1 }}</small></h2>
 
   <div class="config-readonly__section">
     <h3>Objective</h3>
@@ -47,18 +47,32 @@
     <h3>Human Gate</h3>
     {% if project.human_gate.enabled %}
       <p><strong>Name:</strong> {{ project.human_gate.name }}</p>
+      {% if project.human_gate.remote_users %}
+        <p><strong>Quorum:</strong>
+          {% if project.human_gate.quorum == 'first_win' %}First response wins
+          {% elif project.human_gate.quorum == 'team_choice' %}Agent planner decides
+          {% else %}Wait for all
+          {% endif %}
+        </p>
+        <p><strong>Remote Users:</strong></p>
+        <ul>
+          {% for ru in project.human_gate.remote_users %}
+            <li>{{ ru.name }}{% if ru.description %} — {{ ru.description }}{% endif %}</li>
+          {% endfor %}
+        </ul>
+      {% endif %}
     {% else %}
       <p>Human gate disabled.</p>
     {% endif %}
   </div>
 
   <div class="config-readonly__section">
-    {% if project.agents|length == 1 %}
+    {% if project.agents|length == 1 and not project.human_gate.remote_users %}
     <h3>Mode</h3>
     {% else %}
     <h3>Team</h3>
     {% endif %}
-    {% if project.agents|length == 1 %}
+    {% if project.agents|length == 1 and not project.human_gate.remote_users %}
     <p>
       <strong>Mode:</strong> Chat Mode (single assistant) &nbsp;|&nbsp;
       <strong>Runtime:</strong> Round Robin with Human Gate continuation until Stop

@@ -57,6 +57,21 @@ This guide defines the mandatory styling contract for Product Discovery so new U
 6. **Do not add `margin-top` to nested fieldsets**: vertical rhythm between a checkbox row and the following nested fieldset, and between consecutive nested fieldsets, comes entirely from the preceding `.form-group`'s `margin-bottom` (resolved by `.config-form fieldset.form-group { margin-bottom: $space-md }`). Adding explicit `margin-top` on nested elements doubles the gap and creates inconsistency.
 7. **`form-group--nested` is for fieldset sub-sections only — never for card-style rows**: `.form-group--nested` (and `--nested-l2`) applies only to `<fieldset>` blocks that are indented sub-sections of a parent section (e.g. Jira/Trello integration config). Do NOT apply it to repeating card-style rows (e.g. MCP OAuth config rows, MCP Secrets rows, Trello custom-field rows). Card rows own their own `border`, `border-radius`, `padding`, and `background` via a dedicated BEM block class (e.g. `.mcp-oauth-configs__row`). Mixing `form-group--nested` on a card class adds an unwanted `margin-left` and `border-left: 3px` stripe that makes the card appear indented relative to the section header — a visual defect.
 
+## Project Version Badge Classes
+
+Three lightweight classes display the server-managed project version in muted text alongside the project name. All use token-only values and must not be overridden with hardcoded colors or font sizes.
+
+| Class | Location | Key rules |
+|---|---|---|
+| `.sidebar__version` | `sidebar.html` — project name row | `display: block`, `font-size: $font-size-sm`, `font-weight: 400`, `color: $color-text-muted`, `margin-top: 0.1rem` |
+| `.config-form__version` | `config_form.html` — `<h2>` edit header | `font-size: $font-size-sm`, `font-weight: 400`, `color: $color-text-muted`, `margin-left: $space-xs`, `vertical-align: middle` |
+| `.config-readonly__version` | `config_readonly.html` — `<h2>` readonly header | Same as `.config-form__version` (shared selector in `main.scss`) |
+
+Rules:
+1. **Always wrapped in `<small>`** — never in a `<span>` or inline element with its own `color` attribute.
+2. **Token-only styling** — `$color-text-muted`, `$font-size-sm`, `$space-xs` are the only allowed values.
+3. **No user-editable state** — version is read-only; never add input or interactive elements to these classes.
+
 ## Readonly Card Layout
 
 All `agent-card--readonly` cards across the Config readonly view must share a single float-based header layout. This applies to: **Assistant Agents, Selector/Team, Trello, Jira Software, Jira Service Desk, Jira Business**.

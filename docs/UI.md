@@ -42,6 +42,20 @@ config.html                        ← Full HTML document, loaded once
     └── partials/config_readonly.html  ← Read-only mode
 ```
 
+## Project Version Badge
+
+Every project entry in the sidebar and both the edit and readonly config views display the server-managed project version alongside the project name.
+
+| Surface | Template | CSS class |
+|---------|----------|-----------|
+| Sidebar item | `partials/sidebar.html` | `.sidebar__version` |
+| Edit form header | `partials/config_form.html` | `.config-form__version` |
+| Readonly view header | `partials/config_readonly.html` | `.config-readonly__version` |
+
+All three render `v{{ project.version|floatformat:1 }}` inside a `<small>` tag styled with `$font-size-sm`, `font-weight: 400`, and `$color-text-muted`. The sidebar variant adds `display: block` and a small `margin-top` so it appears on its own line below the project name; the form and readonly variants use `margin-left: $space-xs; vertical-align: middle` so the version sits inline with the `<h2>`.
+
+Version values are **server-managed only** — never expose `version` as a form field or accept it from user input.
+
 ## CSS Class Conventions
 
 - **BEM-like**: `.block__element` (e.g., `.header__title`, `.agent-card__header`)
@@ -77,6 +91,23 @@ Cross-page UI controls must maintain shared visual language:
 
 Canonical styling rules for new SCSS work live in [docs/scss_style_guide.md](scss_style_guide.md). Follow that guide for token usage, component semantics, and responsive guardrails.
 
+## Shared Chat Surface Contracts
+
+Chat UI behavior is split into one layout contract and one interaction contract:
+
+- Layout/surface contract: [`.agents/skills/chat_surface_shared/SKILL.md`](../.agents/skills/chat_surface_shared/SKILL.md)
+- Compose/attachment interaction contract: [`.agents/skills/chat_compose_attachment_contract/SKILL.md`](../.agents/skills/chat_compose_attachment_contract/SKILL.md)
+
+Canonical rules:
+
+1. Shared chat classes (`.chat-messages`, bubble classes, attachment row classes) are reused across Home/HITL, Remote, and Guest surfaces.
+2. Bubble DOM parity is mandatory between server-rendered history and JS-rendered live messages.
+3. Public pages (Remote and Guest) use the same header pattern: left title + right role badge.
+4. Compose/send/attachment interactions are shared between Home/HITL and Remote only; Guest remains readonly by design.
+5. Name-label semantics are surface-scoped: Home user-role bubbles render `You`; Remote renders `You` only for the currently joined participant's own user-role messages and renders actual sender names for other participants; Guest always renders sender names (no viewer-relative `You`).
+
+Detailed implementation checklists live in the two skills above; this section stays architecture-level and non-duplicative.
+
 ## Dynamic Agent Cards (JS)
 
 `app.js` handles shared behavior only:
@@ -109,6 +140,8 @@ Shared markdown rendering for Home and export reference panes must go through `s
 
 `home.js` also handles (home chat page only):
 - Restart controls for sessions with persisted agent state.
+- Project context panel rendering (when no session is selected): Participants cards include assistant agents, the human gate owner (when enabled), and configured remote users.
+- Project context metadata chips: one chip for `team.type` + `max_iterations`; when remote users are configured, a second quorum chip is shown to the right.
 - Chat-session readiness cards (`.chat-status-badge--gate`, `.chat-oauth-panel`, `.chat-restart-panel`) with in-history rendering and restore behavior.
 - Two restart modes: continue from last state, or add context and continue.
 - Human gate: when the SSE `gate` event fires, a non-interactive status badge (`.chat-status-badge--gate`) is appended to chat and the bottom input bar enters **gate mode** — placeholder updates to show the round, Stop button stays visible, Send routes to `sendRespond("continue")`. No separate panel widget is injected.
@@ -125,17 +158,21 @@ Detailed readiness-card contract (behavior strict, UI override allowed by use ca
 
 Every chat bubble (both user and agent) carries a copy icon button (`.chat-bubble__copy-btn`) in the top-right of its meta row.
 
+This behavior applies to all chat surfaces: Home/HITL, Remote, and Guest.
+Implementation and parity checklist live in
+[`.agents/skills/chat_surface_shared/SKILL.md`](../.agents/skills/chat_surface_shared/SKILL.md).
+
 ### Behaviour
 
 - Clicking the button copies the message content to the clipboard.
 - **Text format**: the raw markdown source from `discussions[].content` is used — never the rendered HTML — so the recipient receives clean markdown.
-- **Attachments**: if the bubble has attachment chips (`.chat-message-attachment__name`), filenames are appended below the message text as a markdown list:
+- **Attachments**: if the bubble has attachment links (`.chat-message-attachment`), files are appended below the message text as markdown links with absolute URLs:
   ```
   **Attachments:**
-  - invoice.pdf
-  - photo.png
+  - [invoice.pdf](https://example.com/chat/sessions/abc/attachments/1/content/)
+  - [photo.png](https://example.com/chat/sessions/abc/attachments/2/content/)
   ```
-- **Image messages**: image content is not separately base64-encoded; the attachment filename is appended as above.
+- **Image messages**: image content is not separately base64-encoded; the attachment markdown link is appended as above.
 - After a successful copy the icon changes to a check mark (`.chat-bubble__copy-btn--copied`, green `$color-success`) for 2 seconds, then reverts.
 - Uses `navigator.clipboard.writeText()` with an `execCommand("copy")` textarea fallback for older browsers.
 
@@ -148,9 +185,14 @@ Every chat bubble (both user and agent) carries a copy icon button (`.chat-bubbl
 | Click handler (delegated) | `document.body` listener in `home.js` — works for both server-rendered and live-streamed bubbles |
 | SCSS | `.chat-bubble__copy-btn` and `.chat-bubble__copy-btn--copied` in `main.scss` |
 
+Remote and Guest pages must implement the same copy contract and selectors in
+their own page modules so server-rendered history and live-appended bubbles stay
+in parity.
+
 ### Copy Button Visibility
 
-The copy button is visible in **non-readonly sessions only** (it is part of the normal chat bubble markup and not gated by the secret key). The button is intentionally always visible so users can copy agent responses without needing write access.
+The copy button is visible in both interactive and readonly chat surfaces
+(including Guest). It is not secret-gated.
 
 ## Chat Restart Discoverability
 
@@ -164,12 +206,14 @@ The copy button is visible in **non-readonly sessions only** (it is part of the 
 ## Configuration Surface
 
 - **Assistant agents**: each card stores `name`, `model`, `system_prompt`, and `temperature`. The project `objective` is automatically appended to each agent's resolved system prompt at runtime.
-- **Human gate**: single optional section with enable toggle and `name`. When the run pauses at a gate, the bottom input bar enters gate mode — the placeholder updates to show the round number, the Stop button stays visible, and clicking Send routes to `POST /respond/` with `action=continue`. The separate gate panel widget has been removed. There are no Approve/Reject shortcuts; users type their response directly.
+- **Human gate**: optional section with enable toggle, `name` (reviewer label), `quorum` selector, and a repeating list of **Remote Users** (name + description). When the run pauses at a gate, the bottom input bar enters gate mode. Quorum is only applied when at least one remote user is configured; when the list is empty the quorum field is ignored (`"na"`). When remote users are present, the gate waits for the configured quorum of responses before continuing the run.
+- **Home project context quorum chip**: when remote users are present, the header shows a separate quorum chip next to the team/iteration chip. The chip text uses the corresponding label from `server/util.py::QUORUM_OPTIONS` (single source of truth), not hardcoded template text.
 - **Human gate markdown contract**: notes sent via Continue are rendered as markdown in live bubbles and persisted history. This uses the shared markdown renderer path (`window.MarkdownViewer.render()` in `home.js`, `markdownify` in server-rendered history).
 - **Team**: nested config with `type` and `max_iterations`. Supported types:
   - `round_robin` — agents take turns in fixed order.
   - `selector` — a dedicated model client routes between agents each turn. Requires `model`, `system_prompt` (supports `{roles}`, `{history}`, `{participants}`), `temperature` (default `0.0`), and `allow_repeated_speaker`. Selector fields are wrapped in an `.agent-card` container (edit) / `.agent-card--readonly` card (readonly) with header "Selector Agent" / "Selector", matching assistant agent cards.
-- **Single-assistant chat mode**: when assistant count is exactly 1, Team Setup is hidden and Human Gate is forced on. In this mode the run pauses after each assistant turn and continues until the human selects Stop. In single-assistant gate mode Send is disabled until the user types text (text is mandatory — empty Continue is rejected).
+- **Single-assistant chat mode**: when assistant count is exactly 1 **and no remote users are configured**, Team Setup is hidden and Human Gate is forced on. In this mode the run pauses after each assistant turn and continues until the human selects Stop. Empty Continue (no text, no attachments) is rejected.
+- **Single-assistant with remote users**: when assistant count is exactly 1 **and at least one remote user is present**, Team Setup becomes visible and its values are honored (max_iterations governs completion). Human Gate is still forced on, but the run now completes based on iteration count rather than running indefinitely.
 - **Integrations → Trello → Export Agents**: checkboxes (`name="integrations[trello][export_agents]"`) rendered inside `#integrations-trello-fields` as the first element (above App Name). Leaving all unchecked means every agent's messages show the export button. Synced dynamically by `syncExportAgentCheckboxes()` whenever agent names change.
 - **Home chat export controls**: per-agent output export dropdowns are rendered from `project.integrations.<provider>` where `enabled=true` and filtered by each provider's `export_agents` allowlist (`[]` = all agents). These controls are visible only when the Secret Key input has a value (edit/create mode behavior).
 - **Home chat attachments**:

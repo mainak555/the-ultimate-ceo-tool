@@ -35,6 +35,7 @@
   }
 
   window.MarkdownViewer = {
+    escapeHtml: _escapeHtml,
     render: render,
   };
 })();

@@ -1,8 +1,28 @@
-# The Ultimate CEO Tool
-### Turn Vision into Action
+<p align="center">
+  <img src="logo-hd.png" alt="CouncilAI" width="200" />
+</p>
 
-Agent-based product roadmap planning tool — OKR to Product Backlog.  
-Django SPA with HTMX, SCSS, and MongoDB (PyMongo).
+# CouncilAI
+
+### The Ultimate CEO Tool — Turn Vision into Action
+
+> *Agentic AI for teams, not individuals — where specialized human experts and AI agents govern together.*
+
+<!-- YOUTUBE PLACEHOLDER — replace with your embed link after publishing
+[![CouncilAI — The Ultimate CEO Tool](https://img.youtube.com/vi/VIDEO_ID/maxresdefault.jpg)](https://youtu.be/VIDEO_ID)
+-->
+
+📖 **[Project Charter](PROJECT_CHARTER.md)** — Vision, market thesis, team collaboration model & flowchart
+
+---
+
+CouncilAI turns strategy into execution by helping leadership teams move from OKRs and vision docs to actionable product backlogs with accountable human+AI collaboration loops.
+
+**What is novel / why it matters in-market:** team-native agentic governance (not single-user AI chat), quorum-based human gates, and direct Trello/Jira export so outputs land in the tools organizations already trust.
+
+**Tech stack:** Django ASGI SPA, HTMX, SCSS, MongoDB (PyMongo), Redis coordination, AutoGen multi-agent runtime, WebSocket/SSE streaming, Azure Blob attachments.
+
+**Production-grade observability:** structured JSON logs with request/trace correlation, OpenTelemetry spans across HTTP + services + agents (+ optional Mongo), payload redaction/truncation, and OTLP backend compatibility (Langfuse-ready).
 
 ---
 
@@ -40,33 +60,116 @@ Open **http://127.0.0.1:8000** in your browser.
 When Human Gate is enabled for a project, the run pauses after each round. The
 bottom input bar switches to **gate mode**:
 
-- A status badge appears in chat: `⏸ Round N/M — response is required`
-  (single-assistant shows `Round N`, no max).
+- A status badge appears in chat: `⏸ Round N/M — response is required`.
+  Pure single-assistant mode (no remote users) shows `Round N` with no max.
 - The **Stop** button stays visible so the user can stop at any time.
   Clicking Stop disables the button immediately to prevent double-submission;
   it re-enables automatically when the next run starts.
 - Typing in the send box and pressing **Send** (or Enter) resumes the run,
   forwarding the typed text as context for the next round.
-- The Approve / Reject decision shortcuts have been removed; users type their
-  response directly.
+- Notes sent with Send are rendered as markdown in both live chat and
+  persisted session history.
 
-HITL notes sent with Send are rendered as markdown in both live chat and
-persisted session history.
+## Guest Readonly View
 
-Single-assistant contract:
+Host page provides a **Guest share** action above the message box. It generates
+and copies a per-session guest URL.
 
-- With exactly one assistant, the project runs in **chat mode**.
-- Team Setup is hidden in configuration for this mode.
-- Human Gate is mandatory.
+Guest page behavior:
+
+- Readonly only: header + chat history panel
+- No send box, no attach controls, no mutation actions
+- Live updates stream through WebSocket while the host run is active
+
+Guest links are standalone and do not require remote-user configuration.
+
+Attachment rendering and copy behavior are standardized across Home, Remote, and
+Guest surfaces so users see the same thumbnail/icon fallback and message-copy
+payload format regardless of page.
+
+---
+
+### Mode reference
+
+There are three distinct runtime modes depending on the number of assistant
+agents and whether any remote users are configured.
+
+| Configuration | Team Setup visible? | Iteration limit? | Empty Continue allowed? |
+|---|---|---|---|
+| 1 assistant, no remote users | No (hidden) | No — runs until **Stop** | No — text or attachment required |
+| 1 assistant, ≥ 1 remote user | **Yes** (honored) | Yes — `max_iterations` | Yes |
+| ≥ 2 assistants | **Yes** (honored) | Yes — `max_iterations` | Yes |
+
+**Selector team** type requires ≥ 2 assistant agents OR (≥ 1 assistant agent & ≥ 1 remote user)
+
+---
+
+### Pure single-assistant chat mode (1 assistant, no remote users)
+
+- Team Setup is hidden in project configuration.
+- Human Gate is mandatory and cannot be disabled.
 - The run pauses after each assistant turn and continues only when the human
-  sends a reply; conversation ends when the human clicks **Stop**.
-- `max_iterations` is not used as an auto-completion condition in
-  single-assistant chat mode.
-- **Send requires a message or attachment** in single-assistant mode.
-  The button stays disabled until text is typed or a file is attached.
-  An empty send is rejected at the backend with HTTP 400.
+  sends a reply; the conversation ends when the human clicks **Stop**.
+- `max_iterations` is **not** used — there is no automatic completion.
+- **Send requires a message or attachment.** The button stays disabled until
+  text is typed or a file is attached. An empty send is rejected with HTTP 400.
 
-Multi-assistant gate contract:
+---
+
+### Single-assistant + remote users (1 assistant, ≥ 1 remote user)
+
+- **Team Setup is visible** and its values are honored.
+- Human Gate is still mandatory and cannot be disabled.
+- The run pauses after each assistant turn, exactly as above, but now
+  completes automatically when `current_round` reaches `max_iterations`.
+- Empty Continue is allowed (same as multi-assistant).
+- **Quorum**: configure how many remote users must respond before the run
+  resumes — *Wait for all*, *First response wins*, or *Agent planner decides*.
+  Quorum is only applied when at least one remote user is listed; it has no
+  effect in the pure single-assistant or multi-assistant-only cases.
+- `first_win` resumes automatically when the first accepted responder (host or
+  remote) commits the round.
+- Late responders may receive a non-fatal race response (`stale` / `locked`)
+  while the run is already resuming.
+- If a required remote user disconnects while a run is already in progress,
+	the current run continues. The next run start is blocked by the remote
+	participants readiness card until required users are online again (or
+	explicitly ignored by the host).
+
+#### Adding remote users
+
+In the project **Human Gate** section:
+1. Click **+ Add Remote User**.
+2. Enter a **Name** (must be a valid identifier, e.g. `product_owner`).
+3. Optionally add a **Description** to give the agent team context about this
+   participant's role.
+4. Repeat for each additional remote user.
+5. Select the **Quorum** that controls when the run resumes.
+6. Save the configuration.
+
+#### Allowing a remote user to export
+
+When Trello or Jira integrations are enabled on a project, the host can grant
+individual remote users the ability to open the export modal directly from
+agent message bubbles on their page.
+
+In the remote participants readiness card on the home page:
+
+1. Each remote user row shows a **Can Export** checkbox.
+2. Check the box to grant access — a short-lived, per-user export key is generated
+   in Redis and delivered to the remote user's page in real time via WebSocket.
+   Export action buttons appear immediately on all agent message bubbles without
+   a page reload.
+3. Uncheck the box (or click **Ignore**) to revoke access — export buttons
+   disappear on the remote page instantly.
+4. The export key is used for all Trello and Jira session-scoped API calls. The
+   admin `APP_SECRET_KEY` is **never** exposed to the remote user.
+5. Export keys share the same TTL as invite tokens (`REDIS_REMOTE_USER_TOKEN_TTL_SECONDS`,
+   default 6 h) and are automatically purged when the session is deleted.
+
+---
+
+### Multi-assistant gate contract (≥ 2 assistants)
 
 - Gate pauses after each full agent round (all agents have spoken once).
 - Send may be submitted with an empty textarea — agents resume with the
@@ -186,6 +289,27 @@ persisted AutoGen team resume state (`chat_sessions.agent_state`).
 
 ---
 
+## Project Versioning
+
+Every project carries a server-managed `version` float displayed as **v1.0**, **v1.1**, etc.
+alongside the project name in the sidebar, the edit form header, and the readonly view.
+
+| Action | Version rule | Example |
+|---|---|---|
+| Create new project | Starts at `1.0` | → `v1.0` |
+| Save / update | Bumps `+0.1` only when `team.type` changes or `human_gate.quorum` departs `team_choice`; unchanged otherwise | `v1.0 → v1.1` |
+| Clone | Bumps to next whole number | `v1.x → v2.0`, `v2.x → v3.0` |
+
+The version is **set by the server only** — it is never exposed as an editable form field
+and is never accepted from user input. Legacy projects (created before this feature)
+display as `v1.0` without any migration step required.
+
+When you clone a project, the clone starts at the next whole-number version so you can
+immediately tell which generation of a configuration a chat session was created against
+(each session snapshot the project version at creation time).
+
+---
+
 ## Docker
 
 The repository ships three deployment topologies under `deployments/`:
@@ -205,6 +329,36 @@ docker run -p 8000:8000 --env-file .env product-discovery
 
 The container runs `uvicorn` (ASGI) by default, which is required for SSE
 streaming of agent output.
+
+---
+
+## Documentation Map (Contributors)
+
+Use this map to avoid duplicated guidance:
+
+- Policy rules and repository contracts: [AGENTS.md](AGENTS.md)
+- **Chat session lifecycle** (run guards, SSE events, quorum, attachments, Redis keys): [docs/chat_session_lifecycle.md](docs/chat_session_lifecycle.md)
+- Architecture-level UI contracts: [docs/UI.md](docs/UI.md)
+- Frontend module ownership and reuse boundaries: [docs/frontend_js_architecture.md](docs/frontend_js_architecture.md)
+- Shared chat layout/surface implementation checklist: [`.agents/skills/chat_surface_shared/SKILL.md`](.agents/skills/chat_surface_shared/SKILL.md)
+- Shared compose/send/attachment checklist: [`.agents/skills/chat_compose_attachment_contract/SKILL.md`](.agents/skills/chat_compose_attachment_contract/SKILL.md)
+
+Keep implementation detail in skills and keep AGENTS/docs concise.
+
+### Frontend Standardization Contract (Contributors)
+
+- Reuse-first: if a chat helper is needed in 2+ surfaces, place it in
+	`server/static/server/js/chat_surface_utils.js` instead of duplicating it in
+	`home.js`, `remote_user.js`, or `guest_user.js`.
+- Keep surface-specific run/gate/quorum logic in feature files.
+- DOM id naming convention:
+	- Home ids use `chat-*`
+	- Remote ids use `remote-chat-*`
+	- Guest ids use `guest-chat-*`
+- Keep canonical container/history ids stable:
+	- `chat-messages` / `chat-history-msgs`
+	- `remote-chat-messages` / `remote-chat-history-msgs`
+	- `guest-chat-messages` / `guest-chat-history-msgs`
 
 ---
 
@@ -407,12 +561,17 @@ Full documentation: [docs/mcp_integration.md](docs/mcp_integration.md).
 | `MONGODB_NAME` | MongoDB database name | `product_discovery` |
 | `REDIS_URI` | Redis connection string used for active run coordination | `redis://localhost:6379/0` |
 | `REDIS_NAMESPACE` | Redis key namespace prefix | `product_discovery` |
-| `REDIS_SOCKET_TIMEOUT` | Redis socket read/write timeout (seconds) used by the shared Redis client | `2.0` |
-| `REDIS_SOCKET_CONNECT_TIMEOUT` | Redis socket connect timeout (seconds) used by the shared Redis client | `2.0` |
+| `REDIS_SOCKET_TIMEOUT` | Redis socket operation timeout (seconds) for the shared sync Redis client used by session coordination and Redis-backed helpers. This bounds read/write waits after a connection is established; lower values fail faster under Redis stalls, higher values tolerate transient latency. Note: async WebSocket pub/sub clients do not inherit this unless passed explicitly at `aioredis.from_url(...)` call sites. | `2.0` |
+| `REDIS_SOCKET_CONNECT_TIMEOUT` | Redis connection-establishment timeout (seconds) for the shared sync Redis client. This controls how long the app waits to open a TCP connection to Redis before treating Redis as unavailable; keep this low for fast failover behavior. Note: async WebSocket pub/sub clients do not inherit this unless passed explicitly at `aioredis.from_url(...)` call sites. | `2.0` |
 | `REDIS_RUN_LEASE_TTL_SECONDS` | Active run lease TTL (seconds) | `300` |
-| `REDIS_RUN_HEARTBEAT_SECONDS` | Lease heartbeat interval (seconds) | `20` |
-| `REDIS_CANCEL_SIGNAL_TTL_SECONDS` | Cancel signal TTL (seconds) | `120` |
-| `REDIS_ATTACHMENT_TTL_SECONDS` | How long extracted attachment text is kept in Redis (seconds). Raise this if sessions span multiple days. | `86400` (24 h) |
+| `REDIS_RUN_HEARTBEAT_SECONDS` | Interval (seconds) between lease-renewal heartbeats for an active run owner. The runner periodically renews the session lease; if renew fails, the run is cancelled to prevent split-brain execution across workers. Keep this comfortably below `REDIS_RUN_LEASE_TTL_SECONDS`. | `20` |
+| `REDIS_CANCEL_SIGNAL_TTL_SECONDS` | TTL (seconds) for the cross-worker cancel key set by stop actions. Running loops check this key and cancel promptly; TTL auto-cleans stale cancel keys if a worker crashes before cleanup. | `120` |
+| `REDIS_ATTACHMENT_TTL_SECONDS` | TTL (seconds) for extracted non-image attachment text cached in Redis. On cache miss, text is re-extracted from blob storage; on hit, runs resume quickly without reprocessing. Increase for long-lived sessions, decrease to reduce Redis memory footprint. | `86400` (24 h) |
+| `REDIS_GATE_RESPONSE_TTL_SECONDS` | TTL (seconds) for per-responder human-gate quorum keys (responses and winner-claim key). Supports delayed human responses while ensuring old gate rounds expire automatically and do not leak across later rounds. | `21600` (6 h) |
+| `REDIS_PENDING_TASK_TTL_SECONDS` | TTL (seconds) for quorum-composed pending task payloads stored between respond and next run. Short-lived by design: protects against stale composed tasks while allowing immediate resume calls to consume data via atomic pop. | `300` |
+| `REDIS_REMOTE_USER_TOKEN_TTL_SECONDS` | TTL (seconds) for remote-user and guest invitation token mappings in Redis. Also reused by related short-lived remote-session markers (for example ignored status, session quorum override, and guest online marker), so changing this value affects invitation validity and some readiness-state durability. | `21600` (6 h) |
+| `REDIS_REMOTE_USER_ONLINE_STATUS_TTL_SECONDS` | TTL (seconds) for remote-user online presence keys only. Presence is refreshed while the remote chat socket is alive and naturally expires if the client disconnects unexpectedly; ignored status is handled separately and is not governed by this TTL. | `300` (5 min) |
+| `REDIS_REMOTE_USER_TTL_REFRESH_INTERVAL_SECONDS` | Refresh cadence (seconds) for extending remote-user online presence TTL from the RemoteChat WebSocket loop. Keep this lower than `REDIS_REMOTE_USER_ONLINE_STATUS_TTL_SECONDS` to avoid accidental offline transitions during normal connected sessions. | `60` |
 | `MAX_AGENT_STATE_BYTES` | Maximum byte size of serialised AutoGen agent state stored in MongoDB. Raise for long sessions with many attachments or embedded images. MongoDB's document limit is 16 MB (shared with `discussions[]`). | `1000000` (1 MB) |
 | `DEBUG` | Django debug mode | `True` |
 | `ALLOWED_HOSTS` | Comma-separated allowed hosts | `localhost,127.0.0.1` |
@@ -431,6 +590,8 @@ Full documentation: [docs/mcp_integration.md](docs/mcp_integration.md).
 | `OPENAI_API_URL` | Endpoint fallback for `openai` models when `endpoint` is omitted in `agent_models.json` | *(optional)* |
 | `ANTHROPIC_API_KEY` | API key for direct Anthropic models | *(required for `anthropic` models)* |
 | `ANTHROPIC_API_URL` | Endpoint fallback for `anthropic` models when `endpoint` is omitted in `agent_models.json` | *(optional)* |
+| `ANTHROPIC_MAX_RETRIES` | Maximum retry attempts when Anthropic returns HTTP 529 (OverloadedError). Each retry uses exponential backoff starting at `ANTHROPIC_RETRY_BASE_DELAY` seconds. Applies to both `anthropic` and `azure_anthropic` providers. | `2` |
+| `ANTHROPIC_RETRY_BASE_DELAY` | Base delay in seconds for the first Anthropic 529 retry. Subsequent retries double the delay (plus up to 1 s of random jitter). Set to `0` to disable delay (not recommended in production). | `5.0` |
 | `GOOGLE_API_KEY` | API key for direct Google Gemini models | *(required for `google` models)* |
 | `GOOGLE_API_URL` | Endpoint fallback for `google` models when `endpoint` is omitted in `agent_models.json` | *(optional)* |
 | `AZURE_OPENAI_API_KEY` | API key for Azure AI Foundry OpenAI deployments | *(required for `azure_openai` models)* |
@@ -586,9 +747,27 @@ See [AGENTS.md](AGENTS.md) for full architecture and development instructions.
 - The AutoGen runtime lives in the root `agents/` package, separate from the Django `server/` app.
 - Agent execution is streamed over SSE (`/chat/sessions/<id>/run/`). The server **must** run under ASGI (`uvicorn`) for real-time streaming; WSGI will buffer the entire response before sending.
 
+## Project Versioning
+
+Every project document carries a server-managed `version` float displayed as `vX.Y` in the sidebar and config page header.
+
+| Event | Version rule |
+|-------|-------------|
+| **Create** | Starts at `1.0` |
+| **Save / Edit** | Bumps `+0.1` only when `team.type` changes OR `human_gate.quorum` departs `team_choice`; unchanged for all other field edits. Multiple conditions in one save still produce exactly one `+0.1`. Bump logic lives in `_compute_version_bump(existing, cleaned)` in `server/services.py` — extend there. |
+| **Clone** | Integer part bumped by 1, decimal reset: `1.x → 2.0`, `2.x → 3.0` |
+
+The field is computed entirely server-side in `server/services.py`. It is never exposed as a user-editable input. Legacy documents (written before this field was added) default to `1.0` on read via `normalize_project()`. To persist the default to MongoDB, run:
+
+```js
+db.project_settings.updateMany({ version: { $exists: false } }, { $set: { version: 1.0 } });
+```
+
 ---
 
 ## Export Schema Contract (Trello)
+
+> **Note:** This section is the admin-facing quick reference (required by AGENTS rule 47). The developer-facing canonical is [docs/trello_integration.md](docs/trello_integration.md) — update both in the same change when the schema changes.
 
 The Trello export popup supports project-specific extraction prompts, but the extracted JSON must always follow the same schema contract so the exporter can parse and push cards reliably.
 
@@ -662,6 +841,8 @@ For implementation details, endpoint flow, and mapping behavior, see [docs/trell
 ---
 
 ## Export Schema Contract (Jira Software)
+
+> **Note:** This section is the admin-facing quick reference (required by AGENTS rule 47). The developer-facing canonical is [docs/jira_integration.md](docs/jira_integration.md) — update both in the same change when the schema changes.
 
 Jira Software export supports hierarchical issue trees. The extracted or edited payload must follow a stable schema so parent linking (`temp_id` / `parent_temp_id`) and push correlation remain deterministic.
 

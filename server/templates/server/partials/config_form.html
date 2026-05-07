@@ -21,7 +21,7 @@
   <input type="hidden" id="config-project-id" value="{{ project.project_id|default:'' }}">
 
   <h2 class="config-form__title">
-    {% if mode == "create" %}New Configuration{% else %}Edit: {{ project.project_name }}{% endif %}
+    {% if mode == "create" %}New Configuration{% else %}Edit: {{ project.project_name }} <small class="config-form__version">v{{ project.version|floatformat:1 }}</small>{% endif %}
   </h2>
 
   <!-- Project Name -->
@@ -89,26 +89,48 @@
     {% endif %}
 
     <div id="human-gate-fields" {% if not project.human_gate.enabled and project.agents and project.agents|length != 1 %}hidden{% endif %}>
-      <div class="form-row">
+      <div class="form-row form-row--two-col">
         <div class="form-group">
-          <label for="human_gate_name">Gate Name</label>
+          <label for="human_gate_name">Host / Leader Name</label>
           <input type="text"
                  id="human_gate_name"
                  name="human_gate[name]"
                  class="input"
                  value="{{ project.human_gate.name|default:'Architect' }}"
                  placeholder="Architect">
+          <small class="form-hint" id="human-gate-default-hint" {% if not project.agents or project.agents|length == 1 and not project.human_gate.remote_users %}hidden{% endif %}>During chat pause, the reviewer selects Approve or Reject, can add optional notes, then chooses Continue or Stop. If disabled, team max iterations cannot exceed 10.</small>
+          <small class="form-hint" id="human-gate-single-assistant-hint" {% if not project.agents or project.agents|length != 1 or project.human_gate.remote_users %}hidden{% endif %}
+                 style="font-style:italic;">Single-assistant chat mode requires Human Gate. The loop continues until the human chooses Stop.</small>
+        </div>
+        <div class="form-group">
+          <label for="human_gate_quorum">Quorum</label>
+          <select id="human_gate_quorum" name="human_gate[quorum]" class="input input--sm">
+            {% for opt in quorum_options %}
+            <option value="{{ opt.value }}"
+              {% if project.human_gate.quorum == opt.value or opt.value == 'all' and not project.human_gate.quorum or opt.value == 'all' and project.human_gate.quorum == 'na' %}selected{% endif %}
+            >{{ opt.label }}</option>
+            {% endfor %}
+          </select>
+          <small class="form-hint" style="font-style:italic;">Applies only when at least one remote user is configured.</small>
         </div>
       </div>
-      <small class="form-hint" id="human-gate-default-hint" {% if not project.agents or project.agents|length == 1 %}hidden{% endif %}>During chat pause, the reviewer selects Approve or Reject, can add optional notes, then chooses Continue or Stop. If disabled, team max iterations cannot exceed 10.</small>
-      <small class="form-hint" id="human-gate-single-assistant-hint" {% if project.agents and project.agents|length != 1 %}hidden{% endif %}>Single-assistant chat mode requires Human Gate. The loop continues until the human chooses Stop.</small>
+
+      <div class="form-row form-row--between">
+        <label>Remote Users</label>
+        <button type="button" id="add-remote-user-btn" class="btn btn--secondary btn--sm">+ Add Remote User</button>
+      </div>
+      <div id="remote-users-container">
+        {% for remote_user in project.human_gate.remote_users %}
+          {% include "server/partials/_remote_user_card.html" with idx=forloop.counter0 remote_user=remote_user %}
+        {% endfor %}
+      </div>
     </div>
   </fieldset>
 
   <!-- ====== TEAM ====== -->
-  <fieldset class="form-group section-fieldset" id="team-settings-fieldset" {% if not project.agents or project.agents|length == 1 %}hidden{% endif %}>
+  <fieldset class="form-group section-fieldset" id="team-settings-fieldset" {% if not project.agents or project.agents|length == 1 and not project.human_gate.remote_users %}hidden{% endif %}>
     <legend>Team</legend>
-    <small class="form-hint" id="team-settings-disabled-hint" hidden>Team setup is available when there are at least 2 assistant agents.</small>
+    <small class="form-hint" id="team-settings-disabled-hint" hidden>Team setup is available when there are at least 2 assistant agents or at least 1 remote user.</small>
 
     <div class="form-row">
       <div class="form-group">
@@ -952,4 +974,9 @@
 <!-- Agent card template (hidden, cloned by JS) -->
 <template id="agent-card-template">
   {% include "server/partials/_agent_card.html" with idx="__IDX__" agent=None %}
+</template>
+
+<!-- Remote user card template (hidden, cloned by JS) -->
+<template id="remote-user-card-template">
+  {% include "server/partials/_remote_user_card.html" with idx="__IDX__" remote_user=None %}
 </template>

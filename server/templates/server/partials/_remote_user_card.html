@@ -1,0 +1,28 @@
+<!-- Remote user card (used in config_form.html) -->
+<!-- Variables: idx (int or "__IDX__"), remote_user (dict or None) -->
+<div class="agent-card" data-remote-user-index="{{ idx }}">
+  <div class="agent-card__header">
+    <span class="agent-card__number">Remote User #{{ idx|add:"1" }}</span>
+    <button type="button" class="btn btn--danger btn--xs remove-remote-user-btn" title="Remove remote user">✕</button>
+  </div>
+
+  <div class="agent-card__fields">
+    <div class="form-group">
+      <label>Name</label>
+      <input type="text"
+             name="human_gate[remote_users][{{ idx }}][name]"
+             class="input input--sm"
+             value="{% if remote_user %}{{ remote_user.name }}{% endif %}"
+             placeholder="e.g. john_doe"
+             required>
+    </div>
+    <div class="form-group">
+      <label>Description</label>
+      <textarea name="human_gate[remote_users][{{ idx }}][description]"
+                class="input input--textarea input--sm"
+                rows="3"
+                placeholder="e.g. Product Owner stakeholder">{% if remote_user %}{{ remote_user.description }}{% endif %}</textarea>
+      <small class="form-hint">Optional context about this participant's role.</small>
+    </div>
+  </div>
+</div>
