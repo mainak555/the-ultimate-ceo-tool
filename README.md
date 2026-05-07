@@ -327,6 +327,7 @@ streaming of agent output.
 Use this map to avoid duplicated guidance:
 
 - Policy rules and repository contracts: [AGENTS.md](AGENTS.md)
+- **Chat session lifecycle** (run guards, SSE events, quorum, attachments, Redis keys): [docs/chat_session_lifecycle.md](docs/chat_session_lifecycle.md)
 - Architecture-level UI contracts: [docs/UI.md](docs/UI.md)
 - Frontend module ownership and reuse boundaries: [docs/frontend_js_architecture.md](docs/frontend_js_architecture.md)
 - Shared chat layout/surface implementation checklist: [`.agents/skills/chat_surface_shared/SKILL.md`](.agents/skills/chat_surface_shared/SKILL.md)

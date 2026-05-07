@@ -567,16 +567,12 @@ def _remote_user_online_status_ttl() -> int:
     return max(60, raw)
 
 
-def _gate_response_key(session_id: str, responder_name: str, round_number: int | None = None) -> str:
-    if round_number is None:
-        return f"{_namespace()}:gate_response:{session_id}:{responder_name}"
-    return f"{_namespace()}:gate_response:{session_id}:{int(round_number)}:{responder_name}"
+def _gate_response_key(session_id: str, responder_name: str, round_number: int) -> str:
+    return f"{_namespace()}:gate_response:{session_id}:{round_number}:{responder_name}"
 
 
-def _gate_winner_key(session_id: str, round_number: int | None = None) -> str:
-    if round_number is None:
-        return f"{_namespace()}:gate_winner:{session_id}"
-    return f"{_namespace()}:gate_winner:{session_id}:{int(round_number)}"
+def _gate_winner_key(session_id: str, round_number: int) -> str:
+    return f"{_namespace()}:gate_winner:{session_id}:{round_number}"
 
 
 def _pending_task_key(session_id: str) -> str:
@@ -906,11 +902,11 @@ def store_gate_response(
     responder_name: str,
     text: str,
     attachment_ids: list,
-    round_number: int | None = None,
+    round_number: int,
 ) -> None:
     """Store a gate responder's input in an individual Redis key.
 
-    Key: ``{NS}:gate_response:{session_id}:{responder_name}``
+    Key: ``{NS}:gate_response:{session_id}:{round_number}:{responder_name}``
     Each responder owns their own key — no shared hash, no write contention.
     """
     import json as _json
@@ -919,7 +915,7 @@ def store_gate_response(
     payload = _json.dumps({
         "text": text or "",
         "attachment_ids": list(attachment_ids or []),
-        "round": int(round_number) if round_number is not None else None,
+        "round": round_number,
     })
     try:
         _get_client().set(key, payload, ex=_gate_response_ttl())
@@ -934,7 +930,7 @@ def store_gate_response(
 def get_gate_response(
     session_id: str,
     responder_name: str,
-    round_number: int | None = None,
+    round_number: int,
 ) -> dict | None:
     """Return the stored gate response for a single responder, or None if absent."""
     import json as _json
@@ -950,7 +946,7 @@ def get_gate_response(
 def check_all_gate_responses(
     session_id: str,
     expected_names: list[str],
-    round_number: int | None = None,
+    round_number: int,
 ) -> tuple[bool, dict]:
     """Check whether all expected responders have submitted gate responses.
 
@@ -983,7 +979,7 @@ def check_all_gate_responses(
     return all_present, collected
 
 
-def claim_gate_winner(session_id: str, claimer_name: str, round_number: int | None = None) -> bool:
+def claim_gate_winner(session_id: str, claimer_name: str, round_number: int) -> bool:
     """Atomically claim the gate winner role using SET NX.
 
     Returns ``True`` when this claimer wins the race; ``False`` when another
@@ -999,7 +995,7 @@ def claim_gate_winner(session_id: str, claimer_name: str, round_number: int | No
 def clear_gate_responses(
     session_id: str,
     expected_names: list[str],
-    round_number: int | None = None,
+    round_number: int,
 ) -> None:
     """Delete all per-user gate response keys and the winner key.
 

@@ -79,8 +79,8 @@ defaults to `"chat_agent"` and `env` = `settings.ENVIRONMENT`.
 
 | Key | Value | TTL |
 |-----|-------|-----|
-| `{NS}:gate_response:{session_id}:{name}` | JSON `{"text": str, "attachment_ids": list}` | 6 h |
-| `{NS}:gate_winner:{session_id}` | claimer name string | 6 h |
+| `{NS}:gate_response:{session_id}:{round}:{name}` | JSON `{"text": str, "attachment_ids": list}` | 6 h |
+| `{NS}:gate_winner:{session_id}:{round}` | claimer name string | 6 h |
 | `{NS}:pending_task:{session_id}` | JSON `{"task": str, "attachment_ids": list}` | 5 min |
 
 **Remote user readiness keys** (cleared by `purge_remote_user_session_keys`):
@@ -157,31 +157,31 @@ Run-boundary contract:
 - If `pending_remote` exists, return the existing `awaiting_remote_users` 409 payload and show
     `.chat-remote-panel`.
 
-### `store_gate_response(session_id, responder_name, text, attachment_ids)`
+### `store_gate_response(session_id, responder_name, text, attachment_ids, round_number)`
 
 ```python
-key = _gate_response_key(session_id, responder_name)
-_get_client().set(key, json.dumps({"text": text, "attachment_ids": attachment_ids or []}), ex=_GATE_RESPONSE_TTL)
+key = _gate_response_key(session_id, responder_name, round_number)
+_get_client().set(key, json.dumps({"text": text, "attachment_ids": attachment_ids or [], "round": round_number}), ex=_GATE_RESPONSE_TTL)
 ```
 
 Silent on Redis error (raises `SessionCoordinationError` which the view must handle).
 
-### `get_gate_response(session_id, responder_name) → dict | None`
+### `get_gate_response(session_id, responder_name, round_number) → dict | None`
 
 Returns `{"text": str, "attachment_ids": list}` or None when key is missing/expired.
 
-### `check_all_gate_responses(session_id, expected_names) → (bool, dict)`
+### `check_all_gate_responses(session_id, expected_names, round_number) → (bool, dict)`
 
 Pipelined `GET` for all `expected_names`. Returns `(all_present, collected)` where
 `collected` maps each name that responded to its response dict. Preserves list order.
 
-### `claim_gate_winner(session_id, claimer_name) → bool`
+### `claim_gate_winner(session_id, claimer_name, round_number) → bool`
 
 `SET NX` on the winner key. Returns True on first call; False on all subsequent calls.
 **This is the concurrency mutex** — all quorum-complete paths must call this before
 inserting discussion entries or storing the pending task.
 
-### `clear_gate_responses(session_id, expected_names)`
+### `clear_gate_responses(session_id, expected_names, round_number)`
 
 `DEL` all per-user keys for `expected_names` + the winner key. Called by the winner
 after writing discussion entries and pending task.
@@ -219,12 +219,12 @@ Task is returned directly in the JSON response body for the frontend to use.
 ### `quorum == "first_win"`
 
 ```
-claim_gate_winner(session_id, gate_name)  →  False → HTTP 409
-store_gate_response(session_id, gate_name, text, attachment_ids)
+claim_gate_winner(session_id, gate_name, round_number)  →  False → HTTP 409
+store_gate_response(session_id, gate_name, text, attachment_ids, round_number)
 bind_attachments_to_message(session_id, attachment_ids, msg_id)
 append_messages(session_id, [discussion_entry_for_gate])
 store_pending_task(session_id, text, attachment_ids)  # only if text or attachments
-clear_gate_responses(session_id, expected_names)
+clear_gate_responses(session_id, expected_names, round_number)
 set_session_status(session_id, "idle")
 return {"status": "ok", "task": "", "attachment_ids": []}
 ```
@@ -234,14 +234,14 @@ Task is in Redis, not in the response body. Frontend triggers `/run/` which pops
 ### `quorum == "all"`
 
 ```
-store_gate_response(session_id, gate_name, text, attachment_ids)
+store_gate_response(session_id, gate_name, text, attachment_ids, round_number)
 
-all_present, collected = check_all_gate_responses(session_id, expected_names)
+all_present, collected = check_all_gate_responses(session_id, expected_names, round_number)
 if not all_present → HTTP 202 {"status": "waiting"}
 
 publish_remote_user_event(..., {"type": "quorum_progress", ...})
 
-claim_gate_winner(session_id, gate_name)  →  False → HTTP 202 {"status": "waiting"}
+claim_gate_winner(session_id, gate_name, round_number)  →  False → HTTP 202 {"status": "waiting"}
 
 # Winner path:
 entries = []
@@ -262,7 +262,7 @@ composed_task = "\n\n".join(
     if (resp := collected[name]) and resp["text"].strip()
 )
 store_pending_task(session_id, composed_task, gate_attachment_ids)
-clear_gate_responses(session_id, expected_names)
+clear_gate_responses(session_id, expected_names, round_number)
 set_session_status(session_id, "idle")
 publish_remote_user_event(..., {"type": "quorum_committed", ...})
 return {"status": "ok", "task": "", "attachment_ids": [], "pending_task_ready": True}
