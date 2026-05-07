@@ -233,7 +233,7 @@ def build_team(project: dict, session_id: str | None = None, remote_users: list 
         else:
             selector_prompt = raw_selector_prompt
 
-        allow_repeated = team_cfg.get("allow_repeated_speaker", True)
+        allow_repeated = team_cfg.get("allow_repeated_speaker", False)
 
         logger.info(
             "agents.team.built",
