@@ -16,8 +16,13 @@
 
 ---
 
-Agent-based product roadmap planning tool — OKR to Product Backlog.  
-Django SPA with HTMX, SCSS, and MongoDB (PyMongo).
+CouncilAI turns strategy into execution by helping leadership teams move from OKRs and vision docs to actionable product backlogs with accountable human+AI collaboration loops.
+
+**What is novel / why it matters in-market:** team-native agentic governance (not single-user AI chat), quorum-based human gates, and direct Trello/Jira export so outputs land in the tools organizations already trust.
+
+**Tech stack:** Django ASGI SPA, HTMX, SCSS, MongoDB (PyMongo), Redis coordination, AutoGen multi-agent runtime, WebSocket/SSE streaming, Azure Blob attachments.
+
+**Production-grade observability:** structured JSON logs with request/trace correlation, OpenTelemetry spans across HTTP + services + agents (+ optional Mongo), payload redaction/truncation, and OTLP backend compatibility (Langfuse-ready).
 
 ---
 
