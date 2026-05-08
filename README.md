@@ -1,14 +1,4 @@
-<p align="center">
-	<iframe
-		width="560"
-		height="315"
-		src="https://www.youtube.com/embed/yC6rH_hbtqs?autoplay=0"
-		title="CouncilAI Overview"
-		frameborder="0"
-		allow="accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-		allowfullscreen
-	></iframe>
-</p>
+[![Watch the video](https://img.youtube.com/vi/yC6rH_hbtqs/maxresdefault.jpg)](https://youtu.be/yC6rH_hbtqs)
 
 # CouncilAI
 
