@@ -8,7 +8,13 @@
 
 > *Agentic AI for teams, not individuals — where specialized human experts and AI agents govern together.*
 
-[![CouncilAI — The Ultimate CEO Tool](https://img.youtube.com/vi/VIDEO_ID/maxresdefault.jpg)](https://youtu.be/yC6rH_hbtqs)
+<div style="position: relative; width: 100%; padding-bottom: 56.25%">
+<iframe src="https://youtu.be/yC6rH_hbtqs" 
+        title="CouncilAI — The Ultimate CEO Tool" frameborder="0" allowfullscreen
+        allow="accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture" 
+        style="position: absolute; width: 100%; height: 100%;">
+</iframe>
+</div>
 
 
 📖 **[Project Charter](PROJECT_CHARTER.md)** — Vision, market thesis, team collaboration model & flowchart
