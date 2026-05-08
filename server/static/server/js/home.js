@@ -912,7 +912,7 @@ document.addEventListener("DOMContentLoaded", function () {
     }
   }
 
-  function _showRemoteUserGatePanel(sessionId, secretKey, users, quorum, replayTask, replayAttachmentIds) {
+  function _showRemoteUserGatePanel(sessionId, secretKey, users, quorum, replayTask, replayAttachmentIds, integrationsEnabled) {
     setRunningState(false);
     _teardownRemoteUserGate();
 
@@ -927,7 +927,8 @@ document.addEventListener("DOMContentLoaded", function () {
       '<div class="chat-remote-panel"'
       + ' data-session-id="' + window.MarkdownViewer.escapeHtml(sessionId) + '"'
       + ' data-project-id="' + window.MarkdownViewer.escapeHtml(projectId) + '"'
-      + ' data-quorum="' + window.MarkdownViewer.escapeHtml(quorum || "na") + '">'
+      + ' data-quorum="' + window.MarkdownViewer.escapeHtml(quorum || "na") + '"'
+      + ' data-integrations-enabled="' + (integrationsEnabled ? "true" : "false") + '">'
       + '<div class="chat-remote-panel__title">&#x1F465; Waiting for remote participants</div>'
       + '<p class="chat-remote-panel__hint">Share the invite link with each participant; the run will resume automatically once all required users are online.</p>'
       + '<div class="chat-remote-panel__rows"><p class="chat-remote-panel__loading">Connecting\u2026</p></div>'
@@ -1027,6 +1028,7 @@ document.addEventListener("DOMContentLoaded", function () {
     var sessionId = panel.dataset.sessionId || (activeSessionIdInput ? activeSessionIdInput.value.trim() : "");
     var effectiveQuorum = quorum || panel.dataset.quorum || "na";
     var isTeamChoice = effectiveQuorum === "team_choice";
+    var integrationsEnabled = panel.dataset.integrationsEnabled === "true";
 
     (users || []).forEach(function (u) {
       var name = typeof u === "string" ? u : (u.name || "");
@@ -1043,13 +1045,16 @@ document.addEventListener("DOMContentLoaded", function () {
       var copyDisabled = (status === "ignored") ? " disabled" : "";
       var exportChecked = exportAllowed ? " checked" : "";
       var exportDisabled = (status === "ignored") ? " disabled" : "";
+      var exportLabelHtml = integrationsEnabled
+        ? '<label class="remote-user-row__export-label" title="Allow this user to export from their chat page">'
+          + '<input type="checkbox" class="remote-user-row__export-cb"' + exportChecked + exportDisabled + '> Can Export'
+          + '</label>'
+        : "";
 
       var rowHtml = '<div class="remote-user-row" data-remote-user-name="' + safe + '" data-status="' + window.MarkdownViewer.escapeHtml(status) + '">'
         + '<input type="checkbox" class="remote-user-row__checkbox" title="Require this user"' + cbChecked + cbDisabled + '>'
         + '<span class="remote-user-row__name">' + safe + '</span>'
-        + '<label class="remote-user-row__export-label" title="Allow this user to export from their chat page">'
-        + '<input type="checkbox" class="remote-user-row__export-cb"' + exportChecked + exportDisabled + '> Can Export'
-        + '</label>'
+        + exportLabelHtml
         + '<button type="button" class="btn btn--sm btn--secondary remote-user-copy-btn" data-session-id="' + window.MarkdownViewer.escapeHtml(sessionId) + '" data-user-name="' + safe + '" title="Copy invite link"' + copyDisabled + '>Copy Link</button>'
         + '<span class="remote-user-row__status ' + statusClass + '">' + statusLabel + '</span>'
         + '</div>';
@@ -1345,7 +1350,7 @@ document.addEventListener("DOMContentLoaded", function () {
             return;
           }
           if (d && d.status === "awaiting_remote_users") {
-            _showRemoteUserGatePanel(sessionId, secretKey, d.users || [], d.quorum || "na", task, attachmentIds);
+            _showRemoteUserGatePanel(sessionId, secretKey, d.users || [], d.quorum || "na", task, attachmentIds, !!d.integrations_enabled);
             return;
           }
           throw new Error(d.error || "Run failed");

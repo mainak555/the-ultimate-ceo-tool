@@ -201,7 +201,7 @@
             <input type="checkbox"
                    id="allow_repeated_speaker"
                    name="team[allow_repeated_speaker]"
-                   {% if project.team.allow_repeated_speaker|default:True %}checked{% endif %}>
+                   {% if project.team.allow_repeated_speaker != False %}checked{% endif %}>
             Allow repeated speaker
           </label>
         </div>

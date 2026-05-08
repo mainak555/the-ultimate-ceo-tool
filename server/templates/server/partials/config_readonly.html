@@ -89,6 +89,10 @@
           <em class="agent-card__temp">Temperature: {{ project.team.temperature }}</em>
         </div>
         <strong class="agent-card__title">Selector</strong>
+        <p class="agent-card__detail">
+          <strong>Allow Repeated Speaker:</strong>
+          {% if project.team.allow_repeated_speaker != False %}Yes{% else %}No{% endif %}
+        </p>
         <div class="agent-card__detail">
           <strong>System Prompt:</strong>
           <div class="agent-card__prompt agent-card__prompt--markdown markdown-prose" data-markdown>{{ project.team.system_prompt }}</div>

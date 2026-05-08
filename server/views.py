@@ -1187,6 +1187,7 @@ async def chat_session_run(request, session_id):
                     "required_count": required_count,
                     "online_count": online_count,
                     "quorum": effective_quorum,
+                    "integrations_enabled": bool((project.get("integrations") or {}).get("enabled", False)),
                 },
                 status=409,
             )
