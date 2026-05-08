@@ -1,5 +1,13 @@
 <p align="center">
-  <img src="logo-hd.png" alt="CouncilAI" width="200" />
+	<iframe
+		width="560"
+		height="315"
+		src="https://www.youtube.com/embed/yC6rH_hbtqs?autoplay=0"
+		title="CouncilAI Overview"
+		frameborder="0"
+		allow="accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+		allowfullscreen
+	></iframe>
 </p>
 
 # CouncilAI
@@ -7,15 +15,6 @@
 ### The Ultimate CEO Tool — Turn Vision into Action
 
 > *Agentic AI for teams, not individuals — where specialized human experts and AI agents govern together.*
-
-<div style="position: relative; width: 100%; padding-bottom: 56.25%">
-<iframe src="https://youtu.be/yC6rH_hbtqs" 
-        title="CouncilAI — The Ultimate CEO Tool" frameborder="0" allowfullscreen
-        allow="accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture" 
-        style="position: absolute; width: 100%; height: 100%;">
-</iframe>
-</div>
-
 
 📖 **[Project Charter](PROJECT_CHARTER.md)** — Vision, market thesis, team collaboration model & flowchart
 
