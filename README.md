@@ -1,5 +1,7 @@
 [![Watch the video](https://img.youtube.com/vi/yC6rH_hbtqs/maxresdefault.jpg)](https://youtu.be/yC6rH_hbtqs)
 
+[![Play on YouTube](https://img.shields.io/badge/%E2%96%B6%20Play%20on%20YouTube-FF0000?style=for-the-badge&logo=youtube&logoColor=white)](https://youtu.be/yC6rH_hbtqs)
+
 # CouncilAI
 
 ### The Ultimate CEO Tool — Turn Vision into Action
