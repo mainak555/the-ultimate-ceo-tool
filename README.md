@@ -1,4 +1,7 @@
-[![Watch the video](https://img.youtube.com/vi/MSzvY6PP8yA/maxresdefault.jpg)](https://youtu.be/MSzvY6PP8yA)
+<!--[![Watch the video](https://img.youtube.com/vi/MSzvY6PP8yA/maxresdefault.jpg)](https://youtu.be/MSzvY6PP8yA)-->
+<p align="center">
+    <img src="logo-hd.png" alt="CouncilAI" width="200" />
+</p>
 
 [![Play on YouTube](https://img.shields.io/badge/%E2%96%B6%20Play%20on%20YouTube-FF0000?style=for-the-badge&logo=youtube&logoColor=white)](https://youtu.be/MSzvY6PP8yA)
 
