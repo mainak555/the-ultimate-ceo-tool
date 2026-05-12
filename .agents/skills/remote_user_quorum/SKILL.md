@@ -1,3 +1,8 @@
+---
+name: remote-user-quorum
+description: Use when adding, changing, or reviewing remote user quorum gate logic, Redis key schema, chat_session_respond, or remote_user_respond flow.
+---
+
 # Skill: remote_user_quorum
 
 ## Purpose

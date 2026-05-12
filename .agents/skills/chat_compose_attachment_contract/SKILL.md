@@ -1,3 +1,8 @@
+---
+name: chat-compose-attachment-contract
+description: Use when changing message send behavior, attachment upload/bind/delete, or composer state contracts across Home and Remote surfaces.
+---
+
 # Skill: Chat Compose and Attachment Contracts
 
 ## Purpose
