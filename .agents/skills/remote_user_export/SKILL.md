@@ -1,3 +1,8 @@
+---
+name: remote-user-export
+description: Use when adding, changing, or reviewing remote user export permissions, impersonated export keys, or session-scoped Trello/Jira endpoint auth.
+---
+
 # Skill: remote_user_export
 
 ## Purpose

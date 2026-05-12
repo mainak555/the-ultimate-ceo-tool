@@ -1,3 +1,8 @@
+---
+name: chat-surface-shared
+description: Use when modifying shared chat DOM contracts, bubble rendering, or interaction behavior across Home, Remote, and Guest chat surfaces.
+---
+
 # Skill: Shared Chat Surface Contracts
 
 ## Purpose
